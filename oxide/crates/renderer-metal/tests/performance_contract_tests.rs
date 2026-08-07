@@ -229,7 +229,7 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
    assert_eq!(
       source.matches("checked_rgba8_layout(").count(),
       4,
-      "one validator definition must serve policy create, store create, and append",
+      "one validator definition must serve policy create, sampled create, and append",
    );
 
    let policy = source_block(
@@ -237,9 +237,9 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
       "fn image_create_rgba8_with_policy(",
       "fn image_create_store_rgba8(",
    );
-   let store = source_block(
+   let sampled = source_block(
       source,
-      "fn image_create_store_rgba8(",
+      "fn image_create_store_rgba8_sampled(",
       "fn image_create_store_rgba8_empty(",
    );
    let append = source_block(source, "fn image_append_rgba8(", "pub fn image_release(");
@@ -250,8 +250,8 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
          &["private_image_texture(", "shared_image_texture(", "texture_upload_bytes", "next_image_id"] as &[&str],
       ),
       (
-         "store create",
-         store,
+         "sampled create",
+         sampled,
          &["shared_image_texture(", "texture_upload_bytes", "next_image_id"] as &[&str],
       ),
       (
@@ -269,6 +269,55 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
          assert!(guard < position, "{name} performs {mutation} before validating layout");
       }
    }
+}
+
+#[test]
+fn runtime_image_sampling_is_prebuilt_and_partitions_flat_and_prepared_batches()
+{
+   let renderer = include_str!("../src/lib.rs");
+   let prepared = include_str!("../src/prepared.rs");
+   let initialization = source_block(
+      renderer,
+      "let sampler = build_sampler(&device);",
+      "let opts =",
+   );
+   let sampled_store = source_block(
+      renderer,
+      "fn image_create_store_rgba8_sampled(",
+      "fn image_create_store_rgba8_empty(",
+   );
+   let draw_encoding = source_block(
+      renderer,
+      "fn encode_draws_range(",
+      "struct NineSliceGpuParams",
+   );
+
+   assert!(
+      initialization.contains("let nearest_sampler = build_nearest_sampler(&device);")
+         && initialization.contains("let sampler = build_sampler(&device);"),
+      "linear and nearest sampler states must be created during renderer initialization",
+   );
+   assert!(
+      !draw_encoding.contains("SamplerDescriptor::new()")
+         && !prepared.contains("SamplerDescriptor::new()"),
+      "flat and prepared draw encoding must not create sampler objects",
+   );
+   assert!(
+      draw_encoding.matches("sampler_for_image_sampling").count() >= 4,
+      "NineSlice, ImageMesh, direct Image, and argument-buffer Image must bind resource sampling",
+   );
+   assert!(
+      draw_encoding.contains("group_sampling.is_some_and")
+         && prepared.contains("texture.sampling != sampling")
+         && prepared.contains("sampling: api::ImageSampling"),
+      "multi-texture flat and prepared image batches must split at sampling changes",
+   );
+   assert!(
+      sampled_store.contains("MTLPixelFormat::RGBA8Unorm_sRGB")
+         && sampled_store.contains("checked_rgba8_layout(w, h, data.len(), row_bytes)")
+         && sampled_store.contains("image.sampling = sampling"),
+      "sampled RGBA upload must validate bytes and retain sampling beside the texture",
+   );
 }
 
 #[test]

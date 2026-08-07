@@ -938,6 +938,7 @@ enum ImageStorage
 struct ImageTexture
 {
    texture: Texture,
+   sampling: api::ImageSampling,
    storage: ImageStorage,
    mipmapped: bool,
    mip_levels: u32,
@@ -1092,6 +1093,7 @@ pub struct MetalRenderer {
     #[cfg(feature = "snapshot-tests")]
     force_exact_blur_for_snapshot: bool,
     sampler: Option<SamplerState>,
+    nearest_sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
     sample_count: u32,
@@ -2157,6 +2159,7 @@ impl MetalRenderer {
             (img_arg, img_arg_bufs, img_arg_stride)
         };
         let sampler = build_sampler(&device);
+        let nearest_sampler = build_nearest_sampler(&device);
         let opts =
             MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeShared;
         let direct_preview_ring_size = 4 * 1024;
@@ -2350,6 +2353,7 @@ impl MetalRenderer {
             #[cfg(feature = "snapshot-tests")]
             force_exact_blur_for_snapshot: false,
             sampler,
+            nearest_sampler,
             color_format,
             config: applied_config,
             sample_count,
@@ -3801,6 +3805,15 @@ impl MetalRenderer {
       self.images.get(&h.0).map(|image| &image.texture)
    }
 
+   fn sampler_for_image_sampling(&self, sampling: api::ImageSampling) -> Option<&SamplerState>
+   {
+      match sampling
+      {
+         api::ImageSampling::Linear => self.sampler.as_ref(),
+         api::ImageSampling::Nearest => self.nearest_sampler.as_ref(),
+      }
+   }
+
    fn insert_image_texture(&mut self, id: u32, image: ImageTexture)
    {
       match image.storage
@@ -3912,6 +3925,7 @@ impl MetalRenderer {
       ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Shared,
          mipmapped,
          mip_levels,
@@ -3977,6 +3991,7 @@ impl MetalRenderer {
       ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Private,
          mipmapped,
          mip_levels,
@@ -4103,6 +4118,12 @@ impl MetalRenderer {
       self.image_create_rgba8_with_policy(w, h, data, row_bytes, false, false)
    }
 
+   /// Uploads one validated sRGB RGBA8 image with filtering fixed for the handle lifetime.
+   pub fn image_create_rgba8_sampled(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, sampling: api::ImageSampling) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8_sampled(w, h, data, row_bytes, false, sampling)
+   }
+
    /// Creates an immutable image using the measured static-asset residency policy.
    /// `repeatedly_minified` requests a complete mip chain for stable minification.
    pub fn image_create_rgba8_immutable(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, repeatedly_minified: bool) -> api::ImageHandle
@@ -4174,11 +4195,23 @@ impl MetalRenderer {
 
    fn image_create_store_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
    {
+      self.image_create_store_rgba8_sampled(
+         w,
+         h,
+         data,
+         row_bytes,
+         mipmapped,
+         api::ImageSampling::Linear,
+      )
+   }
+
+   fn image_create_store_rgba8_sampled(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool, sampling: api::ImageSampling) -> api::ImageHandle
+   {
       let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
       {
          return api::ImageHandle(0);
       };
-      let image = if mipmapped
+      let mut image = if mipmapped
       {
          self.shared_image_texture_with_mips(
             MTLPixelFormat::RGBA8Unorm_sRGB,
@@ -4193,6 +4226,7 @@ impl MetalRenderer {
       {
          self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
       };
+      image.sampling = sampling;
       self.last_stats.texture_upload_bytes = self
          .last_stats
          .texture_upload_bytes
@@ -4221,6 +4255,7 @@ impl MetalRenderer {
       let image = ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Shared,
          mipmapped: false,
          mip_levels: 1,
@@ -9698,14 +9733,16 @@ fn encode_draws_range(
                 continue;
             }
             api::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
-                if let Some(img) = r.get_image_tex(*tex) {
+                if let Some((img, sampling)) =
+                    r.images.get(&tex.0).map(|image| (&image.texture, image.sampling))
+                {
                     let pipeline = if r.encoding_layer {
                         &r.pso_layer_nine_slice
                     } else {
                         &r.pso_nine_slice
                     };
                     enc.set_render_pipeline_state(pipeline);
-                    if let Some(sam) = &r.sampler {
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(img));
@@ -9761,7 +9798,9 @@ fn encode_draws_range(
                 i += 1;
             }
             api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                if let Some(img) = r.get_image_tex(*tex) {
+                if let Some((img, sampling)) =
+                    r.images.get(&tex.0).map(|image| (&image.texture, image.sampling))
+                {
                     let v_count = vb.len as usize;
                     let Some(src_slice) =
                         list.vertices.get(vb.offset as usize..vb.offset as usize + v_count)
@@ -9772,7 +9811,7 @@ fn encode_draws_range(
                     let pipeline =
                         if r.encoding_layer { &r.pso_layer_image_mesh } else { &r.pso_image_mesh };
                     enc.set_render_pipeline_state(pipeline);
-                    if let Some(sam) = &r.sampler {
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(img));
@@ -9857,9 +9896,6 @@ fn encode_draws_range(
                 i += 1;
             }
             api::DrawCmd::Image { .. } => {
-                if let Some(sam) = &r.sampler {
-                    enc.set_fragment_sampler_state(0, Some(sam));
-                }
                 // Simulator-safe image path: avoid argument-buffer texturing, which has
                 // repeatedly produced MTLSim command-buffer faults under heavy scene loads.
                 if !r.use_image_arg_buffer {
@@ -9879,12 +9915,17 @@ fn encode_draws_range(
                     {
                         unreachable!()
                     };
-                    let Some(texture) = r.get_image_tex(*first_tex).map(Texture::to_owned)
+                    let Some((texture, sampling)) = r.images.get(&first_tex.0).map(|image| {
+                        (image.texture.to_owned(), image.sampling)
+                    })
                     else
                     {
                         i += 1;
                         continue;
                     };
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
                     let mut j = i;
                     while j < item_end {
                         if let api::DrawCmd::Image { tex, .. } = &list.items[j] {
@@ -9945,15 +9986,21 @@ fn encode_draws_range(
                 r.image_fbuf.clear();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
+                let mut group_sampling = None;
                 while j < item_end {
                     if let api::DrawCmd::Image { tex, dst, src, alpha } = &list.items[j] {
-                        let existing_slot = r.image_tex_map.get(&tex.0).copied();
-                        let Some(tref) = r.get_image_tex(*tex) else {
+                        let Some(image) = r.images.get(&tex.0) else {
                             // Skip image draws referencing unknown textures to avoid sampling
                             // unbound argument-buffer slots on simulator/device GPUs.
                             j += 1;
                             continue;
                         };
+                        if group_sampling.is_some_and(|sampling| sampling != image.sampling) {
+                            break;
+                        }
+                        group_sampling = Some(image.sampling);
+                        let existing_slot = r.image_tex_map.get(&tex.0).copied();
+                        let tref = &image.texture;
                         let texture_size = [tref.width() as f32, tref.height() as f32];
                         // Map texture handle to slot
                         let slot_idx = if let Some(slot) = existing_slot {
@@ -9990,6 +10037,11 @@ fn encode_draws_range(
                 if count == 0 {
                     i = j;
                     continue;
+                }
+                if let Some(sam) =
+                    group_sampling.and_then(|sampling| r.sampler_for_image_sampling(sampling))
+                {
+                    enc.set_fragment_sampler_state(0, Some(sam));
                 }
                 let table_key = if r.image_arg_table_count < IMAGE_ARG_SMALL_TABLE_COUNT
                 {
@@ -11694,6 +11746,16 @@ fn build_sampler(device: &Device) -> Option<SamplerState> {
     desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
     desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
     Some(device.new_sampler(&desc))
+}
+
+fn build_nearest_sampler(device: &Device) -> Option<SamplerState>
+{
+   let desc = SamplerDescriptor::new();
+   desc.set_min_filter(MTLSamplerMinMagFilter::Nearest);
+   desc.set_mag_filter(MTLSamplerMinMagFilter::Nearest);
+   desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
+   desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
+   Some(device.new_sampler(&desc))
 }
 
 fn saturating_resource_bytes(dimensions: &[u64], bytes_per_element: u64) -> u64 {

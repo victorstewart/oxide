@@ -146,6 +146,16 @@ fn invalid_rgba_creates_do_not_mutate_resources_stats_or_handle_ids()
       api::ImageHandle(0),
    );
    assert_eq!(
+      renderer.image_create_rgba8_sampled(
+         2,
+         2,
+         &[0; 15],
+         8,
+         api::ImageSampling::Nearest,
+      ),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
       renderer.image_create_rgba8_immutable_for_benchmark(
          2,
          2,

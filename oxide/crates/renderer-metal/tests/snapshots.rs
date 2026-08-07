@@ -2187,6 +2187,12 @@ fn solid_image(renderer: &mut MetalRenderer, bgra: [u8; 4]) -> api::ImageHandle
    renderer.image_create_rgba8(2, 2, &pixels, 8)
 }
 
+fn split_image(renderer: &mut MetalRenderer, sampling: api::ImageSampling) -> api::ImageHandle
+{
+   let pixels = [255, 0, 0, 255, 0, 0, 255, 255];
+   renderer.image_create_rgba8_sampled(2, 1, &pixels, 8, sampling)
+}
+
 fn readback_pixel(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4]
 {
    let index = ((y * width + x) * 4) as usize;
@@ -2219,6 +2225,141 @@ fn snapshot_rgba_image_upload_preserves_red_and_blue_channels()
    let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
 
    assert_eq!(readback_pixel(&pixels, 8, 4, 4), [0, 0, 255, 255]);
+}
+
+#[test]
+fn snapshot_runtime_image_sampling_covers_flat_image_families()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 60;
+   renderer.resize(width, 8, 1.0).expect("resize");
+   let nearest = split_image(&mut renderer, api::ImageSampling::Nearest);
+   let linear = split_image(&mut renderer, api::ImageSampling::Linear);
+   let mut list = api::DrawList::default();
+
+   for (tex, x) in [(nearest, 0.0), (linear, 10.0)]
+   {
+      list.items.push(api::DrawCmd::Image {
+         tex,
+         dst: api::RectF::new(x, 0.0, 8.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 1.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 20.0), (linear, 30.0)]
+   {
+      list.items.push(api::DrawCmd::NineSlice {
+         tex,
+         rect: api::RectF::new(x, 0.0, 8.0, 8.0),
+         slice: api::Insets::new(0.0, 0.0, 0.0, 0.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 40.0), (linear, 50.0)]
+   {
+      let offset = list.vertices.len() as u32;
+      list.vertices.extend_from_slice(&[
+         api::Vertex { x, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+         api::Vertex { x, y: 8.0, u: 0.0, v: 1.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 8.0, u: 1.0, v: 1.0, rgba: 0 },
+      ]);
+      list.items.push(api::DrawCmd::ImageMesh {
+         tex,
+         vb: api::VertexSpan { offset, len: 4 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         alpha: 1.0,
+      });
+   }
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   for x in [0, 20, 40]
+   {
+      assert_eq!(readback_pixel(&pixels, width, x + 3, 4), [0, 0, 255, 255]);
+      assert_eq!(readback_pixel(&pixels, width, x + 4, 4), [255, 0, 0, 255]);
+   }
+   for x in [10, 30, 50]
+   {
+      let transition = readback_pixel(&pixels, width, x + 3, 4);
+      assert!(
+         transition[0] > 40 && transition[2] > 40,
+         "linear resource at x={x} did not blend across the source transition: {transition:?}",
+      );
+   }
+}
+
+#[test]
+fn snapshot_runtime_image_sampling_covers_prepared_images_and_meshes()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 40;
+   renderer.resize(width, 8, 1.0).expect("resize");
+   let nearest = split_image(&mut renderer, api::ImageSampling::Nearest);
+   let linear = split_image(&mut renderer, api::ImageSampling::Linear);
+   let mut list = api::DrawList::default();
+   for (tex, x) in [(nearest, 0.0), (linear, 10.0)]
+   {
+      list.items.push(api::DrawCmd::Image {
+         tex,
+         dst: api::RectF::new(x, 0.0, 8.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 1.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 20.0), (linear, 30.0)]
+   {
+      let offset = list.vertices.len() as u32;
+      list.vertices.extend_from_slice(&[
+         api::Vertex { x, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+         api::Vertex { x, y: 8.0, u: 0.0, v: 1.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 8.0, u: 1.0, v: 1.0, rgba: 0 },
+      ]);
+      list.items.push(api::DrawCmd::ImageMesh {
+         tex,
+         vb: api::VertexSpan { offset, len: 4 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         alpha: 1.0,
+      });
+   }
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(9_950),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      list,
+      api::ChunkIndexMode::Local,
+      &[
+         api::RenderResourceDependency { image: nearest, generation: 1 },
+         api::RenderResourceDependency { image: linear, generation: 1 },
+      ],
+   ).expect("sampled image chunk");
+   let snapshot = api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("sampled image snapshot");
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode sampled prepared snapshot");
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   for x in [0, 20]
+   {
+      assert_eq!(readback_pixel(&pixels, width, x + 3, 4), [0, 0, 255, 255]);
+      assert_eq!(readback_pixel(&pixels, width, x + 4, 4), [255, 0, 0, 255]);
+   }
+   for x in [10, 30]
+   {
+      let transition = readback_pixel(&pixels, width, x + 3, 4);
+      assert!(
+         transition[0] > 40 && transition[2] > 40,
+         "prepared linear resource at x={x} did not blend: {transition:?}",
+      );
+   }
 }
 
 #[test]

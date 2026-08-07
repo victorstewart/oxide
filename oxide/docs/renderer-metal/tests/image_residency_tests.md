@@ -14,14 +14,14 @@ These physical-Metal integration tests freeze C59's image storage, mip-quality, 
 
 - `immutable_policy_keeps_nonminified_images_shared_and_allows_explicit_private_staging()` freezes Shared production residency for non-minified and repeatedly minified images plus current/cumulative counters and the explicit Private evidence control.
 - `dynamic_rgba_images_remain_shared_at_large_sizes()` keeps update-heavy resources on direct Shared storage regardless of size.
-- `invalid_rgba_creates_do_not_mutate_resources_stats_or_handle_ids()` rejects zero dimensions, narrow rows, short data, and overflowing layouts across dynamic and policy paths, then proves the first valid upload still owns handle one.
+- `invalid_rgba_creates_do_not_mutate_resources_stats_or_handle_ids()` rejects zero dimensions, narrow rows, short data, and overflowing layouts across policy and sampled paths, then proves the first valid upload still owns handle one.
 - `mipmapped_immutable_upload_and_partial_update_match_dynamic_pixels()` requires both Shared-mip and Private-mip partial updates to preserve exact level-zero pixels and match a freshly rebuilt chain when minified.
 - `mipmapped_minification_reduces_checkerboard_aliasing()` compares identical Shared/Private mip output with the non-mip control and requires a material variance reduction.
 - `immutable_images_survive_cache_pressure_and_recreate_with_a_new_renderer()` proves cache purges retain author-owned images and source replay reproduces the same pixels after renderer replacement.
 
 ## Logic narrative
 
-Every case constructs a real offscreen Metal renderer and uploads deterministic RGBA8 source bytes. The admission case snapshots residency and upload statistics, exercises malformed dynamic and policy creates, and then uses the first valid zero-stride tight upload to prove rejected work consumed no ID. Full-size draws isolate storage equivalence; a 256-to-31-pixel checkerboard isolates minification quality. The update case changes a non-aligned 13 by 9 region, compares exact full-size pixels, then compares 17-square Shared/Private output against a fresh mip chain so row bytes, destination origin, and lower-level regeneration are all observable. The recreation case invokes every production cache-pressure purge that is safe to run independently of app-owned resources, renders once, drops the renderer, reuploads the same source bytes into a fresh renderer, and compares readback.
+Every case constructs a real offscreen Metal renderer and uploads deterministic RGBA8 source bytes. The admission case snapshots residency and upload statistics, exercises malformed policy and sampled creates, and then uses the first valid zero-stride tight upload to prove rejected work consumed no ID. Full-size draws isolate storage equivalence; a 256-to-31-pixel checkerboard isolates minification quality. The update case changes a non-aligned 13 by 9 region, compares exact full-size pixels, then compares 17-square Shared/Private output against a fresh mip chain so row bytes, destination origin, and lower-level regeneration are all observable. The recreation case invokes every production cache-pressure purge that is safe to run independently of app-owned resources, renders once, drops the renderer, reuploads the same source bytes into a fresh renderer, and compares readback.
 
 Call flow:
 

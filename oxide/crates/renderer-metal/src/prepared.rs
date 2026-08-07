@@ -860,6 +860,7 @@ pub(super) enum PreparedOperation
       argument_buffer: Option<Buffer>,
       handles: Vec<api::ImageHandle>,
       instance_handles: Vec<api::ImageHandle>,
+      sampling: api::ImageSampling,
       first_command: u32,
       count: u64,
    },
@@ -931,6 +932,11 @@ fn prepare_rrects(device: &DeviceRef, commands: &[api::DrawCmd], first_command: 
 
 fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) -> Option<(PreparedOperation, usize, u64)>
 {
+   let api::DrawCmd::Image { tex: first_texture, .. } = list.items.get(start)? else
+   {
+      return None;
+   };
+   let sampling = renderer.images.get(&first_texture.0)?.sampling;
    let mut slots = HashMap::<u32, u32>::new();
    let mut handles = Vec::new();
    let mut instance_handles = Vec::new();
@@ -939,6 +945,10 @@ fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) 
    while let Some(api::DrawCmd::Image { tex, dst, src, alpha }) = list.items.get(index)
    {
       let texture = renderer.images.get(&tex.0)?;
+      if texture.sampling != sampling
+      {
+         break;
+      }
       let slot = if let Some(slot) = slots.get(&tex.0).copied()
       {
          slot
@@ -987,6 +997,7 @@ fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) 
       argument_buffer,
       handles,
       instance_handles,
+      sampling,
       first_command: start as u32,
       count: (index - start) as u64,
    }, index, bytes))
@@ -2041,7 +2052,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             renderer.acc_draws = renderer.acc_draws.saturating_add(1);
             renderer.acc_instanced = renderer.acc_instanced.saturating_add((*count).min(u64::from(u32::MAX)) as u32);
          }
-         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, first_command, count } =>
+         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, sampling, first_command, count } =>
          {
             if filtered && !selected_range(damage_commands, *first_command, *count)
             {
@@ -2055,7 +2066,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                encoder.set_vertex_buffer(0, Some(params), 0);
                encoder.set_fragment_buffer(1, Some(params), 0);
                encoder.set_fragment_buffer(2, Some(argument_buffer), 0);
-               if let Some(sampler) = renderer.sampler.as_ref()
+               if let Some(sampler) = renderer.sampler_for_image_sampling(*sampling)
                {
                   encoder.set_fragment_sampler_state(0, Some(sampler));
                }
@@ -2076,7 +2087,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                let pipelines = prepared_pipelines_for_target(renderer, target);
                let Some(pipelines) = pipelines.as_ref() else { return };
                encoder.set_render_pipeline_state(if opaque { &pipelines.image_single_opaque } else { &pipelines.image_single });
-               if let Some(sampler) = renderer.sampler.as_ref()
+               if let Some(sampler) = renderer.sampler_for_image_sampling(*sampling)
                {
                   encoder.set_fragment_sampler_state(0, Some(sampler));
                }
@@ -2164,7 +2175,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             let Some(pipelines) = pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(if opaque { &pipelines.image_mesh_opaque } else { &pipelines.image_mesh });
             encoder.set_fragment_texture(0, Some(texture));
-            if let Some(sampler) = renderer.sampler.as_ref()
+            if let Some(sampler) = renderer.sampler_for_image_sampling(texture.sampling)
             {
                encoder.set_fragment_sampler_state(0, Some(sampler));
             }

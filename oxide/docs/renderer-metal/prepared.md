@@ -46,7 +46,7 @@ The cache key contains chunk id, structural revision, geometry revision, resourc
 
 C60 atlas publication does not change the page handle or generation, so adding a previously unsampled cell preserves every unrelated prepared entry. Slot release hands the store's exact `RenderChunkId` references through the private backend hook; the matching prepared chunk and any retained layer built from it are invalidated without disturbing unrelated chunks or layers.
 
-On a miss, lowering accepts balanced clip operations plus RRects, images, image meshes, glyph runs, and solids. Consecutive compatible immutable commands become one prepared operation. Buffers use shared storage because the focused same-binary private-buffer comparison regressed one-dirty GPU p50 by 79.1% and every measured tail. Images retain a finalized immutable argument buffer when supported. Glyph/mesh vertices, normalized local indices, and draw-color records are persistent. No private staging or indirect command buffer is enabled.
+On a miss, lowering accepts balanced clip operations plus RRects, images, image meshes, glyph runs, and solids. Consecutive compatible immutable commands become one prepared operation. Image operations also stop at a resource sampling-mode change, retain that immutable mode, and bind the renderer's prebuilt linear or nearest sampler; prepared image meshes derive the same choice from their texture metadata. Buffers use shared storage because the focused same-binary private-buffer comparison regressed one-dirty GPU p50 by 79.1% and every measured tail. Images retain a finalized immutable argument buffer when supported. Glyph/mesh vertices, normalized local indices, and draw-color records are persistent. No private staging, per-frame sampler construction, or indirect command buffer is enabled.
 
 Each snapshot visit resolves property slots into one affine matrix, translation, and opacity value. Those values, an identity-matrix flag, the instance origin, and the current viewport form a 48-byte record sent separately from cached geometry. All frame records are copied once into one contiguous slice of the active frame's completion-protected uniform ring, and draws bind offsets into that slice rather than asking Metal to stage one inline constant block per chunk. Equal adjacent property-slot lists reuse the resolved property value. Translation-only RRect/image vertices preserve flat-path world-coordinate rounding at fragment edges; general affine instances retain local fragment coordinates. Clip rectangles are transformed into conservative integer bounds; nested chunk clips remain ordered and intersect with the instance and damage scissors.
 
@@ -77,6 +77,7 @@ Unsupported layers, effects, spinners, or malformed resource dependencies use `R
 - Rotation, shear, instance clipping, unbounded effects, spinners, duplicate stable ids with different keys, or unavailable exact Solid-layer pipelines reject prepared-layer admission.
 - An entry larger than the byte budget is not retained.
 - Missing or stale textures prevent admission and cannot be silently sampled.
+- Mixed linear/nearest image runs form separate prepared operations; glyph atlases remain linear.
 - Non-finite dynamic properties use the checked flat path, which returns the renderer-api error when equivalence cannot be preserved.
 - Empty or invalid geometry is rejected by lowering and remains subject to the established flat validation behavior.
 
@@ -86,7 +87,7 @@ Unsupported layers, effects, spinners, or malformed resource dependencies use `R
 
 ## Performance notes
 
-Clean replay allocates no new Metal buffers and copies no immutable geometry. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. C27's property-free full-damage path reuses the unchanged frame plan after validating unique cache keys; its small-damage path visits only selected indexed entries and records instance/command/vertex query counts plus query CPU. The retained frame-plan vector, property cache, damage scratch, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
+Clean replay allocates no new Metal buffers and copies no immutable geometry. Sampling selection reads immutable image metadata and reuses prebuilt sampler objects; only an actual mode change partitions an otherwise-compatible image batch. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. C27's property-free full-damage path reuses the unchanged frame plan after validating unique cache keys; its small-damage path visits only selected indexed entries and records instance/command/vertex query counts plus query CPU. The retained frame-plan vector, property cache, damage scratch, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
 
 The C29 cases are `gpu.architecture.prepared_layers.{clean_100x100,one_dirty_100x100}` and `gpu.authoring.retained_snapshot.prepared_layers_clean_100x100`. Clean replay requires 100 texture hits and zero body/offscreen/upload work. The dirty row requires 99 clean hits, one miss, one offscreen body render, one main composite, and no new layer texture after warmup. All rows report frame/encode/GPU distributions, passes, draws, body scans/copies, geometry copies, uploads, texture creates, cache outcomes, prepared chunks, and layer residency.
 
@@ -106,6 +107,7 @@ Prepared pipelines are unavailable in the direct-camera-preview-only renderer co
 - `prepared_layer_main_format_image_text_mesh_and_solid_match_flat_pixels` proves the ordinary-format retained image, glyph, image-mesh, and Solid path.
 - `prepared_layer_invalidates_once_for_dirty_nested_resource_scale_and_purge_changes` covers one-refresh deduplication, translation reuse, scale/resize/target-scale changes, nested generation, resource generation, and purge.
 - `prepared_layer_effect_nested_and_unsupported_content_preserve_flat_fallback_pixels` freezes exact fallback for effects, internal layers, and spinner content.
+- `snapshot_runtime_image_sampling_covers_prepared_images_and_meshes` freezes mixed linear/nearest image partitioning and prepared image-mesh filtering through readback.
 - `perf-runner/tests/report_tests.rs` freezes clean zero-upload/zero-traversal and one-dirty exact-work counters.
 - Run `MTL_DEBUG_LAYER=1 cargo test --locked -p oxide-renderer-metal --test snapshots prepared_snapshot --features snapshot-tests`.
 - Run `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.prepared_chunks. cargo run --release --locked -p oxide-perf-runner -- --run-suite`.
@@ -120,6 +122,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-08-06: retained immutable runtime-image sampling in prepared Images and ImageMesh operations and split batches only at sampling changes.
 - 2026-07-15: exposed exact prepared-chunk invalidation for generation-safe atlas slot eviction without page-wide cache loss.
 - 2026-07-14: integrated prepared layers with allocated-byte admission, protected-set budgeting, compatible texture pooling, last-use tracking, and exact over-budget fallback.
 - 2026-07-13: added C29 generation-keyed prepared snapshot layers with body-free clean composite, single-owner dirty refresh, exact resource invalidation, adaptive exact opaque-RRect intermediates, and exact unsupported fallback.

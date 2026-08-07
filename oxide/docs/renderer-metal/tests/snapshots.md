@@ -10,7 +10,7 @@ The snapshot tests validate renderer behavior through readback instead of relyin
 - Clip-stack behavior.
 - Invalid solid-mesh index rejection.
 - Solid packed red/blue endpoints, midpoint interpolation, and byte-identical zero-rgba uniform inheritance.
-- sRGB RGBA upload channel preservation.
+- sRGB RGBA upload channel preservation plus linear/nearest filtering for flat Image, NineSlice, and ImageMesh draws and prepared Image/ImageMesh replay.
 - Mixed `scene3d` plus 2D overlay composition in the same frame.
 - Scene3D bloom single-source extraction, one-/three-layer graph resource counts, warm plan reuse, clipped viewport output, and later 2D overlay visibility.
 - Optimized NV12 camera preview parity against the synthetic BGRA benchmark reference.
@@ -36,13 +36,17 @@ That test is the renderer-level guardrail for the globe app's 3D-under-2D design
 
 `snapshot_solid_vertex_color_interpolates_and_zero_inherits_uniform` renders one packed red-to-blue quad and one zero-rgba green-uniform quad. It asserts both endpoints, the mixed midpoint, and exact interior BGRA `[0, 255, 0, 255]` for the legacy uniform path.
 
-## Runtime-image upload snapshot
+## Runtime-image sampling snapshots
 
-`snapshot_rgba_image_upload_preserves_red_and_blue_channels` proves RGBA source bytes reach the sRGB texture without a red/blue swap.
+`snapshot_rgba_image_upload_preserves_red_and_blue_channels` proves RGBA source bytes reach the sRGB texture without a red/blue swap. `snapshot_runtime_image_sampling_covers_flat_image_families` compares nearest and linear pixels for Image, NineSlice, and ImageMesh. `snapshot_runtime_image_sampling_covers_prepared_images_and_meshes` exercises the retained backend with adjacent mixed-mode images and image meshes, proving that prepared batching preserves each resource's immutable filtering contract.
 
 ## Preconditions and postconditions
 
-The tests require a readback-capable Metal target. Passing the solid case proves the existing single-draw path resolves zero before raster interpolation. Passing the runtime-image case proves RGBA channel preservation.
+The tests require a readback-capable Metal target. Passing the solid case proves
+the existing single-draw path resolves zero before raster interpolation.
+Passing the runtime-image cases proves RGBA channel preservation and requested
+linear/nearest pixels across flat Image, NineSlice, and ImageMesh draws plus
+prepared Image and ImageMesh replay.
 
 ## Edge cases and failure modes
 
@@ -65,7 +69,7 @@ The snapshot file requires `snapshot-tests` and macOS or physical iOS Metal supp
 Run the named test with `cargo test --locked -p oxide-renderer-metal --features snapshot-tests --test snapshots`.
 
 ## Changelog
-- 2026-08-06: added RGBA channel-order readback coverage.
+- 2026-08-06: added RGBA channel-order and flat/prepared linear-versus-nearest runtime-image readback coverage.
 - 2026-07-15: added C58 one-/three-layer Scene3D bloom graph, viewport, overlay, alias-count, and plan-reuse coverage.
 - 2026-07-14: kept cached/fresh final-pixel and decoded-field parity across packed Metal ID-mask storage.
 - 2026-07-14: added exact cached-versus-fresh ID-mask field and final-pixel parity plus purge coverage.
