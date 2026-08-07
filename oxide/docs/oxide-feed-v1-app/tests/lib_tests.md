@@ -10,6 +10,7 @@ This integration suite protects the feed app as an external caller sees it. It c
 - Uses public fixture constants/functions from [`contract.rs`](../contract.md) to compare externally visible geometry, colors, offsets, and upload bytes.
 - Reads terminal JSON written by [`observation.rs`](../observation.md), while focused schema coverage remains in [`observation_tests.md`](observation_tests.md).
 - Uses lightweight fake haptics and image uploaders only at the public platform/renderer interfaces.
+- Includes the app manifest and XcodeGen source at compile time to freeze the ordinary-build/device-archive boundary.
 
 Call graph:
 
@@ -19,6 +20,7 @@ Call graph:
 
 ## Entry points list
 
+- `ordinary_builds_are_rlib_only_and_the_device_build_explicitly_requests_staticlib` prevents normal host builds and tests from aggregating the complete dependency graph into an unused static archive while requiring the arm64 device phase to request that archive explicitly.
 - `frozen_app_starts_at_each_exact_contract_offset` covers both controller endpoints.
 - `measurement_begins_at_the_first_drag_offset_change` proves touch-down and sub-slop motion remain unmeasured.
 - `a_touch_that_never_drags_returns_to_ready` proves a tap does not create a benchmark sample.
@@ -36,7 +38,7 @@ Call graph:
 
 ## Logic narrative
 
-Each test acquires one process-wide environment lock, installs valid controller variables, and restores the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
+The build-contract source guard first requires an rlib-only crate manifest and an explicit `cargo rustc --crate-type staticlib` Xcode device command. Runtime tests acquire one process-wide environment lock, install valid controller variables, and restore the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
 
 `UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Its A8 counters prove that frame-scoped text publication folds cold glyphs into one atlas creation and leaves an unchanged warm frame upload-free. A focused adapter regression inspects the bounded `RuntimeTextUploader` implementation and requires both append and release forwarding. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. Tests do not access private app fields or mutate state outside public interfaces.
 
@@ -91,6 +93,7 @@ cargo test --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Ca
 
 ## Changelog
 
+- 2026-08-07: Added a source guard for rlib-only ordinary builds and explicit device-only static-archive emission.
 - 2026-08-07: Added frame-coalesced text-atlas publication and complete runtime A8 adapter forwarding coverage.
 - 2026-08-06: Added real-inertia success, noninertial rejection, and required zero environment-transition coverage.
 - 2026-08-06: Replaced inline private-state tests with focused public-API integration coverage.

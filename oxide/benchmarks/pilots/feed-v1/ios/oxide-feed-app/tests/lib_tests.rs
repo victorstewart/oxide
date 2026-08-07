@@ -182,6 +182,22 @@ impl Drop for TemporaryHome
 }
 
 #[test]
+fn ordinary_builds_are_rlib_only_and_the_device_build_explicitly_requests_staticlib()
+{
+   let manifest = include_str!("../Cargo.toml");
+   assert!(manifest.contains("crate-type = [\"rlib\"]"));
+   assert!(!manifest.contains("\"staticlib\""));
+
+   let project = include_str!("../../device-pilot/project.yml");
+   assert!(project.contains(
+      "cargo rustc --locked --release --target aarch64-apple-ios --manifest-path \"${MANIFEST}\" --lib --crate-type staticlib",
+   ));
+   assert!(!project.contains(
+      "cargo build --locked --release --target aarch64-apple-ios --manifest-path \"${MANIFEST}\"",
+   ));
+}
+
+#[test]
 fn frozen_app_starts_at_each_exact_contract_offset()
 {
    let _lock = lock_environment();

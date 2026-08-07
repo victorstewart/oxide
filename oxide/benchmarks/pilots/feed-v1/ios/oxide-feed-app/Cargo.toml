@@ -7,7 +7,7 @@ description = "Benchmark-only production-path Oxide feed-v1 iOS app"
 
 [lib]
 path = "src/lib.rs"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 oxide-host-ios = { path = "../../../../../host/ios-app/oxide-host-ios", default-features = false }

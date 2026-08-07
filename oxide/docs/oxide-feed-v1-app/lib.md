@@ -93,13 +93,14 @@ The app defines no crate features. The library compiles on the native host for d
 - [`tests/observation_tests.md`](tests/observation_tests.md) validates exact success/failure JSON, geometry translation, transition fields, and nonce rejection.
 - The physical-device harness remains the authoritative proof for UIKit/Oxide visual comparison and native-refresh callback pacing. Host-side tests do not claim device performance.
 
-Build the standalone arm64 device archive with an external target directory:
+Build the arm64 device archive with an explicit device-only `staticlib` output and an external target directory:
 
 ```sh
 IPHONEOS_DEPLOYMENT_TARGET=18.0 \
 CARGO_TARGET_DIR=/tmp/oxide-feed-v1-device-build \
-cargo build --locked --offline --release --target aarch64-apple-ios \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml
+cargo rustc --locked --offline --release --target aarch64-apple-ios \
+  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
+  --lib --crate-type staticlib
 ```
 
 Run the host-side contract and state-machine tests with:
@@ -120,6 +121,7 @@ assert_eq!(status.callback_sample_count, 0);
 
 ## Changelog
 
+- 2026-08-07: Made ordinary host builds rlib-only and moved static-archive emission to the explicit arm64 device build.
 - 2026-08-07: Scoped text collection/publication to each rendered frame and preserved append/release operations through the runtime A8 uploader adapter.
 - 2026-08-06: Added complete allocation-bounded canonical identity admission at startup.
 - 2026-08-06: Consolidated standalone build and verification commands into the required mapped crate documentation.
