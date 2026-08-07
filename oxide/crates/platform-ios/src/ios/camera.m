@@ -329,16 +329,14 @@ typedef void (*OxideCameraAudioCallback)(const struct OxideCamAudio *);
 typedef void (*OxideCameraRecordCallback)(const struct OxideCamRecordEvent *);
 typedef void (*OxideCameraPhotoCallback)(const struct OxideCamPhotoEvent *);
 typedef void (*OxideCameraPreviewPublishCallback)(uint64_t generation,
-                                                  uint64_t timestamp_ns,
-                                                  void *ctx);
+                                                  uint64_t timestamp_ns);
 
 static OxideCameraFrameCallback g_oxide_camera_frame_callback = NULL;
 static OxideCameraAudioCallback g_oxide_camera_audio_callback = NULL;
 static OxideCameraRecordCallback g_oxide_camera_record_callback = NULL;
 static OxideCameraPhotoCallback g_oxide_camera_photo_callback = NULL;
-static OxideCameraPreviewPublishCallback
+static _Atomic(OxideCameraPreviewPublishCallback)
     g_oxide_camera_preview_publish_callback = NULL;
-static void *g_oxide_camera_preview_publish_context = NULL;
 
 enum { kOxideCameraPublishedSlotCount = 4 };
 
@@ -379,9 +377,10 @@ static BOOL NametagPerfPreviewPrebridgeDropEnabled(void) {
 static inline void OxideDispatchPreviewPublishCallback(uint64_t generation,
                                                        uint64_t timestamp_ns) {
   OxideCameraPreviewPublishCallback callback =
-      g_oxide_camera_preview_publish_callback;
+      atomic_load_explicit(&g_oxide_camera_preview_publish_callback,
+                           memory_order_acquire);
   if (callback != NULL) {
-    callback(generation, timestamp_ns, g_oxide_camera_preview_publish_context);
+    callback(generation, timestamp_ns);
   }
 }
 
@@ -4436,9 +4435,9 @@ void oxide_cam_release_acquired(uint32_t slot, uint64_t generation) {
 }
 
 void oxide_cam_set_preview_publish_callback(
-    OxideCameraPreviewPublishCallback callback, void *context) {
-  g_oxide_camera_preview_publish_callback = callback;
-  g_oxide_camera_preview_publish_context = context;
+    OxideCameraPreviewPublishCallback callback) {
+  atomic_store_explicit(&g_oxide_camera_preview_publish_callback, callback,
+                        memory_order_release);
 }
 
 void oxide_cam_mark_presented_generation(uint64_t generation) {

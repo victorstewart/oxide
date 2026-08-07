@@ -96,6 +96,7 @@ targets:
               RUST_TARGET="aarch64-apple-ios-sim"
               ;;
           esac
+          RUST_IOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-18.0}"
           mkdir -p "${CARGO_TARGET_DIR}"
           HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/xcode-host-clang.sh"
           cat > "${HOST_LINKER_WRAPPER}" <<'EOF'
@@ -106,8 +107,9 @@ targets:
           echo "Building Rust staticlib for ${RUST_TARGET}…"
           (cd "${REPO_ROOT}/host/ios-app/oxide-host-ios" && \
              export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}" && \
-             unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \
-             cargo build -p oxide-host-ios --release --features perf-host-stubs --target "${RUST_TARGET}")
+             export IPHONEOS_DEPLOYMENT_TARGET="${RUST_IOS_DEPLOYMENT_TARGET}" && \
+             unset SDKROOT SDK_DIR SDK_NAME && \
+             cargo build -p oxide-host-ios --release --features perf-host-stubs,test-scenes-entrypoint,tokio-runtime --target "${RUST_TARGET}")
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           SRC="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a"
           cp -v "${SRC}" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"

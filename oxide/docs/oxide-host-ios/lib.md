@@ -6,6 +6,7 @@
 
 ## Relation to the rest of the code
 - Objective-C code in the iOS app calls exported `oxide_host_*` and `rust_entry` symbols from this file.
+- `build.rs` selects the bounded `src/ios/product_app.m` shell by default and the legacy `src/ios/app.m` host only for `test-scenes-entrypoint`.
 - The host uses `oxide-input` for raw touch/pointer/key delivery, `oxide-platform-ios` for native Apple services, and `oxide-renderer-metal` for frame rendering.
 - Shared Apple services moved into `oxide-platform-apple` are consumed through `oxide-platform-ios`; this host remains responsible for UIKit shell behavior and OS event delivery.
 - The callback lock policy now mirrors `oxide-host-macos`: callback registries recover poisoned mutexes instead of panicking at FFI boundaries.
@@ -16,6 +17,8 @@
   Starts the native iOS host through the Objective-C UIApplication shim.
 - `install_app(Box<dyn App>)` and `run_app(argc, argv, Box<dyn App>)`
   Install exactly one production app before host initialization and start the native UIApplication shell. The raw C `argc`/`argv` start call is explicitly unsafe and leaves the app slot untouched off iOS.
+- `display_link_frame_rate_range() -> Option<DisplayLinkFrameRateRange>`
+  Reads the active shell's atomically published display-link range without dereferencing UIKit or Core Animation state from Rust.
 - `oxide_host_set_window_resized_callback(...)` and `oxide_host_emit_window_resized(...)`
   Register and emit window-size/safe-area updates.
 - `oxide_host_set_text_commit_callback(...)`, `oxide_host_set_text_composition_callback(...)`, `oxide_host_set_text_selection_callback(...)`, and matching emitters
@@ -49,6 +52,7 @@
 - Apps with an owned `PreparedFrame` submit that draw list directly. The host only copies damage into reusable scratch and preserves the prepared frame across a generation-bound retry when drawable acquisition, Metal backpressure, or submission fails.
 - Frame wake generations are acknowledged only after a successful Metal submit. A newer wake or changed drawable geometry invalidates a retained retry, while `FrameDemand::NextVsync` continues scheduling without legacy settle frames.
 - Window, raw input, text, IME, and lifecycle events are delivered directly to the installed app. Posted tasks are drained before preparation and successful submits report observational `AppEvent::RendererStats` without invalidating frame state.
+- The product shell forwards native touch and display-link timestamps, prepares Rust work before acquiring a drawable, and publishes its configured display-link range through a lock-free snapshot.
 - The host exposes no platform motion-preference state, control, or ABI; authored Oxide animation durations pass through unchanged.
 - Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
 
@@ -71,9 +75,11 @@
 - No heap allocation is added to the callback-installed input path; fallback logging may format strings only when no callback is registered.
 - The compatibility draw adapter retains its draw-list capacities across frames.
 - App-owned prepared draw lists are not copied, and posted tasks are drained outside the app-state lock.
+- Display-link range reads perform one native call over an atomic integer snapshot; no UIKit object crosses the Rust boundary.
 
 ## Performance notes
 - Renderer construction selects the normal three-slot visible-host resource mode; actual Metal command-buffer completion still protects reuse and saturated frames coalesce without blocking.
+- The product display link sleeps when frame demand is idle and drawable acquisition remains after app preparation.
 - Callback pointer copying is constant-time and mirrors the macOS host pattern.
 - Real Metal shader compilation is available after installing Apple's Metal Toolchain component; renderer-metal checks now generate `default.metallib` instead of a placeholder.
 
@@ -81,6 +87,7 @@
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
 - `test-scenes-entrypoint` rejects production app installation so the legacy test host and injected app cannot claim the same process.
+- `test-scenes-entrypoint` selects the legacy Objective-C host; without it, `build.rs` compiles only the product shell. Benchmark stubs are ignored unless the legacy host is selected.
 - Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, persistent prepared chunks, and ID-mask raster/JFA fields, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
 
 ## Testing and benchmarks
@@ -90,6 +97,7 @@
 - Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
 - [injected_app_tests.md](tests/injected_app_tests.md) freezes direct sampled-RGBA uploader wiring, invalid-handle mapping, and renderer-owned release.
 - `tests/drawable_tests.rs` freezes injected wake acknowledgement, retry retention, and lifecycle timing reset behavior.
+- `tests/production_shell_tests.rs` freezes native source selection, bounded shell ownership, exact timestamp delivery, and atomic display-link observation.
 
 ## Examples
 ```rust
@@ -98,6 +106,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-06: added the bounded product Objective-C shell, exact native frame/input timing, idle display-link scheduling, and thread-safe display-link range observation.
 - 2026-08-06: added explicit production app injection, app-owned prepared frames with a persistent legacy fallback encoder, display-link timing, wake-generation retry scheduling, direct event delivery, and renderer feedback.
 - 2026-08-06: adapted app draw commands to reusable host draw-list storage and wired sampled runtime images directly into Metal-owned resources.
 - 2026-08-06: removed the product motion toggle and the obsolete motion-preference host state and ABI.

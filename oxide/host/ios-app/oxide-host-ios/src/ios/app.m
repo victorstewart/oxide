@@ -508,6 +508,9 @@ int32_t oxide_host_camera_preview_plan_reason(uint32_t w, uint32_t h,
 int32_t oxide_host_app_frame_with_drawable(uint32_t w, uint32_t h, float scale,
                                            void *drawable_ptr);
 int32_t oxide_host_app_prepare_frame(uint32_t w, uint32_t h, float scale);
+int32_t oxide_host_app_prepare_frame_timed(uint32_t w, uint32_t h, float scale,
+                                           uint64_t timestamp_ns,
+                                           uint64_t target_timestamp_ns);
 int32_t oxide_host_app_submit_prepared_frame_with_drawable(void *drawable_ptr);
 void oxide_host_app_cancel_prepared_frame(void);
 int32_t oxide_host_app_stats(void *stats_out);
@@ -591,10 +594,9 @@ uint64_t oxide_cam_peek_latest_generation(void);
 uint64_t oxide_cam_peek_latest_timestamp_ns(void);
 void oxide_cam_release_acquired(uint32_t slot, uint64_t generation);
 typedef void (*OxideCameraPreviewPublishCallback)(uint64_t generation,
-                                                  uint64_t timestamp_ns,
-                                                  void *context);
+                                                  uint64_t timestamp_ns);
 void oxide_cam_set_preview_publish_callback(
-    OxideCameraPreviewPublishCallback callback, void *context);
+    OxideCameraPreviewPublishCallback callback);
 int32_t oxide_host_power_lowpower(void);
 int32_t oxide_host_thermal_state(void);
 int32_t oxide_host_set_camera_options(uint8_t blur, float sigma,
@@ -787,6 +789,8 @@ static __weak UIView *gMetalView = nil;
 static __weak RustSceneDelegate *gActiveRustSceneDelegate = nil;
 static _Atomic(uint64_t) gDisplayLinkWakeGeneration = 0;
 static _Atomic(uint8_t) gDisplayLinkWakeDispatchPending = 0;
+static _Atomic(uint8_t) gHighRefreshEnabled = 1;
+static _Atomic(uint32_t) gDisplayLinkRangeHz = 0;
 static BOOL gHostAppReady = NO;
 static id<MTLDevice> gMetalDevice = nil;
 static UILabel *gUILogLabel = nil;
@@ -1267,6 +1271,14 @@ static inline uint64_t ts_now_ns(void) {
   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static inline uint64_t seconds_to_ns(CFTimeInterval seconds) {
+  if (!isfinite(seconds) || seconds <= 0.0) {
+    return 0;
+  }
+  double ns = seconds * 1000000000.0;
+  return ns >= (double)UINT64_MAX ? UINT64_MAX : (uint64_t)llround(ns);
+}
+
 static int DeviceMaxFPS(void) {
   CADisplayLink *dl =
       [CADisplayLink displayLinkWithTarget:[NSNull null]
@@ -1282,7 +1294,10 @@ static int DeviceMaxFPS(void) {
 }
 
 static int CurrentTargetFPS(void) {
-  return DeviceMaxFPS();
+  int maximum = DeviceMaxFPS();
+  return atomic_load_explicit(&gHighRefreshEnabled, memory_order_acquire) != 0
+             ? maximum
+             : MIN(maximum, 60);
 }
 
 static void dispatch_on_main(void (^block)(void)) {
@@ -3227,8 +3242,13 @@ int32_t oxide_host_thermal_state(void) {
   }
   uint32_t device = 0;
   if (@available(iOS 9.1, *)) {
-    if (touch.type == UITouchTypePencil)
+    if (touch.type == UITouchTypePencil) {
       device = 1;
+    } else if (@available(iOS 13.4, *)) {
+      if (touch.type == UITouchTypeIndirectPointer) {
+        device = 2;
+      }
+    }
   }
   NSNumber *idNum = [self ensureIdForTouch:touch];
   uint64_t id = idNum.unsignedLongLongValue;
@@ -3237,7 +3257,7 @@ int32_t oxide_host_thermal_state(void) {
           (unsigned long long)id, phase, OxideTouchSummary(touch, self));
   }
   oxide_host_emit_touch(id, phase, p.x, p.y, pressure, hasP, alt, azi, hasT,
-                        device, ts_now_ns());
+                        device, seconds_to_ns(touch.timestamp));
   if (phase == 2 || phase == 3) {
     [self removeIdForTouch:touch];
   }
@@ -3591,12 +3611,37 @@ void oxide_host_request_display_link_wake(uint64_t generation) {
   });
 }
 
+void oxide_host_set_high_refresh(uint8_t enable) {
+  atomic_store_explicit(&gHighRefreshEnabled, enable != 0, memory_order_release);
+  dispatch_on_main(^{
+    [gActiveRustSceneDelegate updateDisplayLinkRange];
+  });
+}
+
+int32_t oxide_host_display_link_frame_rate_range(float *minimum,
+                                                 float *maximum,
+                                                 float *preferred) {
+  if (minimum == NULL || maximum == NULL || preferred == NULL) {
+    return 0;
+  }
+  *minimum = 0.0f;
+  *maximum = 0.0f;
+  *preferred = 0.0f;
+  uint32_t hertz =
+      atomic_load_explicit(&gDisplayLinkRangeHz, memory_order_acquire);
+  if (hertz == 0) {
+    return 0;
+  }
+  *minimum = (float)hertz;
+  *maximum = (float)hertz;
+  *preferred = (float)hertz;
+  return 1;
+}
+
 static void OxideCameraPreviewPublishDidAdvance(uint64_t generation,
-                                                uint64_t timestamp_ns,
-                                                void *context) {
+                                                uint64_t timestamp_ns) {
   (void)generation;
   (void)timestamp_ns;
-  (void)context;
   atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
   if (!OxidePerfCameraFrameDrivenSchedulingEnabled()) {
     return;
@@ -3799,10 +3844,9 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   gActiveRustSceneDelegate = self;
   if (OxidePerfCameraFrameDrivenSchedulingEnabled()) {
     atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
-    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance,
-                                           NULL);
+    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance);
   } else {
-    oxide_cam_set_preview_publish_callback(NULL, NULL);
+    oxide_cam_set_preview_publish_callback(NULL);
   }
 }
 
@@ -5507,6 +5551,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
 - (void)updateDisplayLinkRange {
   if (!self.displayLink) {
+    atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
     return;
   }
   int fps = CurrentTargetFPS();
@@ -5516,6 +5561,8 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   } else {
     self.displayLink.preferredFramesPerSecond = fps;
   }
+  atomic_store_explicit(&gDisplayLinkRangeHz, (uint32_t)fps,
+                        memory_order_release);
 }
 
 - (void)onPowerStateChanged:(NSNotification *)note {
@@ -5632,7 +5679,10 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   if (gActiveRustSceneDelegate == self) {
     gActiveRustSceneDelegate = nil;
   }
-  oxide_cam_set_preview_publish_callback(NULL, NULL);
+  if (gActiveRustSceneDelegate == nil) {
+    atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
+  }
+  oxide_cam_set_preview_publish_callback(NULL);
   self.perfCameraPreviewView.previewLayer.session = nil;
   if (self.perfBenchmarkAVFoundationSession != nil) {
     AVCaptureSession *session = self.perfBenchmarkAVFoundationSession;
@@ -5699,7 +5749,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   if (IsRunningUITest() && !IsRunningPerfBenchmarkHost()) {
     return;
   }
-  (void)link;
   gAppDebugPerf.on_tick_calls += 1;
   uint64_t wakeGeneration = oxide_host_app_wake_generation();
   if (self.displayLinkSuspendedForIdle &&
@@ -5810,9 +5859,10 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     return;
   }
   double frameCallT0Ms = OxidePerfNowMs();
-  int32_t rc_prepare = oxide_host_app_prepare_frame(
+  int32_t rc_prepare = oxide_host_app_prepare_frame_timed(
       (uint32_t)lrintf((float)size.width), (uint32_t)lrintf((float)size.height),
-      (float)scale);
+      (float)scale, seconds_to_ns(link.timestamp),
+      seconds_to_ns(link.targetTimestamp));
   if (rc_prepare != 0) {
     tickPerf.frame_call_ms = (float)(OxidePerfNowMs() - frameCallT0Ms);
     tickPerf.tick_total_ms = (float)(OxidePerfNowMs() - tickT0Ms);
@@ -5924,6 +5974,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
 - (void)applicationWillTerminate:(UIApplication *)application {
   (void)application;
+  atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
   oxide_host_app_will_terminate();
 }
 

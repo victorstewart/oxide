@@ -69,10 +69,56 @@ extern "C" {
     fn oxide_cam_stop();
     fn oxide_cam_set_preview_pixel_format(format: i32) -> ::libc::c_int;
     fn oxide_host_request_display_link_wake(generation: u64);
+    fn oxide_host_display_link_frame_rate_range(
+        minimum: *mut f32,
+        maximum: *mut f32,
+        preferred: *mut f32,
+    ) -> ::libc::c_int;
 }
 
 #[cfg(target_os = "ios")]
+/// Monotonic time sourced from the active iOS platform host.
 pub struct IosTime;
+
+/// The frame-rate range currently configured on the production display link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayLinkFrameRateRange
+{
+   /// Minimum callback rate requested from Core Animation, in hertz.
+   pub minimum: f32,
+   /// Maximum callback rate requested from Core Animation, in hertz.
+   pub maximum: f32,
+   /// Preferred callback rate requested from Core Animation, in hertz.
+   pub preferred: f32,
+}
+
+/// Returns the host-published display-link range when running on iOS.
+///
+/// The native shell publishes this lock-free snapshot on the main thread, so
+/// callers never dereference UIKit or Core Animation objects.
+pub fn display_link_frame_rate_range() -> Option<DisplayLinkFrameRateRange>
+{
+   #[cfg(target_os = "ios")]
+   {
+      let mut range = DisplayLinkFrameRateRange {
+         minimum: 0.0,
+         maximum: 0.0,
+         preferred: 0.0,
+      };
+      let available = unsafe {
+         oxide_host_display_link_frame_rate_range(
+            &mut range.minimum,
+            &mut range.maximum,
+            &mut range.preferred,
+         )
+      };
+      return (available != 0).then_some(range);
+   }
+   #[cfg(not(target_os = "ios"))]
+   {
+      None
+   }
+}
 
 #[inline]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
