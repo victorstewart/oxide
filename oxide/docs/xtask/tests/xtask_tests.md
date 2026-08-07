@@ -23,8 +23,13 @@ Call flow:
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.
 - `oxide_device_contract_source_lists_canonical_families()` and `xtask_docs_describe_experiment_manifest_check()`: keep policy source and documentation wired.
+- `device_battery_policy_uses_canonical_mode_naming()`: rejects legacy mode terminology and requires the canonical-promotion/no-run-everything contract.
+- `contract_coverage_status_distinguishes_absence_from_partial_coverage()`: prevents an unselected workload family from being reported as partial evidence.
 - `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check.
 - `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
+- `canonical_device_battery_is_exactly_five_matched_proof_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, staged proof buckets, required workload-family mappings, and matching Oxide ids.
+- `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.
+- `standalone_oxide_default_matches_the_five_unique_compare_rows()`: prevents the no-`--case` Oxide command from silently running a broader on-screen battery than matched promotion.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
 - Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, promotion prerequisites, and committed-baseline status.
@@ -40,7 +45,7 @@ featureless `cargo test` pass while requiring the all-target `cargo check`
 replacement. It validates orchestration without recursively launching the
 workspace suite from inside an integration test.
 
-Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
+Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. The canonical-selector tests treat row count as a consequence of five matched proof obligations: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -75,6 +80,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: froze the exact ten-row UIKit and five-row Oxide canonical device inventories, pair metadata, and explicit-only access for noncanonical cases.
 - 2026-08-07: Required `test-all` to compile, rather than rerun, the featureless workspace test graph.
 - 2026-07-15: froze C60's accepted image-store experiment, two rejected UIKit proof paths, and the 190-entry, 88-accepted, 102-rejected manifest totals.
 - 2026-07-14: froze the accepted C35 WebGPU ID-mask field packing and the 170-entry, 81-accepted, 89-rejected manifest totals.

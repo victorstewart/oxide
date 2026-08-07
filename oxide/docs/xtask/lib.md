@@ -40,6 +40,15 @@
 - `xtask::uikit_report_matches_case_ids(report: &UIKitPerfReport, expected_case_ids: &[&str]) -> bool`
   - Validates that a checkpointed UIKit report contains exactly the case set requested by the current resumable run before reuse.
   - Main callers: device perf flow and tests.
+- `xtask::uikit_canonical_device_cases() -> &'static [UIKitCanonicalDeviceCase]`
+  - Exposes the exact ten-row UIKit device contract with its test names, UIKit/Oxide ids, comparison buckets, required workload-family mappings, and styles.
+  - Main callers: the canonical selector and contract tests.
+- `xtask::oxide_canonical_device_case_ids() -> Vec<&'static str>`
+  - Returns the five unique Oxide on-screen rows paired with the ten UIKit canonical rows.
+  - Main callers: the standalone Oxide selector and contract tests.
+- `xtask::contract_coverage_status(present: bool, complete: bool) -> &'static str`
+  - Returns `missing`, `partial`, or `implemented` without allowing a completeness flag to manufacture coverage when no selected evidence is present.
+  - Main callers: Oxide/UIKit device report builders and contract tests.
 - `xtask::summarize_energy_table(...) -> anyhow::Result<UIKitMetricSummary>`
   - Reduces imported Power Profiler tables into direct device energy summaries when manual traces are available.
   - Main callers: device perf flow and tests.
@@ -59,13 +68,40 @@ The current manifest records accepted proof for the native audit-row retirement,
 
 Device perf runs reuse the same case mapping but add process-scoped Instruments attachment. CPU metrics still come from XCTest, while external GPU timing, GPU counters, and the canonical device phase/signpost timings come from process-scoped Metal System Trace on the same case. When the active Xcode toolchain leaves launched-target stdout empty, the UIKit path retains that trace and performs one separate console-summary pass for frame-cadence metrics; it never substitutes compositor timing or inferred zeros for missing cadence. Oxide on-screen rows also merge host-console stage summaries so in-app Metal command-buffer and timestamp-counter timings survive even when Apple rejects the optional Instruments hardware-counter profile. Energy remains an optional imported input sourced from manual Power Profiler traces, and the report marks it as manual-pending when those traces are absent.
 
-The active device harness now trims a large amount of orchestration dead weight out of that path. Launched traces use a small case-aware time-limit buffer instead of a fixed multi-second pad, XCTest outer measurement counts are adaptive by workload family instead of a flat 10/5 policy, and the device trace-settle delay is reduced to a short default for signposted cases. Metrics shards are grouped by environment instead of forcing singleton shards for every UI-test/camera case, prepared `.xctestrun` files are hashed by their environment and only rewritten when their bytes change, and unchanged derived-data builds are reused through a persisted input fingerprint stamp. The device-side `devicectl ... -j` polling path now retries transient streaming/control-channel failures, transient launched `xctrace` wall-time watchdog overruns are retried once instead of aborting the full battery immediately, and `xctrace` reduction walks one parsed trace artifact per case instead of repeatedly re-exporting overlapping table sets.
+The active device harness now trims a large amount of orchestration dead weight out of that path. Launched traces use a small case-aware time-limit buffer instead of a fixed multi-second pad, XCTest outer measurement counts are adaptive by workload family instead of a flat 10/5 policy, and the device trace-settle delay is reduced to a short default for signposted cases. Metrics shards are grouped by environment instead of forcing singleton shards for every UI-test/camera case, prepared `.xctestrun` files are hashed by their environment and only rewritten when their bytes change, and unchanged derived-data builds are reused through a persisted input fingerprint stamp. The device-side `devicectl ... -j` polling path now retries transient streaming/control-channel failures, transient launched `xctrace` wall-time watchdog overruns are retried once instead of aborting the canonical battery, and `xctrace` reduction walks one parsed trace artifact per case instead of repeatedly re-exporting overlapping table sets.
 
 Before any `xcodebuild test-without-building` device batch, the harness now also preflights the phone's interactive state through `devicectl device info lockState` and `devicectl device info displays`. If the phone is locked or the main display backlight is off, the run fails fast and keeps its checkpoints instead of burning time in Xcode destination-preflight limbo.
 
-The default committed UIKit device battery is intentionally a compact representative signal battery, not the exhaustive case matrix. It now includes headline UI object rows for labels, progress bars, spinners, buttons, toggles, sliders, images, nine-slice images, and collection views, plus common animation rows for spinner, indeterminate progress, button press scale, toggle spring, slider movement, image zoom/pan, and timeline bars. Dense count/style matrices are tiered down to a smaller high-signal subset in the default run so the official device baseline preserves distinct behaviors instead of every near-duplicate permutation. Noncanonical rows remain callable by explicit `--case` selection for touched-area investigation; there is no run-everything contract.
+The canonical UIKit device battery is exactly ten rows: one two-row proof for each currently supported staged comparison family. This is the smallest set that preserves the existing five proof buckets without publishing an unpaired UIKit style. The previous default contained 38 rows: eight unpaired component rows, one collection pair, seven animation pairs, two navigation pairs, four journey pairs, and the two mandatory camera rows. The canonical selector keeps the collection component pair, spinner pair, button-response pair, collection-navigation pair, and camera microscope pair. The other 28 rows lose only default membership; all 177 registered UIKit cases remain callable by exact test name or case id through `--case`. There is no run-everything device mode.
 
-The official compare flow is now staged instead of using the full baseline pass as a debugging tool. `cargo xtask ios compare-device-perf --watchable-smoke` runs a small visibly watchable representative set and writes its own checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` runs the compact proof set for one family under `family/<family>/`. The root-level full `--write-baseline` promotion run keeps using `uikit/` and `oxide/`, but it now refuses to write official baselines until the corresponding family proofs for the current build stamp are green in `proof-status.json`.
+| Compare proof | Required workload family | Idiomatic row | Optimized/comparator row | Oxide row |
+|---|---|---|---|---|
+| `component` | `lists-grids-chat` encode signal | `testCollectionViewEncode` | `testOptimizedCollectionViewEncode` | `cpu.component.collection_view.encode` |
+| `animation` | `animation-effects` | `testSpinnerSpin` | `testOptimizedSpinnerSpin` | `cpu.animation.spinner_spin` |
+| `navigation` | `navigation-input` | `testButtonPressResponse` | `testOptimizedButtonPressResponse` | `cpu.navigation.button_press.response` |
+| `journey` | `lists-grids-chat` interaction signal | `testCollectionNavigationJourney` | `testOptimizedCollectionNavigationJourney` | `cpu.journey.collection_navigation` |
+| `camera` | `image-pipeline` | `testCameraAVFoundationPreviewLayerLivePreview` | `testCameraNV12LegacyLivePreview` | `gpu.scene.camera.frame` |
+
+The required-family coverage matrix is deliberately explicit:
+
+| Required contract group | Canonical evidence | Status | Why nothing else is implied |
+|---|---|---|---|
+| `launch-lifecycle` | none | `missing` | There is no matching physical-device Oxide launch/resume row; registered UIKit launch cases remain exact-only. |
+| `primitive-lifecycle` | collection component encode pair | `partial` | Encode is a useful primitive-view signal, not mount/update/destroy lifecycle coverage. |
+| `layout-invalidation` | none | `missing` | There is no matching on-screen Oxide layout/invalidation row. |
+| `text-input` | none | `missing` | The UIKit text-focus case invokes responder/keyboard behavior while the current Oxide row changes only Rust focus state, so promoting it would publish an asymmetric proxy. |
+| `image-pipeline` | required pure-custom NV12/AVCaptureVideoPreviewLayer camera pair | `partial` | PNG decode, upload, and first-visible phases lack matching on-screen device rows. |
+| `lists-grids-chat` | collection encode and collection-navigation pairs | `partial` | Native feed/grid/chat scrolling and inertia remain unproven. |
+| `navigation-input` | button-response pair | `partial` | Slider and text-focus response rows are not part of the canonical signal. |
+| `animation-effects` | spinner pair | `partial` | Other effect shapes remain exact touched cases. |
+| `state-reconciliation` | none | `missing` | There is no matching on-screen Oxide `diff.apply` device row. |
+| `os-bridge` | none | `missing` | UIKit-only wrapper measurements cannot establish an Oxide/UIKit comparison. |
+| `endurance-thermal` | none | `missing` | No matching device endurance/thermal pair exists, so long loops do not pad every default run. |
+| `stress-pathological` | none | `missing` | The registered UIKit stress rows and Oxide-only renderer diagnostics do not form a matching physical-device scene pair. |
+
+Generated device reports use `missing` when none of the selected rows represent a group, `partial` when a selected signal exists without complete required coverage, and `implemented` only when the defined complete set is present. Exact UIKit and Oxide cases remain available for touched-surface evidence without changing the canonical default.
+
+The official compare flow is staged without introducing a broader promotion set. `cargo xtask ios compare-device-perf --watchable-smoke` runs the ten visibly watchable canonical rows and writes checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` runs the corresponding two-row proof under `family/<family>/`. Canonical `--write-baseline` promotion keeps using `uikit/` and `oxide/`, but it refuses to write official baselines until those family proofs for the current build stamp are green in `proof-status.json`.
 
 Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow the family-proof or promotion baseline paths.
 
@@ -75,7 +111,7 @@ For camera preview, the official today bucket is the parked microscope pair: the
 
 The Oxide device flow installs the host app on the same physical iPhone, launches the parked benchmark app with the in-process Rust perf suite enabled, triggers it over Darwin notifications, then reconstructs the JSON report from the console payload and persists it under `benchmarks/oxide-device/`. Markdown rendering rewrites the baseline workflow so the report points at the device-only command instead of the desktop workspace runner.
 
-For the on-screen Oxide battery, the authoritative device workload window is no longer inferred from the older offscreen Rust suite. The parked host app now emits the bounded `PerfWorkload` interval through the host-side `com.oxide.perf` Points-of-Interest log, and the device harness traces that same live process through a launched Metal trace on the real app-hosted MetalView surface. That keeps the on-screen Oxide path on the real host view, preserves the parked-app console summaries when they are available, and lets the harness stop the trace on the app's `com.oxide.perf.complete` notification instead of relying on a blind wall-clock timeout.
+For the on-screen Oxide battery, the authoritative device workload window is no longer inferred from the older offscreen Rust suite. The parked host app now emits the bounded `PerfWorkload` interval through the host-side `com.oxide.perf` Points-of-Interest log, and the device harness traces that same live process through a launched Metal trace on the real app-hosted MetalView surface. That keeps the on-screen Oxide path on the real host view, preserves the parked-app console summaries when they are available, and lets the harness stop the trace on the app's `com.oxide.perf.complete` notification instead of relying on a blind wall-clock timeout. With no `--case`, the standalone Oxide device command selects only the five unique Oxide rows in the table above; its other on-screen rows remain exact `--case` tools.
 
 Oxide on-screen device reports emit the same canonical workload-family contract rows as the workspace battery. Families not yet captured on physical hardware are reported as `missing` or `partial` instead of being omitted, so the device report cannot imply comprehensive launch, layout, text-input, bridge, endurance, or stress coverage before those rows exist.
 
@@ -106,12 +142,14 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
   - Repeated unchanged local runs should skip the expensive iOS rebuild path and reuse the previously fingerprinted derived data plus hashed `.xctestrun` variants.
 - Invariants maintained:
   - The UIKit case mapping is the single source of truth for report IDs and parity notes.
+  - No-case UIKit, matched compare-device, and standalone Oxide on-screen runs select the same five proof groups: ten UIKit style rows and five unique Oxide rows.
   - Local debug and device reports use the same case identity and metadata surface.
   - Device report validation fails required metric omissions before regression gating; optional metric regressions are gated only when those metrics are present in both current and baseline reports.
 
 ## Changelog
 
 - 2026-08-07: Renamed the repeated flat-rect teardown workload and parity mapping to a remove/rebuild cycle so report IDs match timed work.
+- 2026-08-07: Replaced the 38-row UIKit default with an exact ten-row/five-pair canonical selector, matched the standalone Oxide default to its five unique rows, and kept every other registered row exact-`--case` only.
 - 2026-08-07: Replaced the duplicate featureless workspace test pass with an all-target compile check.
 - 2026-07-15: preserved strict UIKit device cadence reporting when xctrace drops launched-target stdout by combining the same-case Metal trace with a bounded console-summary fallback pass.
 - 2026-07-14: recorded the accepted C35 WebGPU ID-mask field packing, bringing the manifest to 170 decided entries with 81 accepted and 89 rejected.

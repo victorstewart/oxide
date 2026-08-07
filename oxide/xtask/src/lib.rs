@@ -1521,6 +1521,105 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
     },
 ];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UIKitCanonicalDeviceCase
+{
+   pub test_name: &'static str,
+   pub case_id: &'static str,
+   pub oxide_case_id: &'static str,
+   pub compare_family: &'static str,
+   pub contract_family: &'static str,
+   pub style: &'static str,
+}
+
+const UIKIT_CANONICAL_DEVICE_CASES: &[UIKitCanonicalDeviceCase] = &[
+   UIKitCanonicalDeviceCase {
+      test_name: "testCollectionViewEncode",
+      case_id: "uikit.component.collection_view.encode",
+      oxide_case_id: "cpu.component.collection_view.encode",
+      compare_family: "component",
+      contract_family: "lists-grids-chat",
+      style: "idiomatic",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testOptimizedCollectionViewEncode",
+      case_id: "uikit.optimized.component.collection_view.encode",
+      oxide_case_id: "cpu.component.collection_view.encode",
+      compare_family: "component",
+      contract_family: "lists-grids-chat",
+      style: "optimized",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testSpinnerSpin",
+      case_id: "uikit.animation.spinner_spin",
+      oxide_case_id: "cpu.animation.spinner_spin",
+      compare_family: "animation",
+      contract_family: "animation-effects",
+      style: "idiomatic",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testOptimizedSpinnerSpin",
+      case_id: "uikit.optimized.animation.spinner_spin",
+      oxide_case_id: "cpu.animation.spinner_spin",
+      compare_family: "animation",
+      contract_family: "animation-effects",
+      style: "optimized",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testButtonPressResponse",
+      case_id: "uikit.idiomatic.navigation.button_press.response",
+      oxide_case_id: "cpu.navigation.button_press.response",
+      compare_family: "navigation",
+      contract_family: "navigation-input",
+      style: "idiomatic",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testOptimizedButtonPressResponse",
+      case_id: "uikit.optimized.navigation.button_press.response",
+      oxide_case_id: "cpu.navigation.button_press.response",
+      compare_family: "navigation",
+      contract_family: "navigation-input",
+      style: "optimized",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testCollectionNavigationJourney",
+      case_id: "uikit.journey.collection_navigation",
+      oxide_case_id: "cpu.journey.collection_navigation",
+      compare_family: "journey",
+      contract_family: "lists-grids-chat",
+      style: "idiomatic",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testOptimizedCollectionNavigationJourney",
+      case_id: "uikit.optimized.journey.collection_navigation",
+      oxide_case_id: "cpu.journey.collection_navigation",
+      compare_family: "journey",
+      contract_family: "lists-grids-chat",
+      style: "optimized",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testCameraNV12LegacyLivePreview",
+      case_id: "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live",
+      oxide_case_id: "gpu.scene.camera.frame",
+      compare_family: "camera",
+      contract_family: "image-pipeline",
+      style: "optimized",
+   },
+   UIKitCanonicalDeviceCase {
+      test_name: "testCameraAVFoundationPreviewLayerLivePreview",
+      case_id: "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live",
+      oxide_case_id: "gpu.scene.camera.frame",
+      compare_family: "camera",
+      contract_family: "image-pipeline",
+      style: "idiomatic",
+   },
+];
+
+pub fn uikit_canonical_device_cases() -> &'static [UIKitCanonicalDeviceCase]
+{
+   UIKIT_CANONICAL_DEVICE_CASES
+}
+
 #[derive(Debug, Deserialize)]
 struct CapabilitiesToml {
     #[serde(default)]
@@ -3702,19 +3801,9 @@ fn compare_device_family_for_uikit_spec(spec: &UIKitCaseSpec) -> Result<&'static
     )
 }
 
-fn uikit_case_in_compare_device_watchable_smoke_spec(spec: &UIKitCaseSpec) -> bool {
-    matches!(
-        spec.test_name,
-        "testButtonEncode"
-            | "testSpinnerSpin"
-            | "testOptimizedSpinnerSpin"
-            | "testButtonPressResponse"
-            | "testOptimizedButtonPressResponse"
-            | "testCollectionNavigationJourney"
-            | "testOptimizedCollectionNavigationJourney"
-            | "testCameraNV12LegacyLivePreview"
-            | "testCameraAVFoundationPreviewLayerLivePreview"
-    )
+fn uikit_case_in_compare_device_watchable_smoke_spec(spec: &UIKitCaseSpec) -> bool
+{
+   uikit_case_in_official_device_battery_spec(spec)
 }
 
 pub fn compare_device_official_families() -> Vec<String> {
@@ -3750,6 +3839,22 @@ pub fn uikit_case_in_compare_device_family(test_name: &str, family: &str) -> Res
     Ok(compare_device_family_for_uikit_spec(spec)? == family)
 }
 
+fn oxide_case_in_canonical_device_battery_spec(spec: &OxideOnscreenCaseSpec) -> bool
+{
+   uikit_canonical_device_cases()
+      .iter()
+      .any(|case| case.oxide_case_id == spec.case_id)
+}
+
+pub fn oxide_canonical_device_case_ids() -> Vec<&'static str>
+{
+   OXIDE_ONSCREEN_CASE_SPECS
+      .iter()
+      .filter(|spec| oxide_case_in_canonical_device_battery_spec(spec))
+      .map(|spec| spec.case_id)
+      .collect()
+}
+
 fn selected_oxide_onscreen_case_specs(
     requested: &[String],
 ) -> Result<Vec<&'static OxideOnscreenCaseSpec>> {
@@ -3757,7 +3862,9 @@ fn selected_oxide_onscreen_case_specs(
     let mut seen = BTreeSet::new();
     for spec in OXIDE_ONSCREEN_CASE_SPECS {
         if requested.is_empty() {
-            selected.push(spec);
+            if oxide_case_in_canonical_device_battery_spec(spec) {
+                selected.push(spec);
+            }
             continue;
         }
         let matches_requested = requested.iter().any(|value| {
@@ -3835,23 +3942,40 @@ fn selected_oxide_onscreen_case_specs_for_uikit_specs(
     Ok(selected)
 }
 
-fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitCaseSpec>> {
-    let mut selected = Vec::new();
-    for spec in UIKIT_CASE_SPECS {
-        if requested.is_empty() {
-            if uikit_case_in_official_device_battery_spec(spec) {
-                selected.push(spec);
-            }
-            continue;
-        }
-        if requested.iter().any(|value| value == spec.test_name || value == spec.case_id) {
-            selected.push(spec);
-        }
-    }
-    if selected.is_empty() {
-        bail!("unknown UIKit perf case(s) `{}`", requested.join(", "));
-    }
-    Ok(selected)
+fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitCaseSpec>>
+{
+   if requested.is_empty()
+   {
+      return uikit_canonical_device_cases()
+         .iter()
+         .map(|canonical| {
+            UIKIT_CASE_SPECS
+               .iter()
+               .find(|spec| spec.case_id == canonical.case_id)
+               .with_context(|| {
+                  format!(
+                     "canonical UIKit device case `{}` is not registered",
+                     canonical.case_id
+                  )
+               })
+         })
+         .collect();
+   }
+   let mut selected = Vec::new();
+   for spec in UIKIT_CASE_SPECS
+   {
+      if requested
+         .iter()
+         .any(|value| value == spec.test_name || value == spec.case_id)
+      {
+         selected.push(spec);
+      }
+   }
+   if selected.is_empty()
+   {
+      bail!("unknown UIKit perf case(s) `{}`", requested.join(", "));
+   }
+   Ok(selected)
 }
 
 fn selected_uikit_case_specs_for_compare_stage(
@@ -3887,48 +4011,11 @@ fn selected_uikit_case_specs_for_compare_stage(
     Ok(selected)
 }
 
-fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool {
-    matches!(
-        spec.case_id,
-        "uikit.component.label.encode"
-            | "uikit.component.progress_bar.encode"
-            | "uikit.component.spinner.encode"
-            | "uikit.component.button.encode"
-            | "uikit.component.toggle.encode"
-            | "uikit.component.slider.encode"
-            | "uikit.component.image_view.encode"
-            | "uikit.component.nine_slice_image.encode"
-            | "uikit.component.collection_view.encode"
-            | "uikit.optimized.component.collection_view.encode"
-            | "uikit.animation.spinner_spin"
-            | "uikit.optimized.animation.spinner_spin"
-            | "uikit.animation.progress_indeterminate"
-            | "uikit.optimized.animation.progress_indeterminate"
-            | "uikit.animation.button_press_scale"
-            | "uikit.optimized.animation.button_press_scale"
-            | "uikit.animation.toggle_thumb_spring"
-            | "uikit.optimized.animation.toggle_thumb_spring"
-            | "uikit.animation.slider_thumb_move"
-            | "uikit.optimized.animation.slider_thumb_move"
-            | "uikit.animation.image_zoom_pan"
-            | "uikit.optimized.animation.image_zoom_pan"
-            | "uikit.animation.anim_timeline_bars"
-            | "uikit.optimized.animation.anim_timeline_bars"
-            | "uikit.idiomatic.navigation.button_press.response"
-            | "uikit.optimized.navigation.button_press.response"
-            | "uikit.idiomatic.navigation.text_focus.response"
-            | "uikit.optimized.navigation.text_focus.response"
-            | "uikit.journey.input_form_submit"
-            | "uikit.optimized.journey.input_form_submit"
-            | "uikit.journey.collection_navigation"
-            | "uikit.optimized.journey.collection_navigation"
-            | "uikit.journey.zoom_image_gesture_cycle"
-            | "uikit.optimized.journey.zoom_image_gesture_cycle"
-            | "uikit.journey.orchestration_transition_modal"
-            | "uikit.optimized.journey.orchestration_transition_modal"
-            | "uikit.optimized.image_pipeline.camera_preview.nv12_legacy_live"
-            | "uikit.idiomatic.image_pipeline.camera_preview.avfoundation_preview_layer_live"
-    )
+fn uikit_case_in_official_device_battery_spec(spec: &UIKitCaseSpec) -> bool
+{
+   uikit_canonical_device_cases()
+      .iter()
+      .any(|case| case.case_id == spec.case_id)
 }
 
 pub fn uikit_case_in_official_device_battery(test_name: &str) -> Result<bool> {
@@ -9435,7 +9522,7 @@ fn resolve_compare_device_run_stage(
         bail!("--case cannot be combined with --watchable-smoke/--smoke or --family");
     }
     if cli.write_baseline && (cli.smoke || cli.family.is_some()) {
-        bail!("--write-baseline requires the promotion/full compare-device-perf mode");
+        bail!("--write-baseline requires canonical promotion mode without --watchable-smoke or --family");
     }
     let family = cli.family.as_deref();
     let stage = if cli.smoke {

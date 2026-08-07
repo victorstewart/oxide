@@ -29,15 +29,15 @@ Each platform report should classify coverage against these workload families:
 11. `endurance-thermal`
 12. `stress-pathological`
 
-If a family is not yet implemented, the report must say `missing` or `partial`.
+If a selected run contains no evidence for a family, the report must say `missing`. Use `partial` only when at least one selected row genuinely represents that family, and `implemented` only when the defined complete set is present.
 
-The committed default device baselines are representative signal batteries, not exhaustive every-row matrices. They should preserve distinct workload families, idiomatic-versus-optimized style comparisons where they matter, and the highest-signal scaling points, while tiering dense near-duplicate count/style permutations into explicit full-contract or touched-case runs.
+The committed device baselines are canonical signal batteries, not every registered row. They preserve distinct workload families, idiomatic-versus-optimized style comparisons where they matter, and the highest-signal scaling points. Dense near-duplicate count/style permutations remain exact touched-case runs; there is no run-everything device mode.
 
 The official device workflow is staged:
 
 - `watchable smoke`: fast representative runs that a human can watch on-device to confirm the right scene is visibly rendering
 - `family proof`: a complete proof pass for one compact workload family
-- `promotion`: the full baseline refresh, allowed only after the required family proofs are green for the current build
+- `promotion`: the canonical baseline refresh, allowed only after the required family proofs are green for the current build
 
 ## UIKit Baselines
 
@@ -151,5 +151,5 @@ When a persisted metric is derived from multiple potential collectors, the repor
 
 - Prefer hitch ratio, first frame, first interactive, and input-event-to-visible-response over headline FPS.
 - Report partial coverage truthfully instead of implying the battery is already comprehensive.
-- Keep the compact default device baseline honest: if a workload row is tiered out of the default run, do not imply it was measured there; run it explicitly when the touched surface or a full-contract audit requires it.
+- Keep the canonical device baseline honest: if a workload row is noncanonical, do not imply it was measured there; select that exact case when its surface is touched.
 - Keep app-owned UI separate from system-owned UI; system surfaces count as bridge overhead, not renderer wins.

@@ -13,6 +13,7 @@ use xtask::{
     check_experiment_manifest_text,
     compare_device_comparisons_pass, compare_device_missing_promotion_families,
     compare_device_official_families, compare_uikit_reports, console_output_contains_marker,
+    contract_coverage_status,
     device_console_failure_line, device_process_name, device_support_dir_matches,
     devicectl_notification_observed, display_value_to_base, extract_oxide_device_report_json,
     extract_trace_windows_from_tables, find_device_process_ids,
@@ -23,7 +24,8 @@ use xtask::{
     is_xctrace_trace_bundle, latest_benchmark_build_failure, map_uikit_case,
     merge_background_modes, merge_usage_strings, merge_xcresult_metrics_json_fragments,
     missing_uikit_metrics_case_ids, normalize_ios_version_for_device_support,
-    notification_or_console_marker_observed, oxide_device_launch_environment_json,
+    notification_or_console_marker_observed, oxide_canonical_device_case_ids,
+    oxide_device_launch_environment_json,
     parse_apple_development_team_from_security_output, parse_available_ios_sim_destination,
     parse_devicectl_display_backlight_active, parse_devicectl_lock_state_text,
     parse_oxide_app_host_debug_summary, parse_oxide_benchmark_metadata,
@@ -38,7 +40,8 @@ use xtask::{
     render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
     start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
     summarize_energy_table, summarize_time_profile_from_xml,
-    summarize_trace_signpost_metrics_from_tables, uikit_case_in_compare_device_family,
+    summarize_trace_signpost_metrics_from_tables, uikit_canonical_device_cases,
+    uikit_case_in_compare_device_family,
     uikit_case_in_compare_device_watchable_smoke, uikit_case_in_official_device_battery,
     uikit_case_requires_normalized_camera_contract, uikit_device_metrics_case_stdout_path,
     uikit_device_perf_environment_for_test_name, uikit_device_support_required,
@@ -136,6 +139,31 @@ fn oxide_device_contract_source_lists_canonical_families() {
     ] {
         assert!(source.contains(id), "missing canonical Oxide device contract family `{id}`");
     }
+}
+
+#[test]
+fn device_battery_policy_uses_canonical_mode_naming()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let contract = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../benchmarks/CONTRACT.md"));
+   let docs = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/xtask/lib.md"));
+   for stale in ["full-contract", "promotion/full", "nightly/full", "full baseline pass"]
+   {
+      assert!(!source.contains(stale), "stale source phrase `{stale}`");
+      assert!(!contract.contains(stale), "stale contract phrase `{stale}`");
+      assert!(!docs.contains(stale), "stale docs phrase `{stale}`");
+   }
+   assert!(source.contains("--write-baseline requires canonical promotion mode"));
+   assert!(contract.contains("there is no run-everything device mode"));
+}
+
+#[test]
+fn contract_coverage_status_distinguishes_absence_from_partial_coverage()
+{
+   assert_eq!(contract_coverage_status(false, false), "missing");
+   assert_eq!(contract_coverage_status(false, true), "missing");
+   assert_eq!(contract_coverage_status(true, false), "partial");
+   assert_eq!(contract_coverage_status(true, true), "implemented");
 }
 
 #[test]
@@ -2625,73 +2653,114 @@ fn official_device_battery_keeps_only_the_official_camera_pair() {
 }
 
 #[test]
-fn official_device_battery_keeps_representative_signal_cases_and_tiers_out_repetitive_matrix_rows()
+fn canonical_device_battery_is_exactly_five_matched_proof_pairs()
 {
-    assert!(
-        uikit_case_in_official_device_battery("testSpinnerSpin").expect("matched animation case")
-    );
-    assert!(uikit_case_in_official_device_battery("testOptimizedSpinnerSpin")
-        .expect("matched optimized animation case"));
-    assert!(uikit_case_in_official_device_battery("testLabelEncode")
-        .expect("matched label component case"));
-    assert!(uikit_case_in_official_device_battery("testButtonEncode")
-        .expect("matched button component case"));
-    assert!(uikit_case_in_official_device_battery("testCollectionViewEncode")
-        .expect("matched collection component case"));
-    assert!(uikit_case_in_official_device_battery("testProgressIndeterminate")
-        .expect("matched progress animation case"));
-    assert!(uikit_case_in_official_device_battery("testButtonPressScale")
-        .expect("matched button animation case"));
-    assert!(uikit_case_in_official_device_battery("testToggleThumbSpring")
-        .expect("matched toggle animation case"));
-    assert!(uikit_case_in_official_device_battery("testSliderThumbMove")
-        .expect("matched slider animation case"));
-    assert!(uikit_case_in_official_device_battery("testImageZoomPan")
-        .expect("representative animation case"));
-    assert!(uikit_case_in_official_device_battery("testAnimTimelineBars")
-        .expect("matched timeline animation case"));
-    assert!(uikit_case_in_official_device_battery("testInputFormJourney")
-        .expect("matched journey case"));
-    assert!(uikit_case_in_official_device_battery("testCollectionNavigationJourney")
-        .expect("matched collection journey case"));
-    assert!(uikit_case_in_official_device_battery("testZoomImageGestureJourney")
-        .expect("matched zoom journey case"));
-    assert!(uikit_case_in_official_device_battery("testOrchestrationJourney")
-        .expect("matched orchestration journey case"));
-    assert!(uikit_case_in_official_device_battery("testButtonPressResponse")
-        .expect("matched navigation case"));
-    assert!(uikit_case_in_official_device_battery("testTextFocusResponse")
-        .expect("matched text focus case"));
-    assert!(uikit_case_in_official_device_battery("testCameraNV12LegacyLivePreview")
-        .expect("matched custom camera case"));
-    assert!(uikit_case_in_official_device_battery("testCameraAVFoundationPreviewLayerLivePreview")
-        .expect("matched avfoundation camera case"));
-    assert!(!uikit_case_in_official_device_battery("testSimpleHomeColdLaunch")
-        .expect("trimmed launch case"));
-    assert!(!uikit_case_in_official_device_battery("testLabels1000Mount")
-        .expect("trimmed primitive case"));
-    assert!(!uikit_case_in_official_device_battery("testPhotoImportThumbnailBridge")
-        .expect("trimmed bridge case"));
-    assert!(!uikit_case_in_official_device_battery("testFeedScrollJourney")
-        .expect("trimmed unmatched journey case"));
+   let cases = uikit_canonical_device_cases();
+   assert_eq!(cases.len(), 10);
+   assert_eq!(
+      cases.iter().map(|case| case.test_name).collect::<Vec<_>>(),
+      vec![
+         "testCollectionViewEncode",
+         "testOptimizedCollectionViewEncode",
+         "testSpinnerSpin",
+         "testOptimizedSpinnerSpin",
+         "testButtonPressResponse",
+         "testOptimizedButtonPressResponse",
+         "testCollectionNavigationJourney",
+         "testOptimizedCollectionNavigationJourney",
+         "testCameraNV12LegacyLivePreview",
+         "testCameraAVFoundationPreviewLayerLivePreview",
+      ]
+   );
+   for case in cases
+   {
+      let mapped = map_uikit_case(case.test_name).expect("map canonical UIKit case");
+      assert_eq!((mapped.0, mapped.1), (case.case_id, case.oxide_case_id));
+      assert!(uikit_case_in_official_device_battery(case.test_name)
+         .expect("canonical UIKit membership"));
+   }
+
+   let expected_pairs = [
+      ("cpu.component.collection_view.encode", "component", "lists-grids-chat"),
+      ("cpu.animation.spinner_spin", "animation", "animation-effects"),
+      ("cpu.navigation.button_press.response", "navigation", "navigation-input"),
+      ("cpu.journey.collection_navigation", "journey", "lists-grids-chat"),
+      ("gpu.scene.camera.frame", "camera", "image-pipeline"),
+   ];
+   for (oxide_case_id, compare_family, contract_family) in expected_pairs
+   {
+      let rows = cases
+         .iter()
+         .filter(|case| case.oxide_case_id == oxide_case_id)
+         .collect::<Vec<_>>();
+      assert_eq!(rows.len(), 2, "pair {oxide_case_id}");
+      assert!(rows
+         .iter()
+         .all(|case| case.compare_family == compare_family
+            && case.contract_family == contract_family));
+      let mut styles = rows.iter().map(|case| case.style).collect::<Vec<_>>();
+      styles.sort_unstable();
+      assert_eq!(styles, vec!["idiomatic", "optimized"]);
+   }
 }
 
 #[test]
-fn compare_device_watchable_smoke_keeps_one_watchable_pair_per_family() {
-    assert!(uikit_case_in_compare_device_watchable_smoke("testButtonEncode")
-        .expect("component smoke case"));
-    assert!(uikit_case_in_compare_device_watchable_smoke("testSpinnerSpin")
-        .expect("animation smoke case"));
-    assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedButtonPressResponse")
-        .expect("navigation smoke case"));
-    assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionNavigationJourney")
-        .expect("journey smoke case"));
-    assert!(uikit_case_in_compare_device_watchable_smoke("testCameraNV12LegacyLivePreview")
-        .expect("camera smoke case"));
-    assert!(!uikit_case_in_compare_device_watchable_smoke("testImageZoomPan")
-        .expect("non-smoke animation case"));
-    assert!(!uikit_case_in_compare_device_watchable_smoke("testTextFocusResponse")
-        .expect("non-smoke navigation case"));
+fn noncanonical_device_cases_remain_exactly_addressable()
+{
+   for test_name in [
+      "testLabelEncode",
+      "testProgressIndeterminate",
+      "testTextFocusResponse",
+      "testInputFormJourney",
+      "testCameraNV12LegacyHybridPreviewLayerLivePreview",
+   ]
+   {
+      assert!(!uikit_case_in_official_device_battery(test_name)
+         .expect("noncanonical UIKit membership"));
+      assert!(map_uikit_case(test_name).is_ok(), "exact case {test_name}");
+   }
+}
+
+#[test]
+fn standalone_oxide_default_matches_the_five_unique_compare_rows()
+{
+   assert_eq!(
+      oxide_canonical_device_case_ids(),
+      vec![
+         "cpu.component.collection_view.encode",
+         "cpu.animation.spinner_spin",
+         "cpu.navigation.button_press.response",
+         "cpu.journey.collection_navigation",
+         "gpu.scene.camera.frame",
+      ]
+   );
+}
+
+#[test]
+fn compare_device_watchable_smoke_is_the_canonical_pair_set()
+{
+   assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionViewEncode")
+      .expect("component smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedCollectionViewEncode")
+      .expect("optimized component smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke("testSpinnerSpin")
+      .expect("animation smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedButtonPressResponse")
+      .expect("navigation smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionNavigationJourney")
+      .expect("journey smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke("testCameraNV12LegacyLivePreview")
+      .expect("camera smoke case"));
+   assert!(uikit_case_in_compare_device_watchable_smoke(
+      "testCameraAVFoundationPreviewLayerLivePreview"
+   )
+   .expect("camera baseline smoke case"));
+   assert!(!uikit_case_in_compare_device_watchable_smoke("testButtonEncode")
+      .expect("unpaired component case"));
+   assert!(!uikit_case_in_compare_device_watchable_smoke("testImageZoomPan")
+      .expect("non-smoke animation case"));
+   assert!(!uikit_case_in_compare_device_watchable_smoke("testTextFocusResponse")
+      .expect("non-smoke navigation case"));
 }
 
 #[test]
