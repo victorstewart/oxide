@@ -89,9 +89,16 @@ fn test_all_checks_the_featureless_graph_without_rerunning_test_binaries()
       .and_then(|(_, tail)| tail.split_once("fn experiments_check"))
       .map(|(body, _)| body)
       .expect("test_all source body");
-   assert!(body.contains(
-      "[\"check\", \"--workspace\", \"--all-targets\", \"--no-default-features\", \"--quiet\"]",
-   ));
+   let featureless = body
+      .split_once("\"check\"")
+      .and_then(|(_, tail)| tail.split_once("false"))
+      .map(|(command, _)| command)
+      .expect("featureless check command");
+   for flag in ["--locked", "--workspace", "--all-targets", "--no-default-features", "--quiet"]
+   {
+      assert!(featureless.contains(flag), "featureless check is missing {flag}");
+   }
+   assert_eq!(body.matches("\"--locked\"").count(), 5);
    assert!(!body.contains(
       "[\"test\", \"--workspace\", \"--no-default-features\", \"--quiet\"]",
    ));

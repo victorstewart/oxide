@@ -25,7 +25,7 @@ Call flow:
 - `oxide_device_contract_source_lists_canonical_families()` and `xtask_docs_describe_experiment_manifest_check()`: keep policy source and documentation wired.
 - `device_battery_policy_uses_canonical_mode_naming()`: rejects legacy mode terminology and requires the canonical-promotion/no-run-everything contract.
 - `contract_coverage_status_distinguishes_absence_from_partial_coverage()`: prevents an unselected workload family from being reported as partial evidence.
-- `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check.
+- `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check and requires all five Cargo subprocesses to honor the lockfile.
 - `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
 - `canonical_device_battery_is_exactly_five_matched_comparison_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, comparison families, required workload-family mappings, and matching Oxide ids.
 - `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.

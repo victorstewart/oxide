@@ -60,7 +60,8 @@ The crate maintains one authoritative UIKit case table that maps XCTest methods 
 `cargo xtask experiments check` validates `perf-experiments.toml` before Phase 4 alternatives can age into permanent architecture. Each manifest entry records an id, introduced commit/date, required backends and devices, correctness and performance gates, an expiry date, and a decision state. Undecided entries must name a `perf-ab...` gate because alternate implementations must stay off the default path until same-workload A/B evidence promotes them. Accepted or rejected entries must keep proof and cleanup notes because the losing path, runtime switch, comparison rows, tests, and docs are expected to be deleted after a decision.
 
 `cargo xtask test-all` executes the all-feature test binaries once, then checks
-the featureless all-target graph without executing those same tests again. The
+the featureless all-target graph without executing those same tests again. All
+five Cargo subprocesses honor the workspace lockfile. The
 remaining feature-matrix check, compact performance smoke, snapshot smoke, and
 arm64 Simulator launch smoke keep their separate ownership boundaries.
 

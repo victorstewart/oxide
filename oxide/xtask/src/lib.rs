@@ -2279,27 +2279,50 @@ fn ios_prepare() -> Result<()> {
     Ok(())
 }
 
-fn test_all() -> Result<()> {
-    let root = locate_workspace_root()?;
+fn test_all() -> Result<()>
+{
+   let root = locate_workspace_root()?;
 
-    run_command(
-        &root,
-        "cargo",
-        &["test", "--workspace", "--all-targets", "--all-features", "--quiet"],
-        false,
-    )?;
-    run_command(
-        &root,
-        "cargo",
-        &["check", "--workspace", "--all-targets", "--no-default-features", "--quiet"],
-        false,
-    )?;
-    run_command(&root, "cargo", &["hack", "check", "--each-feature", "--no-dev-deps"], true)?;
-    run_command(&root, "cargo", &["run", "-p", "oxide-perf-runner", "--", "--smoke"], false)?;
-    run_command(&root, "cargo", &["run", "-p", "oxide-snapshot-runner", "--", "--smoke"], false)?;
-    run_xcui_smoke(&root)?;
+   run_command(
+      &root,
+      "cargo",
+      &["test", "--locked", "--workspace", "--all-targets", "--all-features", "--quiet"],
+      false,
+   )?;
+   run_command(
+      &root,
+      "cargo",
+      &[
+         "check",
+         "--locked",
+         "--workspace",
+         "--all-targets",
+         "--no-default-features",
+         "--quiet",
+      ],
+      false,
+   )?;
+   run_command(
+      &root,
+      "cargo",
+      &["hack", "check", "--locked", "--each-feature", "--no-dev-deps"],
+      true,
+   )?;
+   run_command(
+      &root,
+      "cargo",
+      &["run", "--locked", "-p", "oxide-perf-runner", "--", "--smoke"],
+      false,
+   )?;
+   run_command(
+      &root,
+      "cargo",
+      &["run", "--locked", "-p", "oxide-snapshot-runner", "--", "--smoke"],
+      false,
+   )?;
+   run_xcui_smoke(&root)?;
 
-    Ok(())
+   Ok(())
 }
 
 fn experiments_check(args: &[String]) -> Result<()> {
