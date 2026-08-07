@@ -109,7 +109,7 @@ targets:
              export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}" && \
              export IPHONEOS_DEPLOYMENT_TARGET="${RUST_IOS_DEPLOYMENT_TARGET}" && \
              unset SDKROOT SDK_DIR SDK_NAME && \
-             cargo build -p oxide-host-ios --release --features perf-host-stubs,test-scenes-entrypoint,tokio-runtime --target "${RUST_TARGET}")
+             cargo build --locked -p oxide-host-ios --release --features perf-host-stubs,test-scenes-entrypoint,tokio-runtime --target "${RUST_TARGET}")
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           SRC="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a"
           cp -v "${SRC}" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
