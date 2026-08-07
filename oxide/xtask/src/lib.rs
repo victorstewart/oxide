@@ -7148,8 +7148,20 @@ fn build_oxide_onscreen_device_coverage(cases: &[PerfCaseResult]) -> CoverageRep
     }
 }
 
-fn contract_coverage_status(complete: bool) -> String {
-    String::from(if complete { "implemented" } else { "partial" })
+pub fn contract_coverage_status(present: bool, complete: bool) -> &'static str
+{
+   if !present
+   {
+      "missing"
+   }
+   else if complete
+   {
+      "implemented"
+   }
+   else
+   {
+      "partial"
+   }
 }
 
 fn build_oxide_onscreen_device_contract(
@@ -7158,6 +7170,12 @@ fn build_oxide_onscreen_device_contract(
     built_app: &BuiltUIKitApp,
 ) -> ContractCoverageReport {
     let has_case = |case_id: &str| cases.iter().any(|case| case.id == case_id);
+    let has_family = |family: &str| {
+        OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .filter(|spec| spec.family == family)
+            .any(|spec| has_case(spec.case_id))
+    };
     let complete_family = |family: &str| {
         OXIDE_ONSCREEN_CASE_SPECS
             .iter()
@@ -7195,10 +7213,12 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("primitive-lifecycle"),
                 label: String::from("Primitive Mount / Update / Destroy"),
-                status: String::from("partial"),
-                notes: vec![String::from(
-                    "The on-screen device battery carries headline component encode rows, but does not yet include the full mount/update/destroy lifecycle matrix on physical hardware.",
-                )],
+                status: String::from(contract_coverage_status(has_family("component"), false)),
+                notes: vec![String::from(if has_family("component") {
+                    "Selected component-encode rows provide a partial primitive signal, but the report does not include a mount/update/destroy lifecycle matrix on physical hardware."
+                } else {
+                    "This report contains no physical-device primitive lifecycle signal; component encode and mount/update/destroy rows were not selected."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("layout-invalidation"),
@@ -7211,42 +7231,70 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("text-input"),
                 label: String::from("Text & Text Input"),
-                status: String::from("partial"),
-                notes: vec![String::from(
-                    "The device battery has text-focus response coverage, but not the full keystroke, paste, selection, IME, and cache-state text-input matrix.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_case("cpu.navigation.text_focus.response")
+                        || has_case("cpu.journey.input_form_submit"),
+                    false,
+                )),
+                notes: vec![String::from(if has_case("cpu.navigation.text_focus.response")
+                    || has_case("cpu.journey.input_form_submit")
+                {
+                    "Selected focus or form rows provide a partial text-input signal, but not keystroke, paste, selection, IME, and cache-state coverage."
+                } else {
+                    "This report contains no matched physical-device text-input row; focus and form cases remain explicit-only."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("image-pipeline"),
                 label: String::from("Image Pipeline"),
-                status: contract_coverage_status(complete_family("image_pipeline")),
-                notes: vec![String::from(
-                    "The on-screen device battery includes the custom camera preview path, while decode/upload/first-visible image rows remain in the separate workspace battery.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_family("image_pipeline"),
+                    false,
+                )),
+                notes: vec![String::from(if has_family("image_pipeline") {
+                    "The selected custom-camera preview provides a partial image-pipeline signal; decode, upload, and first-visible rows remain outside this physical-device report."
+                } else {
+                    "This report contains no physical-device image-pipeline row; camera, decode, upload, and first-visible coverage is absent."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("lists-grids-chat"),
                 label: String::from("Lists, Grids, & Chat"),
-                status: String::from("partial"),
-                notes: vec![String::from(
-                    "Collection component and journey rows exist, but the physical-device report does not yet persist the full feed, grid, and chat scroll matrix.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_case("cpu.component.collection_view.encode")
+                        || has_case("cpu.journey.collection_navigation"),
+                    false,
+                )),
+                notes: vec![String::from(if has_case("cpu.component.collection_view.encode")
+                    || has_case("cpu.journey.collection_navigation")
+                {
+                    "Selected collection encode or navigation rows provide a partial list signal, but the report does not include the full feed, grid, and chat scroll matrix."
+                } else {
+                    "This report contains no physical-device list, grid, chat, or collection signal."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("navigation-input-latency"),
                 label: String::from("Navigation & Input Latency"),
-                status: contract_coverage_status(complete_family("navigation")),
-                notes: vec![String::from(
-                    "The official matched device battery carries direct Oxide navigation/input response workloads through the live host path.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_family("navigation"),
+                    complete_family("navigation"),
+                )),
+                notes: vec![String::from(if has_family("navigation") {
+                    "Selected matched navigation/input-response rows run through the live Oxide host path."
+                } else {
+                    "This report contains no matched physical-device navigation or input-response row."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("animation-effects"),
                 label: String::from("Animation & Visual Effects"),
-                status: String::from("partial"),
-                notes: vec![String::from(
-                    "Representative animation rows exist, but hitch-ratio and refresh-mode matrices are still not persisted as first-class device rows.",
-                )],
+                status: String::from(contract_coverage_status(has_family("animation"), false)),
+                notes: vec![String::from(if has_family("animation") {
+                    "Selected animation rows provide a partial signal, but the broader effect and interaction matrix is not present."
+                } else {
+                    "This report contains no physical-device animation or visual-effect row."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("state-reconciliation"),
@@ -7275,34 +7323,51 @@ fn build_oxide_onscreen_device_contract(
             ContractCoverageEntry {
                 id: String::from("stress-pathological"),
                 label: String::from("Stress & Pathological Regressions"),
-                status: String::from("partial"),
-                notes: vec![String::from(
-                    "Static-idle and renderer scene rows exist, but the full pathological 10k-node, animation, and ticker traps are not yet captured in the physical-device Oxide report.",
-                )],
+                status: String::from(contract_coverage_status(has_family("scene-gpu"), false)),
+                notes: vec![String::from(if has_family("scene-gpu") {
+                    "Selected static-idle or renderer-scene rows provide a partial stress signal, but the 10k-node, animation, and ticker traps are absent."
+                } else {
+                    "This report contains no physical-device stress or pathological-regression row."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("representative-journeys"),
                 label: String::from("Representative Journeys"),
-                status: contract_coverage_status(complete_family("journey")),
-                notes: vec![String::from(
-                    "Representative Oxide journeys are captured through the live MetalView host path, but this is tracked separately from the canonical workload-family rows above.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_family("journey"),
+                    complete_family("journey"),
+                )),
+                notes: vec![String::from(if has_family("journey") {
+                    "Selected Oxide journeys run through the live MetalView host path; this supplemental bucket is separate from the required workload-family rows above."
+                } else {
+                    "This report contains no representative physical-device Oxide journey."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("renderer-scene-gpu"),
                 label: String::from("Renderer Scene GPU Paths"),
-                status: contract_coverage_status(complete_family("scene-gpu")),
-                notes: vec![String::from(
-                    "Dedicated renderer rows for damage prefiltering, static idle, and nine-slice composition are captured through the live host path.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_family("scene-gpu"),
+                    complete_family("scene-gpu"),
+                )),
+                notes: vec![String::from(if has_family("scene-gpu") {
+                    "Selected dedicated renderer rows run through the live host path; unselected damage, static-idle, or nine-slice rows are not implied."
+                } else {
+                    "This report contains no dedicated damage, static-idle, or nine-slice renderer-scene row."
+                })],
             },
             ContractCoverageEntry {
                 id: String::from("camera-preview"),
                 label: String::from("Camera Preview"),
-                status: contract_coverage_status(has_case("gpu.scene.camera.frame")),
-                notes: vec![String::from(
-                    "The official custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone.",
-                )],
+                status: String::from(contract_coverage_status(
+                    has_case("gpu.scene.camera.frame"),
+                    has_case("gpu.scene.camera.frame"),
+                )),
+                notes: vec![String::from(if has_case("gpu.scene.camera.frame") {
+                    "The selected custom-camera row uses the real on-screen Oxide preview path with Oxide owning the visible preview on the phone."
+                } else {
+                    "This report contains no physical-device Oxide camera-preview row."
+                })],
             },
         ],
         notes: vec![
@@ -11591,6 +11656,93 @@ fn build_uikit_contract_coverage(
     let has = |needle: &str| cases.iter().any(|case| case.id.contains(needle));
     let has_case = |id: &str| cases.iter().any(|case| case.id == id);
     let has_style = |style: &str| cases.iter().any(|case| case.style == style);
+    let launch_complete = [
+        "uikit.idiomatic.launch.simple_home.cold_launch",
+        "uikit.idiomatic.launch.heavy_home.cold_launch",
+        "uikit.idiomatic.launch.detail.deep_link_launch",
+        "uikit.idiomatic.launch.simple_home.warm_resume",
+        "uikit.idiomatic.launch.heavy_home.foreground_after_background",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let primitive_complete = [
+        "uikit.idiomatic.primitive.empty_root.mount",
+        "uikit.idiomatic.primitive.control_set.mount",
+        "uikit.idiomatic.primitive.control_set.mutate_state",
+        "uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle",
+        "uikit.idiomatic.primitive.flat_rects.100.remount",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let layout_complete = [
+        "uikit.idiomatic.layout.flat_grid.rotation_relayout",
+        "uikit.idiomatic.layout.deep_stack.theme_swap",
+        "uikit.idiomatic.layout.grid.safe_area_swap",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let text_input_complete = [
+        "uikit.idiomatic.text_input.large_editor.keystroke_burst",
+        "uikit.idiomatic.text_input.large_editor.paste_10kb",
+        "uikit.idiomatic.text_input.large_editor.selection_replace",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let image_pipeline_complete = [
+        "uikit.idiomatic.image_pipeline.png.decode",
+        "uikit.idiomatic.image_pipeline.png.upload",
+        "uikit.idiomatic.image_pipeline.png.first_visible",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let lists_complete = [
+        "uikit.journey.feed_scroll_matrix",
+        "uikit.journey.thumbnail_grid_scroll_matrix",
+        "uikit.journey.chat_thread_scroll_matrix",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let navigation_complete = [
+        "uikit.idiomatic.navigation.button_press.response",
+        "uikit.idiomatic.navigation.slider_scrub.response",
+        "uikit.idiomatic.navigation.text_focus.response",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let reconcile_complete = [
+        "uikit.idiomatic.reconcile.single_node_mutation",
+        "uikit.idiomatic.reconcile.tree_mutation_1pct",
+        "uikit.idiomatic.reconcile.tree_mutation_10pct",
+        "uikit.idiomatic.reconcile.theme_swap_full",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let bridge_complete = [
+        "uikit.bridge.permission_callback_fanout",
+        "uikit.bridge.sensor_location_snapshot",
+        "uikit.bridge.bluetooth_cache_update",
+        "uikit.bridge.photo_import_thumbnail",
+        "uikit.bridge.file_import_render",
+        "uikit.bridge.share_payload_prepare",
+        "uikit.bridge.local_json_transport_render",
+        "uikit.bridge.local_image_transport_render",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let endurance_complete = [
+        "uikit.idiomatic.endurance.open_close_heavy_screen.100x",
+        "uikit.idiomatic.endurance.tab_switch_heavy.500x",
+        "uikit.idiomatic.endurance.idle_animation.600_frames",
+    ]
+    .iter()
+    .all(|id| has_case(id));
+    let stress_complete = [
+        "uikit.idiomatic.stress.flat_rects.10000.mount",
+        "uikit.idiomatic.stress.simultaneous_animations.300",
+        "uikit.idiomatic.stress.ticker_100hz",
+    ]
+    .iter()
+    .all(|id| has_case(id));
     let optimized_complete = [
         "uikit.optimized.component.collection_view.encode",
         "uikit.optimized.launch.simple_home.cold_launch",
@@ -11647,17 +11799,6 @@ fn build_uikit_contract_coverage(
     ]
     .iter()
     .all(|id| has_case(id));
-    let scroll_flow_complete = suite == "device"
-        && [
-            "uikit.journey.feed_scroll_matrix",
-            "uikit.journey.thumbnail_grid_scroll_matrix",
-            "uikit.journey.chat_thread_scroll_matrix",
-            "uikit.optimized.journey.feed_scroll_matrix",
-            "uikit.optimized.journey.thumbnail_grid_scroll_matrix",
-            "uikit.optimized.journey.chat_thread_scroll_matrix",
-        ]
-        .iter()
-        .all(|id| has_case(id));
     let animation_complete = suite == "device"
         && [
             "uikit.animation.spinner_spin",
@@ -11687,22 +11828,16 @@ fn build_uikit_contract_coverage(
                 "missing"
             },
             vec![String::from(
-                "UIKit engine coverage currently spans primitive views, animation effects, and primitive lifecycle slices.",
+                "Engine coverage reflects only the selected primitive-view, animation-effect, and primitive-lifecycle rows.",
             )],
         ),
         uikit_contract_entry(
             "flow",
             "Representative Screen Flows",
-            if has(".journey.") { "implemented" } else { "missing" },
-            vec![if scroll_flow_complete && animation_complete {
-                String::from(
-                    "Flow coverage now spans launch/lifecycle and user journeys on the native-only physical-device path used by the official harness.",
-                )
-            } else {
-                String::from(
-                    "Flow coverage now spans launch/lifecycle and user-journey cases, but some committed journey families are still missing from the native device battery.",
-                )
-            }],
+            if has(".journey.") || has(".launch.") { "implemented" } else { "missing" },
+            vec![String::from(
+                "Flow coverage reflects only selected launch/lifecycle and journey rows; absent flow families are not implied.",
+            )],
         ),
         uikit_contract_entry(
             "os-bridge",
@@ -11738,7 +11873,7 @@ fn build_uikit_contract_coverage(
                 )
             } else {
                 String::from(
-                    "The optimized UIKit slice now covers the full currently implemented journey, bridge, and endurance families, plus primitive-lifecycle, animation-effect, image-pipeline, and large-editor text-input peers; launch/lifecycle, layout/invalidation, authoring, component microbenchmarks, and stress/pathological traps still need tuned peers.",
+                    "Selected hand-optimized UIKit rows are present, but this report does not contain tuned peers across every registered family.",
                 )
             }],
         ),
@@ -11747,129 +11882,86 @@ fn build_uikit_contract_coverage(
         uikit_contract_entry(
             "launch-lifecycle",
             "Launch & Lifecycle",
-            if has_case("uikit.idiomatic.launch.simple_home.cold_launch")
-                && has_case("uikit.idiomatic.launch.heavy_home.cold_launch")
-                && has_case("uikit.idiomatic.launch.detail.deep_link_launch")
-                && has_case("uikit.idiomatic.launch.simple_home.warm_resume")
-                && has_case("uikit.idiomatic.launch.heavy_home.foreground_after_background")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.launch.simple_home.cold_launch")
-                && has_case("uikit.idiomatic.launch.heavy_home.cold_launch")
-                && has_case("uikit.idiomatic.launch.detail.deep_link_launch")
-                && has_case("uikit.idiomatic.launch.simple_home.warm_resume")
-                && has_case("uikit.idiomatic.launch.heavy_home.foreground_after_background")
-            {
+            contract_coverage_status(has(".launch."), launch_complete),
+            vec![if launch_complete {
                 String::from(
                     "The XCTest harness now runs simple-home and heavy-home cold launch, detail-route launch, warm resume, and foreground-after-background batteries, using XCTApplicationLaunchMetric on the cold launch cases.",
                 )
             } else {
                 String::from(
-                    "The current XCTest harness does not yet run a dedicated launch/resume/deep-link battery with XCTApplicationLaunchMetric.",
+                    "This report does not establish complete launch, resume, and deep-link coverage; registered rows that were not selected are not implied.",
                 )
             }],
         ),
         uikit_contract_entry(
             "primitive-lifecycle",
             "Primitive Mount / Update / Destroy",
-            if has_case("uikit.idiomatic.primitive.empty_root.mount")
-                && has_case("uikit.idiomatic.primitive.control_set.mount")
-                && has_case("uikit.idiomatic.primitive.control_set.mutate_state")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remount")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.primitive.empty_root.mount")
-                && has_case("uikit.idiomatic.primitive.control_set.mount")
-                && has_case("uikit.idiomatic.primitive.control_set.mutate_state")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remount")
-            {
+            contract_coverage_status(
+                has(".primitive.") || has(".component."),
+                primitive_complete,
+            ),
+            vec![if primitive_complete {
                 String::from(
                     "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-view remove/rebuild plus remount slices are all covered.",
                 )
             } else {
                 String::from(
-                    "Flat rects, labels, cards, and images cover mount plus mutate; the empty-root, shared control-set, and retained-view remove/rebuild plus remount slices are still incomplete.",
+                    "This report does not establish complete mount, update, and destroy coverage; component-encode signals remain partial and unselected lifecycle rows are not implied.",
                 )
             }],
         ),
         uikit_contract_entry(
             "layout-invalidation",
             "Layout & Invalidation",
-            if has_case("uikit.idiomatic.layout.flat_grid.rotation_relayout")
-                && has_case("uikit.idiomatic.layout.deep_stack.theme_swap")
-                && has_case("uikit.idiomatic.layout.grid.safe_area_swap")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.layout.flat_grid.rotation_relayout")
-                && has_case("uikit.idiomatic.layout.deep_stack.theme_swap")
-                && has_case("uikit.idiomatic.layout.grid.safe_area_swap")
-            {
+            contract_coverage_status(has(".layout."), layout_complete),
+            vec![if layout_complete {
                 String::from(
                     "Flat-grid rotation, deep-stack theme swap, and safe-area inset relayout batteries are all implemented.",
                 )
             } else {
                 String::from(
-                    "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
+                    "This report does not establish complete flat-grid, deep-stack, and safe-area invalidation coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "text-input",
             "Text & Text Input",
-            if has_case("uikit.idiomatic.text_input.large_editor.keystroke_burst")
-                && has_case("uikit.idiomatic.text_input.large_editor.paste_10kb")
-                && has_case("uikit.idiomatic.text_input.large_editor.selection_replace")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.text_input.large_editor.keystroke_burst")
-                && has_case("uikit.idiomatic.text_input.large_editor.paste_10kb")
-                && has_case("uikit.idiomatic.text_input.large_editor.selection_replace")
-            {
+            contract_coverage_status(
+                has(".text_input.")
+                    || has(".navigation.text_focus.")
+                    || has(".journey.input_form_submit"),
+                text_input_complete,
+            ),
+            vec![if text_input_complete {
                 String::from(
                     "Large-editor keystroke, paste, and selection-replace workloads now complement the existing UILabel and form-journey coverage.",
                 )
             } else {
                 String::from(
-                    "UILabel parity and the input-form journey exist, but the full large-editor typing, paste, and selection battery is still incomplete.",
+                    "This report does not establish complete keystroke, paste, selection, IME, and cache-state text-input coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "image-pipeline",
             "Image Pipeline",
-            if has_case("uikit.idiomatic.image_pipeline.png.decode")
-                && has_case("uikit.idiomatic.image_pipeline.png.upload")
-                && has_case("uikit.idiomatic.image_pipeline.png.first_visible")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
+            contract_coverage_status(
+                has(".image_pipeline.")
+                    || has(".component.image_view.")
+                    || has(".component.nine_slice_image.")
+                    || has(".animation.image_zoom_pan")
+                    || has(".journey.zoom_image"),
+                image_pipeline_complete,
+            ),
             vec![
-                if has_case("uikit.idiomatic.image_pipeline.png.decode")
-                    && has_case("uikit.idiomatic.image_pipeline.png.upload")
-                    && has_case("uikit.idiomatic.image_pipeline.png.first_visible")
-                {
+                if image_pipeline_complete {
                     String::from(
                         "The committed UIKit image battery now splits PNG decode, upload/attach, and first-visible phases into separate persisted workloads.",
                     )
                 } else {
                     String::from(
-                        "UIImageView and zoom workloads exist, but bytes-ready, decode, upload, and first-visible phases are not yet split into separate metrics.",
+                        "This report does not establish complete bytes-ready, decode, upload, and first-visible image-pipeline coverage.",
                     )
                 },
                 if has_case(
@@ -11903,174 +11995,105 @@ fn build_uikit_contract_coverage(
         uikit_contract_entry(
             "lists-grids-chat",
             "Lists, Grids, & Chat",
-            if has_case("uikit.journey.feed_scroll_matrix")
-                && has_case("uikit.journey.thumbnail_grid_scroll_matrix")
-                && has_case("uikit.journey.chat_thread_scroll_matrix")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.journey.feed_scroll_matrix")
-                && has_case("uikit.journey.thumbnail_grid_scroll_matrix")
-                && has_case("uikit.journey.chat_thread_scroll_matrix")
-            {
+            contract_coverage_status(
+                has(".component.collection_view.")
+                    || has(".journey.collection_navigation")
+                    || has(".journey.feed_scroll_matrix")
+                    || has(".journey.thumbnail_grid_scroll_matrix")
+                    || has(".journey.chat_thread_scroll_matrix"),
+                lists_complete,
+            ),
+            vec![if lists_complete {
                 String::from(
                     "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside collection encode and navigation slices.",
                 )
             } else {
                 String::from(
-                    "Collection-view encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete.",
+                    "This report does not establish complete feed, grid, and chat scrolling coverage; selected collection signals remain partial.",
                 )
             }],
         ),
         uikit_contract_entry(
             "navigation-input",
             "Navigation & Input Latency",
-            if has_case("uikit.idiomatic.navigation.button_press.response")
-                && has_case("uikit.idiomatic.navigation.slider_scrub.response")
-                && has_case("uikit.idiomatic.navigation.text_focus.response")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.navigation.button_press.response")
-                && has_case("uikit.idiomatic.navigation.slider_scrub.response")
-                && has_case("uikit.idiomatic.navigation.text_focus.response")
-            {
+            contract_coverage_status(has(".navigation."), navigation_complete),
+            vec![if navigation_complete {
                 String::from(
                     "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases.",
                 )
             } else {
                 String::from(
-                    "Navigation, orchestration, and zoom journeys exist, but direct input-event-to-response batteries are still missing.",
+                    "This report does not establish complete button, slider, and text-focus input-event-to-response coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "animation-effects",
             "Animation & Visual Effects",
-            if animation_complete {
-                "implemented"
-            } else {
-                "partial"
-            },
+            contract_coverage_status(has(".animation."), animation_complete),
             vec![if animation_complete {
                 String::from(
                     "Idiomatic and hand-tuned animation-effect cases now carry native physical-device rows in the official ProMotion battery.",
                 )
             } else {
                 String::from(
-                    "Idiomatic and hand-tuned animation-effect cases now exist, but the native device battery still lacks full hitch-ratio coverage across that family.",
+                    "This report does not establish complete animation/effect or hitch-ratio coverage; selected animation rows remain partial.",
                 )
             }],
         ),
         uikit_contract_entry(
             "state-reconcile",
             "State Mutation & Reconciliation",
-            if has_case("uikit.idiomatic.reconcile.single_node_mutation")
-                && has_case("uikit.idiomatic.reconcile.tree_mutation_1pct")
-                && has_case("uikit.idiomatic.reconcile.tree_mutation_10pct")
-                && has_case("uikit.idiomatic.reconcile.theme_swap_full")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.reconcile.single_node_mutation")
-                && has_case("uikit.idiomatic.reconcile.tree_mutation_1pct")
-                && has_case("uikit.idiomatic.reconcile.tree_mutation_10pct")
-                && has_case("uikit.idiomatic.reconcile.theme_swap_full")
-            {
+            contract_coverage_status(has(".reconcile."), reconcile_complete),
+            vec![if reconcile_complete {
                 String::from(
                     "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly.",
                 )
             } else {
                 String::from(
-                    "Primitive mutate and orchestration workloads exist, but explicit diff/apply batteries for tree mutation rates and theme swaps are still missing.",
+                    "This report does not establish single-node, percentage-tree, and full-theme reconciliation coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "os-bridge",
             "OS Bridge Overhead",
-            if has_case("uikit.bridge.permission_callback_fanout")
-                && has_case("uikit.bridge.sensor_location_snapshot")
-                && has_case("uikit.bridge.bluetooth_cache_update")
-                && has_case("uikit.bridge.photo_import_thumbnail")
-                && has_case("uikit.bridge.file_import_render")
-                && has_case("uikit.bridge.share_payload_prepare")
-                && has_case("uikit.bridge.local_json_transport_render")
-                && has_case("uikit.bridge.local_image_transport_render")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.bridge.permission_callback_fanout")
-                && has_case("uikit.bridge.sensor_location_snapshot")
-                && has_case("uikit.bridge.bluetooth_cache_update")
-                && has_case("uikit.bridge.photo_import_thumbnail")
-                && has_case("uikit.bridge.file_import_render")
-                && has_case("uikit.bridge.share_payload_prepare")
-                && has_case("uikit.bridge.local_json_transport_render")
-                && has_case("uikit.bridge.local_image_transport_render")
-            {
+            contract_coverage_status(has(".bridge."), bridge_complete),
+            vec![if bridge_complete {
                 String::from(
                     "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win.",
                 )
             } else {
                 String::from(
-                    "Permission, location, and Bluetooth wrapper overhead is covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing.",
+                    "This report does not establish complete permission, sensor, import, share, and transport bridge coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "endurance-thermal",
             "Endurance, Memory, & Thermal Drift",
-            if has_case("uikit.idiomatic.endurance.open_close_heavy_screen.100x")
-                && has_case("uikit.idiomatic.endurance.tab_switch_heavy.500x")
-                && has_case("uikit.idiomatic.endurance.idle_animation.600_frames")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.endurance.open_close_heavy_screen.100x")
-                && has_case("uikit.idiomatic.endurance.tab_switch_heavy.500x")
-                && has_case("uikit.idiomatic.endurance.idle_animation.600_frames")
-            {
+            contract_coverage_status(has(".endurance."), endurance_complete),
+            vec![if endurance_complete {
                 String::from(
                     "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed UIKit battery.",
                 )
             } else {
                 String::from(
-                    "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current UIKit suite.",
+                    "This report does not establish complete long-run open/close, tab-switch, idle-animation, memory, and thermal coverage.",
                 )
             }],
         ),
         uikit_contract_entry(
             "stress-pathological",
             "Stress & Pathological Regressions",
-            if has_case("uikit.idiomatic.stress.flat_rects.10000.mount")
-                && has_case("uikit.idiomatic.stress.simultaneous_animations.300")
-                && has_case("uikit.idiomatic.stress.ticker_100hz")
-            {
-                "implemented"
-            } else {
-                "partial"
-            },
-            vec![if has_case("uikit.idiomatic.stress.flat_rects.10000.mount")
-                && has_case("uikit.idiomatic.stress.simultaneous_animations.300")
-                && has_case("uikit.idiomatic.stress.ticker_100hz")
-            {
+            contract_coverage_status(has(".stress."), stress_complete),
+            vec![if stress_complete {
                 String::from(
                     "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the rest of the UIKit suite.",
                 )
             } else {
                 String::from(
-                    "The explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete in the UIKit suite.",
+                    "This report does not establish complete 10k-node, 300-animation, and 100 Hz ticker stress coverage.",
                 )
             }],
         ),
