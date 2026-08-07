@@ -9,6 +9,10 @@
     clippy::missing_safety_doc
 )]
 
+mod platform;
+
+pub use platform::{install_current_platform, platform, IosPlatform};
+
 use oxide_networking::ReachabilityManager;
 #[cfg(feature = "tokio-runtime")]
 use oxide_platform_api::runtime;
