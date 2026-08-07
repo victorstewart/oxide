@@ -287,3 +287,180 @@ fn product_init_waits_for_actual_window_metrics()
    assert!(!init.contains("WindowEvent::Resized"));
    assert!(source.contains("extern \"C\" fn window_resized_cb("));
 }
+
+#[test]
+fn tokio_spawn_api_and_runtime_installation_share_one_host_feature()
+{
+   let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+   let platform_dependency = manifest
+      .lines()
+      .find(|line| line.starts_with("oxide-platform-ios ="))
+      .expect("oxide-platform-ios dependency");
+   assert!(platform_dependency.contains("default-features = false"));
+   assert!(!platform_dependency.contains("tokio-runtime"));
+   assert!(manifest.contains("default = []"));
+   assert!(manifest.contains(
+      "tokio-runtime = [\"oxide-platform-ios/tokio-runtime\"]"
+   ));
+
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let run_app = source
+      .split("pub unsafe fn run_app(")
+      .nth(1)
+      .expect("run_app")
+      .split("pub extern \"C\" fn rust_entry")
+      .next()
+      .expect("run_app end");
+   assert!(run_app.contains("#[cfg(feature = \"tokio-runtime\")]"));
+   assert!(run_app.contains("oxide_platform_ios::init_tokio_spawn();"));
+   assert!(source.contains("/// # Safety"));
+   let off_ios = run_app
+      .find("#[cfg(not(target_os = \"ios\"))]")
+      .expect("off-iOS run_app branch");
+   let install = run_app.find("if install_app(app).is_err()").expect("iOS app install");
+   assert!(off_ios < install);
+
+   let rust_entry = source
+      .split("pub extern \"C\" fn rust_entry")
+      .nth(1)
+      .expect("rust_entry")
+      .split("pub extern \"C\" fn oxide_host_is_injected_app")
+      .next()
+      .expect("rust_entry end");
+   assert!(rust_entry.contains("#[cfg(feature = \"tokio-runtime\")]"));
+   assert!(rust_entry.contains("oxide_platform_ios::init_tokio_spawn();"));
+}
+
+#[test]
+fn legacy_rust_exports_and_state_are_feature_owned()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   for name in [
+      "oxide_host_app_stats",
+      "oxide_host_run_perf_suite",
+      "oxide_host_perf_report_json_len",
+      "oxide_host_scene_count",
+      "oxide_host_set_benchmark_mode",
+      "oxide_host_set_camera_render_mode",
+      "oxide_host_prepare_onscreen_benchmark",
+      "oxide_host_set_overlay_visible",
+   ]
+   {
+      let marker = format!("pub extern \"C\" fn {name}");
+      let offset = source.find(&marker).unwrap_or_else(|| panic!("missing {name}"));
+      let prefix = &source[offset.saturating_sub(100)..offset];
+      assert!(
+         prefix.contains("#[cfg(feature = \"test-scenes-entrypoint\")]"),
+         "{name} is not feature-owned"
+      );
+   }
+
+   let state = source
+      .split("struct AppState")
+      .nth(1)
+      .expect("AppState")
+      .split("impl Default for AppState")
+      .next()
+      .expect("AppState end");
+   for field in [
+      "benchmark_scene_index",
+      "benchmark_mode",
+      "pending_frame_stats",
+      "snapshot_status",
+      "settle_frames_remaining",
+   ]
+   {
+      let offset = state.find(field).unwrap_or_else(|| panic!("missing {field}"));
+      let prefix = &state[offset.saturating_sub(80)..offset];
+      assert!(
+         prefix.contains("#[cfg(feature = \"test-scenes-entrypoint\")]"),
+         "AppState::{field} is not feature-owned"
+      );
+   }
+}
+
+#[test]
+fn injected_submit_feedback_and_retry_are_success_owned()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let submit = source
+      .split("pub extern \"C\" fn oxide_host_app_submit_prepared_frame_with_drawable")
+      .nth(1)
+      .expect("injected submit")
+      .split("pub extern \"C\" fn oxide_host_app_cancel_prepared_frame")
+      .next()
+      .expect("submit end");
+   let success = submit.find("Ok(stats) =>").expect("submit success arm");
+   let feedback = submit
+      .find("observe_injected_renderer_stats(&mut app, renderer_stats)")
+      .expect("post-submit renderer feedback");
+   let failure = submit
+      .find("request_injected_frame_retry(&mut app)")
+      .expect("submit failure retry");
+   assert!(feedback > success);
+   assert!(failure > feedback);
+
+   let cancel = source
+      .split("pub extern \"C\" fn oxide_host_app_cancel_prepared_frame")
+      .nth(1)
+      .expect("cancel")
+      .split("fn oxide_host_app_frame_inner")
+      .next()
+      .expect("cancel end");
+   assert!(cancel.contains("request_injected_frame_retry(&mut app)"));
+
+   let observation_helper = source
+      .split("fn observe_injected_renderer_stats")
+      .nth(1)
+      .expect("renderer observation helper")
+      .split("fn dispatch_injected_event")
+      .next()
+      .expect("renderer observation helper end");
+   assert!(observation_helper.contains("AppEvent::RendererStats(stats)"));
+   assert!(!observation_helper.contains("request_frame_wake"));
+   assert!(!observation_helper.contains("prepared_frame = false"));
+}
+
+#[test]
+fn dormant_lifecycle_and_shutdown_do_not_retain_frame_work()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let background = source
+      .split("pub extern \"C\" fn oxide_host_app_did_enter_background")
+      .nth(1)
+      .expect("background lifecycle")
+      .split("pub extern \"C\" fn oxide_host_app_will_enter_foreground")
+      .next()
+      .expect("background lifecycle end");
+   let terminate = source
+      .split("pub extern \"C\" fn oxide_host_app_will_terminate")
+      .nth(1)
+      .expect("termination lifecycle")
+      .split("pub extern \"C\" fn oxide_host_on_memory_warning")
+      .next()
+      .expect("termination lifecycle end");
+   for lifecycle in [background, terminate]
+   {
+      assert!(lifecycle.contains("dispatch_injected_event_without_wake"));
+      assert!(!lifecycle.contains("request_frame_wake"));
+   }
+
+   let shutdown = source
+      .split("pub extern \"C\" fn oxide_host_app_shutdown")
+      .nth(1)
+      .expect("app shutdown")
+      .split("pub extern \"C\" fn oxide_host_set_benchmark_mode")
+      .next()
+      .expect("app shutdown end");
+   for clear in [
+      "app.pending_damage_rects.clear();",
+      "app.prepared_frame = false;",
+      "app.prepared_surface = None;",
+      "app.prepared_retry_generation = None;",
+      "POSTED_TASKS.get()",
+      "lock_or_recover(tasks).clear();",
+   ]
+   {
+      assert!(shutdown.contains(clear), "shutdown is missing {clear}");
+   }
+}
