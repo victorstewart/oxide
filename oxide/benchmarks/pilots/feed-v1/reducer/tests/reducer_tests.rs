@@ -5,7 +5,8 @@ use std::process::Command;
 use oxide_feed_v1_reducer::{
    build_evidence_manifest, callback_deadline_counts, deterministic_bootstrap_interval,
    frozen_components, frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
-   travel_equivalence_passes, verify_attachment_export, visual_metrics, RgbaImage,
+   travel_equivalence_passes, verify_attachment_export, verify_smoke, visual_metrics,
+   RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -402,6 +403,324 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
    fs::remove_dir_all(output_root).map_err(|error| error.to_string())?;
    Ok(())
 }
+#[test]
+fn smoke_admits_named_output_placeholders_as_evidence() -> Result<(), String>
+{
+   let root = temporary_root("named-output-evidence")?;
+   write_valid_smoke_root(&root)?;
+   let failure = json!({
+      "schema": "oxide.feed-v1.failure",
+      "schema_revision": 1,
+      "fixture": {
+         "schema": "oxide.feed-v1.fixture",
+         "revision": 1,
+         "canonical_sha256": "a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473",
+         "canonical_byte_count": 717745
+      },
+      "nonce": null,
+      "treatment": null,
+      "stage": "capture",
+      "message": "must not be hidden by the smoke verifier's placeholder paths"
+   });
+   fs::write(
+      root.join("unused-smoke-report.json"),
+      serde_json::to_vec(&failure).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("must not be hidden"));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn smoke_scans_build_and_target_named_directories() -> Result<(), String>
+{
+   let root = temporary_root("strict-evidence-walk")?;
+   write_valid_smoke_root(&root)?;
+   let raw = root.join("raw");
+   let build = raw.join("build");
+   fs::create_dir_all(&build).map_err(|error| error.to_string())?;
+   fs::write(build.join("oxide-feed-v1-hidden.json"), br#"{"schema":"oxide.feed-v1.unknown"}"#)
+      .map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("unknown controlled schema"));
+   fs::remove_dir_all(&build).map_err(|error| error.to_string())?;
+
+   let target = raw.join("target");
+   fs::create_dir_all(&target).map_err(|error| error.to_string())?;
+   fs::write(target.join("oxide-feed-v1-hidden.json"), br#"{"schema":"oxide.feed-v1.unknown"}"#)
+      .map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("unknown controlled schema"));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn smoke_rejects_symlink_roots_entries_and_nonregular_files() -> Result<(), String>
+{
+   use std::os::unix::fs::symlink;
+   use std::os::unix::net::UnixListener;
+
+   let root = temporary_root("ln")?;
+   write_valid_smoke_root(&root)?;
+   let raw = root.join("raw");
+   let symlink_path = raw.join("alias.json");
+   symlink(raw.join("cleanup.json"), &symlink_path).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("evidence path is a symlink"));
+   fs::remove_file(&symlink_path).map_err(|error| error.to_string())?;
+
+   let socket_path = raw.join("s");
+   let socket = UnixListener::bind(&socket_path).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("not a regular file or directory"));
+   drop(socket);
+   fs::remove_file(&socket_path).map_err(|error| error.to_string())?;
+
+   let alias = temporary_root("la")?;
+   symlink(&root, &alias).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&alias).unwrap_err().contains("evidence root is a symlink"));
+   fs::remove_file(alias).map_err(|error| error.to_string())?;
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn smoke_rejects_cleanup_and_artifact_provenance_mutations() -> Result<(), String>
+{
+   let root = temporary_root("smoke-provenance-mutations")?;
+   write_valid_smoke_root(&root)?;
+   let raw = root.join("raw");
+
+   let cleanup_path = raw.join("cleanup.json");
+   let cleanup_bytes = fs::read(&cleanup_path).map_err(|error| error.to_string())?;
+   let mut cleanup: Value = serde_json::from_slice(&cleanup_bytes).map_err(|error| error.to_string())?;
+   cleanup["test_succeeded"] = json!(false);
+   cleanup["verified_attachment_count"] = json!(5);
+   cleanup["source_snapshot_preserved"] = json!(false);
+   cleanup["reducer_binary_absent_from_result_root"] = json!(false);
+   fs::write(&cleanup_path, serde_json::to_vec(&cleanup).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("cleanup/runtime/cap proof failed"));
+   fs::write(&cleanup_path, &cleanup_bytes).map_err(|error| error.to_string())?;
+
+   let runtime_path = raw.join("controller-documents/oxide-feed-v1-controller-runtime.json");
+   let runtime_bytes = fs::read(&runtime_path).map_err(|error| error.to_string())?;
+   let mut runtime: Value = serde_json::from_slice(&runtime_bytes).map_err(|error| error.to_string())?;
+   runtime["total_runtime_seconds"] = json!(602.0);
+   runtime["uikit_idiomatic_runtime_seconds"] = json!(601.0);
+   fs::write(&runtime_path, serde_json::to_vec(&runtime).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("20/10-minute limits"));
+   fs::write(&runtime_path, &runtime_bytes).map_err(|error| error.to_string())?;
+
+   let nonce = "smoke-s00-p00-o0-uikit-idiomatic-forward-test";
+   let record_name = format!("oxide-feed-v1-{nonce}.json");
+   let record_path = raw.join("uikit-documents").join(&record_name);
+   let wrong_record_path = raw.join("oxide-documents").join(&record_name);
+   fs::rename(&record_path, &wrong_record_path).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("wrong app container"));
+   fs::rename(&wrong_record_path, &record_path).map_err(|error| error.to_string())?;
+
+   let attachment_manifest_path = raw.join("attachments/manifest.json");
+   let attachment_manifest_bytes = fs::read(&attachment_manifest_path).map_err(|error| error.to_string())?;
+   let mut attachment_manifest: Value = serde_json::from_slice(&attachment_manifest_bytes)
+      .map_err(|error| error.to_string())?;
+   let attachments = attachment_manifest[0]["attachments"].as_array_mut()
+      .ok_or_else(|| "attachment manifest has no attachment array".to_string())?;
+   attachments[0]["suggestedHumanReadableName"] = json!("feed-v1-unexpected.png");
+   fs::write(
+      &attachment_manifest_path,
+      serde_json::to_vec(&attachment_manifest).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("attachment manifest names are not exactly the six frozen smoke captures"));
+   fs::write(&attachment_manifest_path, &attachment_manifest_bytes).map_err(|error| error.to_string())?;
+
+   let capture_path = raw.join("attachments").join(format!("export-{nonce}.png"));
+   let capture_bytes = fs::read(&capture_path).map_err(|error| error.to_string())?;
+   fs::write(&capture_path, cropped_smoke_png("top")?).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("expected full XCUIScreen canvas 1320x2868"));
+   fs::write(&capture_path, capture_bytes).map_err(|error| error.to_string())?;
+
+   fs::copy(&cleanup_path, raw.join("oxide-feed-v1-duplicate-cleanup.json"))
+      .map_err(|error| error.to_string())?;
+   fs::copy(
+      raw.join("evidence-manifest.json"),
+      raw.join("oxide-feed-v1-duplicate-evidence-manifest.json"),
+   ).map_err(|error| error.to_string())?;
+   let error = verify_smoke(&root).unwrap_err();
+   assert!(error.contains("multiple cleanup proofs"));
+   assert!(error.contains("multiple evidence manifests"));
+
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+fn write_valid_smoke_root(root: &Path) -> Result<(), String>
+{
+   write_valid_root(root, false)
+}
+
+fn write_valid_full_root(root: &Path) -> Result<(), String>
+{
+   write_valid_root(root, true)
+}
+
+fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
+{
+   let raw = root.join("raw");
+   let attachments = raw.join("attachments");
+   fs::create_dir_all(&attachments).map_err(|error| error.to_string())?;
+   fs::create_dir_all(raw.join("controller-documents")).map_err(|error| error.to_string())?;
+   write_smoke_device_evidence(&raw)?;
+   fs::write(raw.join("evidence-manifest.json"), serde_json::to_vec(&json!({
+      "schema": "oxide.feed-v1.evidence-manifest",
+      "schema_revision": 2,
+      "fixture_sha256": "a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473",
+      "repository_ref": "refs/heads/main",
+      "repository_head_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_files": { "reducer/src/lib.rs": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "uikit_app_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "oxide_app_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "controller_runner_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "controller_runner_binary_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "controller_xctest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "controller_xctest_binary_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "reducer_binary_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "regular_font_sha256": "7d494f276293fb0a8e2aab1fc0e386baa3e8a1d90927f518abb152b5c73e29f9",
+      "bold_font_sha256": "7f4feacd835eed23e104413f800a74b9f0270ce8c754c990bfc09b796a3ca628"
+   })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+   fs::write(raw.join("cleanup.json"), serde_json::to_vec(&json!({
+      "schema": "oxide.feed-v1.cleanup",
+      "schema_revision": 2,
+      "test_succeeded": true,
+      "verified_attachment_count": 6,
+      "apps_uninstalled": true,
+      "controller_uninstalled": true,
+      "controller_process_absent": true,
+      "source_snapshot_preserved": true,
+      "external_build_removed": true,
+      "result_bundle_removed": true,
+      "reducer_binary_absent_from_result_root": true,
+      "raw_evidence_bytes": 0,
+      "runtime_seconds": 1.0
+   })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+   fs::write(
+      raw.join("controller-documents/oxide-feed-v1-controller-runtime.json"),
+      serde_json::to_vec(&json!({
+         "schema": "oxide.feed-v1.controller-runtime",
+         "schema_revision": 1,
+         "mode": if full { "full" } else { "smoke" },
+         "total_runtime_seconds": 0.2,
+         "uikit_idiomatic_runtime_seconds": 0.05,
+         "uikit_optimized_runtime_seconds": 0.05,
+         "oxide_runtime_seconds": 0.05
+      })).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+
+   let top_png = smoke_png("top")?;
+   let bottom_png = smoke_png("bottom")?;
+   let mut exported_attachments = Vec::new();
+   let treatments = ["uikit-idiomatic", "uikit-optimized", "oxide"];
+   let mut cases: Vec<(&str, u32, u32, u32, &str, &str)> = Vec::new();
+   for (order_index, treatment) in ["uikit-idiomatic", "uikit-optimized", "oxide"].iter().enumerate()
+   {
+      for direction in ["forward", "reverse"]
+      {
+         cases.push(("smoke", 0, 0, order_index as u32, treatment, direction));
+      }
+   }
+   if full
+   {
+      for session_index in 0 .. 3
+      {
+         for pair_index in 0 .. 3
+         {
+            let rotation = (session_index + pair_index) as usize % treatments.len();
+            for order_index in 0 .. 3
+            {
+               let treatment = treatments[(rotation + order_index) % treatments.len()];
+               for direction in ["forward", "reverse"]
+               {
+                  cases.push((
+                     "primary",
+                     session_index,
+                     pair_index,
+                     order_index as u32,
+                     treatment,
+                     direction,
+                  ));
+               }
+            }
+         }
+      }
+   }
+   for (phase, session_index, pair_index, order_index, treatment, direction) in cases
+   {
+      let nonce = format!("{phase}-s{session_index:02}-p{pair_index:02}-o{order_index}-{treatment}-{direction}-test");
+      let run = run_json(&nonce, phase, session_index, pair_index, treatment, direction, order_index)?;
+      let documents = if treatment == "oxide" { "oxide-documents" } else { "uikit-documents" };
+      let document_root = raw.join(documents);
+      fs::create_dir_all(&document_root).map_err(|error| error.to_string())?;
+      fs::write(
+         document_root.join(format!("oxide-feed-v1-{nonce}.json")),
+         serde_json::to_vec(&run).map_err(|error| error.to_string())?,
+      ).map_err(|error| error.to_string())?;
+
+      if phase != "smoke"
+      {
+         continue;
+      }
+
+      let png = if direction == "forward" { &top_png } else { &bottom_png };
+      let name = format!("feed-v1-{nonce}_0_01234567-89AB-CDEF-0123-456789ABCDEF.png");
+      let export = format!("export-{nonce}.png");
+      fs::write(attachments.join(&export), png).map_err(|error| error.to_string())?;
+      exported_attachments.push(json!({
+         "suggestedHumanReadableName": name,
+         "exportedFileName": export
+      }));
+   }
+   fs::write(attachments.join("manifest.json"), serde_json::to_vec(&json!([{
+      "testIdentifier": "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()",
+      "attachments": exported_attachments
+   }])).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+fn write_smoke_device_evidence(raw: &Path) -> Result<(), String>
+{
+   let details = json!({
+      "result": {
+         "identifier": "private-core-device-id",
+         "hardwareProperties": {
+            "marketingName": "iPhone 17 Pro Max",
+            "productType": "iPhone18,2",
+            "reality": "physical",
+            "platform": "iOS",
+            "deviceType": "iPhone",
+            "cpuType": { "name": "arm64e" },
+            "supportedCPUTypes": [{ "name": "arm64e" }, { "name": "arm64" }]
+         },
+         "deviceProperties": {
+            "osVersionNumber": "26.5.2",
+            "osBuildUpdate": "23F84",
+            "bootState": "booted"
+         }
+      }
+   });
+   let lock = json!({
+      "result": {
+         "deviceIdentifier": "private-core-device-id",
+         "passcodeRequired": false
+      }
+   });
+   let details = serde_json::to_vec(&details).map_err(|error| error.to_string())?;
+   let lock = serde_json::to_vec(&lock).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-before.json"), &details).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-after.json"), &details).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-build.json"), &lock).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-test.json"), &lock).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
 fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treatment: &str, direction: &str, order_index: u32) -> Result<Value, String>
 {
    let start_state = if direction == "forward" { "top" } else { "bottom" };
@@ -482,6 +801,75 @@ fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treat
       "failure": null
    }))
 }
+
+fn rewrite_travel(path: &Path, distance: f64) -> Result<(), String>
+{
+   let bytes = fs::read(path).map_err(|error| error.to_string())?;
+   let mut run: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+   let start = run["gesture"]["start_offset_points"].as_f64()
+      .ok_or_else(|| "test run has no start offset".to_string())?;
+   let sign = if run["run"]["direction"] == "forward" { 1.0 } else { -1.0 };
+   let signed = distance * sign;
+   run["gesture"]["end_offset_points"] = json!(start + signed);
+   run["gesture"]["signed_travel_points"] = json!(signed);
+   run["gesture"]["travel_distance_points"] = json!(distance);
+   fs::write(path, serde_json::to_vec(&run).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())
+}
+
+fn smoke_png(state: &str) -> Result<Vec<u8>, String>
+{
+   encode_smoke_png(state, true)
+}
+
+fn cropped_smoke_png(state: &str) -> Result<Vec<u8>, String>
+{
+   encode_smoke_png(state, false)
+}
+
+fn encode_smoke_png(state: &str, full_canvas: bool) -> Result<Vec<u8>, String>
+{
+   let (width, height, origin_x, origin_y, background) = if full_canvas
+   {
+      (1_320, 2_868, 75, 168, [0, 0, 0, 255])
+   }
+   else
+   {
+      (1_170, 2_532, 0, 0, [247, 244, 238, 255])
+   };
+   let mut image = solid_rgba_image(width, height, background);
+   for component in frozen_components(state)?
+   {
+      let color = match component.kind.as_str()
+      {
+         "row" if component.row_index % 2 == 0 => [225, 221, 213, 255],
+         "row" => [236, 230, 220, 255],
+         "image" => [24, 95, 205, 255],
+         "title" => [18, 18, 20, 255],
+         "caption" => [92, 34, 138, 255],
+         "metadata" => [17, 118, 54, 255],
+         "separator" => [118, 111, 103, 255],
+         kind => return Err(format!("unknown smoke component kind {kind}")),
+      };
+      let rect = oxide_feed_v1_reducer::Rect {
+         x: component.viewport_clip_px.x + origin_x,
+         y: component.viewport_clip_px.y + origin_y,
+         width: component.viewport_clip_px.width,
+         height: component.viewport_clip_px.height,
+      };
+      paint_test_rect(&mut image, rect, color)?;
+   }
+   let mut bytes = Vec::new();
+   {
+      let mut encoder = png::Encoder::new(&mut bytes, image.width, image.height);
+      encoder.set_color(png::ColorType::Rgba);
+      encoder.set_depth(png::BitDepth::Eight);
+      let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+      writer.write_image_data(&image.pixels).map_err(|error| error.to_string())?;
+   }
+   Ok(bytes)
+}
+
 fn solid_rgba_image(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage
 {
    let mut pixels = vec![0; width as usize * height as usize * 4];
@@ -490,6 +878,28 @@ fn solid_rgba_image(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage
       pixel.copy_from_slice(&rgba);
    }
    RgbaImage { width, height, pixels }
+}
+
+fn paint_test_rect(image: &mut RgbaImage, rect: oxide_feed_v1_reducer::Rect, color: [u8; 4]) -> Result<(), String>
+{
+   if rect.x < 0
+      || rect.y < 0
+      || rect.width <= 0
+      || rect.height <= 0
+      || rect.x + rect.width > image.width as i32
+      || rect.y + rect.height > image.height as i32
+   {
+      return Err("smoke test rectangle leaves the image".to_string());
+   }
+   for y in rect.y as u32 .. (rect.y + rect.height) as u32
+   {
+      for x in rect.x as u32 .. (rect.x + rect.width) as u32
+      {
+         let index = ((y * image.width + x) * 4) as usize;
+         image.pixels[index .. index + 4].copy_from_slice(&color);
+      }
+   }
+   Ok(())
 }
 
 fn git(root: &Path, arguments: &[&str]) -> Result<(), String>
