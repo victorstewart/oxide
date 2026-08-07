@@ -18,7 +18,7 @@ pairs from becoming a post-collection order-selection mechanism.
 Call graph:
 
 - fixture helpers -> `balanced_pair_order` -> `PairedExperimentInput`
-- decision tests -> `analyze_paired_experiment` -> validation -> paired medians/bootstrap -> adverse-tail gates
+- decision tests -> `analyze_paired_experiment` -> validation -> paired medians -> exact rank interval -> adverse-tail gates
 - serialization test -> `report_json`
 - CLI test -> `oxide_perf_runner::run_cli` -> paired analyzer -> atomic report output
 
@@ -43,6 +43,12 @@ Call graph:
   free-text reasons and parses a persisted all-valid v1 pair whose reason is
   null.
 - `decisive_improvement_passes_statistical_gates` verifies all performance-policy gates and serialized direction for a clear lower-is-better win.
+- `exact_median_interval_reports_conservative_rank_coverage` requires a
+  15-pair population to report exact ranks 4 through 12 and 96.484375 percent
+  achieved coverage.
+- `physical_device_minimum_supports_a_finite_exact_interval` rejects five
+  physical-device pairs and proves the requirement-minimal six-pair population
+  reports conservative ranks 1 through 6 with 96.875 percent coverage.
 - `ties_and_regressions_are_rejected` checks pair-win and median-speedup rejection.
 - `insufficient_and_mixed_inputs_are_rejected` rejects insufficient populations, environment drift, and stale binaries.
 - `no_material_regression_policy_accepts_ties_but_not_tail_regressions` protects lower-is-better upper-tail admission.
@@ -72,6 +78,13 @@ The boundary test uses constant distributions so a value exactly at the 3% or
 selects p95/p99/maximum reason names for lower-is-better and
 p05/p01/minimum names for higher-is-better.
 
+The exact-interval fixtures assign ordered one-through-fifteen percent pair
+speedups so their rank bounds are directly observable. The physical-device
+fixture supplies the required 2,000 raw samples per side across six independent
+pairs. It demonstrates why six is admitted as the smallest finite at-least-95
+percent interval while five is rejected, without claiming that the resulting
+minimum-to-maximum interval is narrow.
+
 The invalidation tests expand the same deterministic fixture to 16 or 30 pairs.
 The exploit supplies a mechanically true missing-samples reason for every AB
 pair, proving that typed reasons alone cannot authorize an order-selected
@@ -85,9 +98,9 @@ historical reports.
 
 ## Preconditions and postconditions
 
-- Every admitted fixture has at least 15 valid pairs, survivor AB/BA counts
-  differing by at most one, equal A/B sample populations, and the exact
-  declared artifact/environment identity.
+- Every admitted fixture meets its workload-specific valid-pair minimum,
+  survivor AB/BA counts differ by at most one, A/B sample populations are
+  equal, and artifact/environment identity is exact.
 - Lower-is-better tests retain the historical p95, p99, and maximum gates.
 - Higher-is-better tests require p05, p01, and minimum gates.
 - A passing isolated-tail test proves publication changes without a median or
@@ -105,6 +118,8 @@ historical reports.
   measured contribution is excluded.
 - Exact threshold boundaries remain allowed; only strict excess is rejected.
 - Cold browser startup may omit warmup samples; warm workloads may not.
+- Five physical-device pairs fail because no finite two-sided median interval
+  from that population can reach 95 percent coverage.
 
 ## Concurrency and memory behavior
 
@@ -115,10 +130,10 @@ returning. No sleeps, network access, threads, or device resources are used.
 ## Performance notes
 
 These are deterministic reducer correctness tests, not performance
-measurements. Broad decision coverage compiles the production reducer source
-with a private 1,024-resample budget. The CLI test alone executes the exported
-100,000-resample publication path and requires that count in its report. The
-isolated-tail fixture adds no repeated soak matrix.
+measurements. Every decision test uses the production exact-rank calculation;
+there is no private budget, random generator, repeated resampling, or soak
+matrix. The CLI test requires the exact method and achieved coverage in its
+serialized report and rejects the retired bootstrap field.
 
 ## Feature flags and cfgs
 
@@ -139,6 +154,9 @@ cargo test --locked -p oxide-perf-runner --test paired_experiment_tests \
 
 ## Changelog
 
+- 2026-08-07: replaced simulated bootstrap coverage with exact 15-pair and
+  minimum six-pair rank/coverage assertions and removed the final 100,000-draw
+  CLI test path.
 - 2026-08-07: reduced repeated correctness bootstrap work by 94.48% while
   retaining one end-to-end 100,000-resample CLI publication check.
 - 2026-08-06: added exploit, closed-schema, invalidation-cap, survivor-balance,

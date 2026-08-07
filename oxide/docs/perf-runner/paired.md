@@ -28,9 +28,10 @@ oxide-perf-runner --paired-analyze INPUT --paired-json-out OUTPUT
   `PairedExperimentReport`.
 - `report_json(report)` emits stable pretty JSON with a trailing newline.
 - `PairOrder`, `PairInvalidationReason`, `WorkloadKind`, `AcceptancePolicy`,
-  `ExperimentIdentity`, `EnvironmentFingerprint`, `SamplePair`,
-  `PairedExperimentInput`, `DistributionSummary`, `PairedDecision`, and
-  `PairedExperimentReport` define the versioned input and output contract.
+  `ConfidenceIntervalMethod`, `MedianConfidenceInterval`, `ExperimentIdentity`,
+  `EnvironmentFingerprint`, `SamplePair`, `PairedExperimentInput`,
+  `DistributionSummary`, `PairedDecision`, and `PairedExperimentReport` define
+  the versioned input and output contract.
 - `PairInvalidationReason` is a closed, kebab-case JSON vocabulary:
   `missing-warmup-samples`, `missing-measured-samples`,
   `unequal-measured-sample-counts`, or `environment-mismatch`.
@@ -76,13 +77,30 @@ A/B warmup counts. The 10% invalidation ceiling and surviving-order balance
 bound post-collection selection even when each individual invalidation is
 genuine.
 
-Each valid pair contributes its A and B medians to the relative-speedup and
-fixed-seed bootstrap calculations. Reported p50, p95, p99, peak, p05, p01,
-minimum, median absolute deviation, and coefficient of variation use all valid
-raw samples. Those report fields remain direction-independent descriptive
-summaries: p95/p99/peak always mean the upper quantiles/maximum, while
-p05/p01/minimum always mean the lower quantiles/minimum. The bootstrap uses
-100,000 deterministic resamples.
+Each valid pair contributes its A and B medians to one relative-speedup value.
+The analyzer sorts those independent pair values once and reports an exact
+two-sided binomial confidence interval for their population median. It selects
+the narrowest symmetric order-statistic bounds whose achieved coverage is at
+least the requested 95 percent and persists the method, requested coverage,
+achieved coverage, one-based ranks, and percentage bounds. This interval is
+distribution-free for independent pairs from a continuous population; ties
+make its coverage conservative rather than invalid. There is no random seed,
+Monte Carlo approximation, or resampling loop in the confidence calculation.
+
+Fifteen valid pairs select ranks 4 through 12 with 96.484375 percent achieved
+coverage. The physical-device minimum is six pairs because ranks 1 through 6
+then provide 96.875 percent coverage, the smallest population with any finite
+two-sided interval at or above 95 percent. That requirement-minimal interval is
+deliberately conservative and spans the entire six-pair population; callers
+that need useful exclusion power must collect more independent pairs. Five
+pairs would cover only 93.75 percent even from minimum through maximum and are
+therefore rejected.
+
+Reported p50, p95, p99, peak, p05, p01, minimum, median absolute deviation, and
+coefficient of variation use all valid raw samples. Those report fields remain
+direction-independent descriptive summaries: p95/p99/peak always mean the
+upper quantiles/maximum, while p05/p01/minimum always mean the lower
+quantiles/minimum.
 
 `Performance` acceptance requires at least 5% median speedup, a paired 95%
 confidence lower bound of at least 2%, and candidate wins in at least 80% of
@@ -110,35 +128,42 @@ Direction and boundary behavior are covered externally because a
 higher-is-better candidate can retain identical median and upper-tail summaries
 while its lower service tail materially collapses.
 
-Schema version remains 1 because this reconstructed paired-report contract has
-not shipped. There is no compatibility reader or migration path for the earlier
-unpublished shape. Existing all-valid input and pair JSON remains readable
-because `"invalid_reason": null` still maps to no invalidation; arbitrary
-free-text reasons are rejected.
+Schema version 2 hard-cuts the unpublished report from Monte Carlo bootstrap
+metadata to the exact median interval. There is no compatibility reader or
+migration path for the earlier unpublished input shape. Historical version-1
+reports remain unchanged as evidence of the method used when they were created;
+they are not rewritten or treated as version-2 output. Existing all-valid pair
+JSON remains readable in isolation because `"invalid_reason": null` still maps
+to no invalidation; arbitrary free-text reasons are rejected.
 
 ## Runtime behavior
 
-Analysis is single-threaded and has no global mutable state. Publication always
-uses 100,000 bootstrap medians and one pair-sized resample buffer. The module is
+Analysis is single-threaded and has no global mutable state. Confidence work
+sorts one pair-sized speedup vector and computes exact binomial rank coverage in
+linear time with one bounded half-population weight vector. The module is
 benchmark tooling and is not reachable from a shipping host or renderer path.
 
 ## Tests
 
-`oxide/crates/perf-runner/tests/paired_experiment_tests.rs` compiles the same
-reducer source with a bounded private bootstrap count for broad correctness
-coverage of balanced ordering, improvement and regression decisions,
+`oxide/crates/perf-runner/tests/paired_experiment_tests.rs` exercises the public
+reducer API for exact 15-pair ranks and coverage, the minimum finite six-pair
+physical-device interval, balanced ordering, improvement and regression decisions,
 no-material-regression tails,
 both metric directions, an isolated higher-is-better lower-tail collapse with
 unchanged p50/p95/p99/maximum summaries, typed and bounded invalidation,
 survivor-order balance, equal per-pair sample counts, invalid-pair evidence
 validation, persisted-null compatibility, cold-start warmup handling,
 byte-deterministic serialization, and the reanalysis-only CLI. The CLI test
-still executes the exported publication path and requires the persisted count
-to remain 100,000. Tests are kept outside production source and documented in
+requires exact-method metadata and the absence of legacy bootstrap fields.
+Tests are kept outside production source and documented in
 [`tests/paired_experiment_tests.md`](tests/paired_experiment_tests.md).
 
 ## Changelog
 
+- 2026-08-07: replaced the fixed-seed 100,000-resample approximation with an
+  exact binomial median interval, persisted achieved coverage and rank bounds,
+  raised physical-device evidence from five to the requirement-minimal six
+  pairs, and advanced the unpublished schema to version 2.
 - 2026-08-07: bounded broad reducer correctness tests to 1,024 deterministic
   bootstrap resamples while retaining one exported CLI analysis at the fixed
   100,000-resample publication contract.

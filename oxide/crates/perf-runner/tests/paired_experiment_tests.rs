@@ -1,29 +1,18 @@
-#[path = "../src/paired.rs"]
-mod paired_under_test;
-
-use paired_under_test::{
-   balanced_pair_order, report_json, AcceptancePolicy,
-   EnvironmentFingerprint, ExperimentIdentity, PairInvalidationReason, PairOrder,
-   PairedExperimentInput, PairedExperimentReport, SamplePair, WorkloadKind,
-   PAIRED_EXPERIMENT_SCHEMA_VERSION,
-};
 use std::collections::BTreeMap;
 use std::fs;
 
-const TEST_BOOTSTRAP_RESAMPLES: usize = 1_024;
+use oxide_perf_runner::paired::{
+   analyze_paired_experiment, balanced_pair_order, report_json, AcceptancePolicy,
+   ConfidenceIntervalMethod,
+   EnvironmentFingerprint, ExperimentIdentity, PairInvalidationReason, PairOrder,
+   PairedExperimentInput, SamplePair, WorkloadKind, PAIRED_EXPERIMENT_SCHEMA_VERSION,
+};
+
 const BASE_SHA: &str = "1111111111111111111111111111111111111111";
 const TREE_SHA: &str = "2222222222222222222222222222222222222222";
 const INSTRUMENTATION_SHA: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const BINARY_A_SHA: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 const BINARY_B_SHA: &str = "5555555555555555555555555555555555555555555555555555555555555555";
-
-fn analyze_paired_experiment(input: PairedExperimentInput) -> anyhow::Result<PairedExperimentReport>
-{
-   paired_under_test::analyze_paired_experiment_with_resamples(
-      input,
-      TEST_BOOTSTRAP_RESAMPLES,
-   )
-}
 
 fn environment() -> EnvironmentFingerprint
 {
@@ -132,15 +121,25 @@ fn input_with_pair_count(candidate_factor: f64, pair_count: usize) -> PairedExpe
    expanded
 }
 
-#[test]
-fn publication_wrapper_contract_remains_fixed()
+fn ranked_speedup_input(pair_count: usize, workload: WorkloadKind, samples_per_pair: usize) -> PairedExperimentInput
 {
-   let _publication_analyzer: fn(PairedExperimentInput) -> anyhow::Result<PairedExperimentReport> =
-      paired_under_test::analyze_paired_experiment;
-   assert_eq!(
-      paired_under_test::PAIRED_BOOTSTRAP_RESAMPLES,
-      oxide_perf_runner::paired::PAIRED_BOOTSTRAP_RESAMPLES
-   );
+   let mut ranked = input_with_pair_count(1.0, pair_count);
+   ranked.workload = workload;
+   for (index, pair) in ranked.pairs.iter_mut().enumerate()
+   {
+      let baseline = 100.0;
+      let candidate = baseline - (index + 1) as f64;
+      pair.warmup_samples_a = vec![baseline];
+      pair.warmup_samples_b = vec![candidate];
+      pair.samples_a = vec![baseline; samples_per_pair];
+      pair.samples_b = vec![candidate; samples_per_pair];
+      if workload == WorkloadKind::PhysicalDeviceFrames
+      {
+         pair.environment_a.production_path = true;
+         pair.environment_b.production_path = true;
+      }
+   }
+   ranked
 }
 
 #[test]
@@ -298,10 +297,42 @@ fn decisive_improvement_passes_statistical_gates()
    assert!(report.lower_is_better);
    assert_eq!(report.decision.pair_wins, 15);
    assert!(report.decision.median_speedup_pct > 9.9);
-   assert!(report.decision.confidence_interval_95_pct[0] > 9.9);
+   assert!(report.decision.confidence_interval.bounds_pct[0] > 9.9);
    assert_eq!(report.baseline_sample_count, 45);
    assert_eq!(report.candidate_sample_count, 45);
    assert!((report.baseline.p50 - 11.07).abs() < f64::EPSILON);
+}
+
+#[test]
+fn exact_median_interval_reports_conservative_rank_coverage()
+{
+   let report = analyze_paired_experiment(
+      ranked_speedup_input(15, WorkloadKind::WorkspaceCpu, 1),
+   ).expect("analyze exact 15-pair confidence interval");
+   let interval = report.decision.confidence_interval;
+   assert_eq!(interval.method, ConfidenceIntervalMethod::ExactBinomialMedian);
+   assert_eq!(interval.target_coverage, 0.95);
+   assert_eq!(interval.achieved_coverage, 0.964_843_75);
+   assert_eq!([interval.lower_rank, interval.upper_rank], [4, 12]);
+   assert!((interval.bounds_pct[0] - 4.0).abs() < 1e-12);
+   assert!((interval.bounds_pct[1] - 12.0).abs() < 1e-12);
+}
+
+#[test]
+fn physical_device_minimum_supports_a_finite_exact_interval()
+{
+   let too_short = ranked_speedup_input(5, WorkloadKind::PhysicalDeviceFrames, 400);
+   let error = analyze_paired_experiment(too_short).expect_err("reject five-pair physical-device interval");
+   assert_eq!(error.to_string(), "5 valid pairs are below the PhysicalDeviceFrames minimum of 6");
+
+   let report = analyze_paired_experiment(
+      ranked_speedup_input(6, WorkloadKind::PhysicalDeviceFrames, 334),
+   ).expect("analyze minimum physical-device interval");
+   let interval = report.decision.confidence_interval;
+   assert_eq!(interval.achieved_coverage, 0.968_75);
+   assert_eq!([interval.lower_rank, interval.upper_rank], [1, 6]);
+   assert!((interval.bounds_pct[0] - 1.0).abs() < 1e-12);
+   assert!((interval.bounds_pct[1] - 6.0).abs() < 1e-12);
 }
 
 #[test]
@@ -509,12 +540,12 @@ fn shared_cli_analyzes_and_persists_raw_evidence()
    .expect("run paired analyzer CLI");
    let report = fs::read_to_string(&output_path).expect("read paired report");
    let report: serde_json::Value = serde_json::from_str(&report).expect("parse paired report");
+   assert_eq!(report["schema_version"].as_u64(), Some(PAIRED_EXPERIMENT_SCHEMA_VERSION as u64));
    assert_eq!(report["decision"]["accepted"].as_bool(), Some(true));
    assert!(report["pairs"][0]["warmup_samples_a"].is_array());
-   assert_eq!(
-      report["bootstrap_resamples"].as_u64(),
-      Some(oxide_perf_runner::paired::PAIRED_BOOTSTRAP_RESAMPLES as u64)
-   );
+   assert_eq!(report["decision"]["confidence_interval"]["method"], "exact-binomial-median");
+   assert_eq!(report["decision"]["confidence_interval"]["achieved_coverage"], 0.964_843_75);
+   assert!(report.get("bootstrap_resamples").is_none());
    fs::remove_dir_all(root).expect("remove temp root");
 }
 

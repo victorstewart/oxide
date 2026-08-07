@@ -2,8 +2,8 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 1;
-pub const PAIRED_BOOTSTRAP_RESAMPLES: usize = 100_000;
+pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 2;
+pub const PAIRED_CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -44,6 +44,24 @@ pub enum AcceptancePolicy
    NoMaterialRegression,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfidenceIntervalMethod
+{
+   ExactBinomialMedian,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct MedianConfidenceInterval
+{
+   pub method: ConfidenceIntervalMethod,
+   pub target_coverage: f64,
+   pub achieved_coverage: f64,
+   pub lower_rank: usize,
+   pub upper_rank: usize,
+   pub bounds_pct: [f64; 2],
+}
+
 impl WorkloadKind
 {
    fn minimum_pairs(self) -> usize
@@ -53,7 +71,7 @@ impl WorkloadKind
          Self::WorkspaceCpu | Self::BrowserThroughput | Self::GpuTimestamps | Self::InputJourney => 15,
          Self::BrowserDisplayedFrames => 10,
          Self::BrowserStartup => 25,
-         Self::PhysicalDeviceFrames => 5,
+         Self::PhysicalDeviceFrames => 6,
       }
    }
 
@@ -154,7 +172,7 @@ pub struct PairedDecision
 {
    pub accepted: bool,
    pub median_speedup_pct: f64,
-   pub confidence_interval_95_pct: [f64; 2],
+   pub confidence_interval: MedianConfidenceInterval,
    pub pair_wins: usize,
    pub valid_pairs: usize,
    pub reasons: Vec<String>,
@@ -170,7 +188,6 @@ pub struct PairedExperimentReport
    pub lower_is_better: bool,
    pub acceptance_policy: AcceptancePolicy,
    pub seed: u64,
-   pub bootstrap_resamples: usize,
    pub identity: ExperimentIdentity,
    pub baseline_sample_count: usize,
    pub candidate_sample_count: usize,
@@ -203,12 +220,6 @@ pub fn balanced_pair_order(seed: u64, pair_count: usize) -> Vec<PairOrder>
 
 pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedExperimentReport>
 {
-   analyze_paired_experiment_with_resamples(input, PAIRED_BOOTSTRAP_RESAMPLES)
-}
-
-pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentInput, bootstrap_resamples: usize) -> Result<PairedExperimentReport>
-{
-   ensure!(bootstrap_resamples > 0, "paired bootstrap requires at least one resample");
    validate_input(&input)?;
    let valid_pairs = input.pairs.iter().filter(|pair| pair.invalid_reason.is_none()).collect::<Vec<_>>();
    let mut baseline_samples = Vec::new();
@@ -234,8 +245,7 @@ pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentIn
 
    let baseline = summarize(&baseline_samples);
    let candidate = summarize(&candidate_samples);
-   let median_speedup_pct = median(&speedups);
-   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed, bootstrap_resamples);
+   let (median_speedup_pct, confidence_interval) = exact_median_confidence_interval(&speedups)?;
    let mut reasons = Vec::new();
    if input.acceptance_policy == AcceptancePolicy::Performance
    {
@@ -243,7 +253,7 @@ pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentIn
       {
          reasons.push(String::from("median speedup is below 5%"));
       }
-      if confidence_interval_95_pct[0] < 2.0
+      if confidence_interval.bounds_pct[0] < 2.0
       {
          reasons.push(String::from("paired 95% confidence lower bound is below 2%"));
       }
@@ -308,7 +318,6 @@ pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentIn
       lower_is_better: input.lower_is_better,
       acceptance_policy: input.acceptance_policy,
       seed: input.seed,
-      bootstrap_resamples,
       identity: input.identity,
       baseline_sample_count: baseline_samples.len(),
       candidate_sample_count: candidate_samples.len(),
@@ -317,7 +326,7 @@ pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentIn
       decision: PairedDecision {
          accepted: reasons.is_empty(),
          median_speedup_pct,
-         confidence_interval_95_pct,
+         confidence_interval,
          pair_wins,
          valid_pairs: valid_pairs.len(),
          reasons,
@@ -499,22 +508,64 @@ fn regresses_by_fraction(baseline: f64, candidate: f64, lower_is_better: bool, a
    regression / baseline > allowed_fraction
 }
 
-fn paired_bootstrap_ci(speedups: &[f64], seed: u64, bootstrap_resamples: usize) -> [f64; 2]
+fn exact_median_confidence_interval(speedups: &[f64]) -> Result<(f64, MedianConfidenceInterval)>
 {
-   let mut state = seed.max(1);
-   let mut medians = Vec::with_capacity(bootstrap_resamples);
-   let mut resample = vec![0.0; speedups.len()];
-   for _ in 0..bootstrap_resamples
+   ensure!(!speedups.is_empty(), "paired confidence interval requires at least one speedup");
+   let (lower_rank, upper_rank, achieved_coverage) = exact_median_rank_bounds(
+      speedups.len(),
+      PAIRED_CONFIDENCE_TARGET_COVERAGE,
+   ).context("paired population cannot form a finite exact 95% median interval")?;
+   let mut sorted = speedups.to_vec();
+   sorted.sort_unstable_by(f64::total_cmp);
+   let median_speedup_pct = percentile_sorted(&sorted, 0.50);
+   Ok((median_speedup_pct, MedianConfidenceInterval {
+      method: ConfidenceIntervalMethod::ExactBinomialMedian,
+      target_coverage: PAIRED_CONFIDENCE_TARGET_COVERAGE,
+      achieved_coverage,
+      lower_rank,
+      upper_rank,
+      bounds_pct: [sorted[lower_rank - 1], sorted[upper_rank - 1]],
+   }))
+}
+
+fn exact_median_rank_bounds(sample_count: usize, target_coverage: f64) -> Option<(usize, usize, f64)>
+{
+   if sample_count == 0
    {
-      for value in &mut resample
-      {
-         state = xorshift64(state);
-         *value = speedups[(state as usize) % speedups.len()];
-      }
-      medians.push(median(&resample));
+      return None;
    }
-   medians.sort_unstable_by(f64::total_cmp);
-   [percentile_sorted(&medians, 0.025), percentile_sorted(&medians, 0.975)]
+   let midpoint = sample_count / 2;
+   let mut weights = vec![0.0; midpoint + 1];
+   // Scale every binomial coefficient to the modal coefficient so tail coverage cannot overflow.
+   weights[midpoint] = 1.0;
+   for successes in (1..=midpoint).rev()
+   {
+      weights[successes - 1] = weights[successes]
+         * successes as f64
+         / (sample_count - successes + 1) as f64;
+   }
+   let lower_half_weight = weights.iter().sum::<f64>();
+   let total_weight = if sample_count % 2 == 0
+   {
+      lower_half_weight * 2.0 - 1.0
+   }
+   else
+   {
+      lower_half_weight * 2.0
+   };
+   let mut omitted_tail = 0.0;
+   let mut selected = None;
+   for (index, weight) in weights.into_iter().enumerate()
+   {
+      omitted_tail += weight / total_weight;
+      let achieved_coverage = 1.0 - omitted_tail * 2.0;
+      if achieved_coverage < target_coverage
+      {
+         break;
+      }
+      selected = Some((index + 1, sample_count - index, achieved_coverage));
+   }
+   selected
 }
 
 fn summarize(samples: &[f64]) -> DistributionSummary
