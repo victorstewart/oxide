@@ -33,7 +33,7 @@ Call flow:
 - `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
 - `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
-- `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes the arm64-only Simulator target in source and generated Xcode projects and requires the Xcode Rust build to honor the workspace lockfile.
+- `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes the arm64-only Simulator target in source and generated Xcode projects and requires every scripted Rust build to honor the workspace lockfile.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
 - Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, pre-write promotion gates, and committed-baseline status.

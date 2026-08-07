@@ -206,6 +206,7 @@ fn ios_host_simulator_architecture_contract_is_arm64_only()
    assert!(project_spec.contains("RUST_TARGET=\"aarch64-apple-ios-sim\""));
    assert_eq!(project_spec.matches("cargo build --locked").count(), 1);
    assert_eq!(generated_project.matches("cargo build --locked").count(), 1);
+   assert_eq!(ios_test.matches(" --locked").count(), 3);
    assert!(ios_test.contains("--target aarch64-apple-ios-sim"));
    assert!(!workspace.contains("x86_64-apple-ios"));
    assert!(!specification.contains("x86_64-apple-ios"));
