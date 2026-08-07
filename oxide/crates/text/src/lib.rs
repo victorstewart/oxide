@@ -94,7 +94,7 @@ impl FontDb {
 struct GlyphKey {
     font: usize,
     gid: u16,
-    px: u16,
+    raster_px: u16,
     sdf: bool,
 }
 
@@ -197,6 +197,17 @@ impl Atlas {
     #[inline]
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Returns the opaque revision required to replay glyph geometry at one
+    /// device scale.
+    #[inline]
+    pub fn retained_revision(&self, device_scale: f32) -> u64
+    {
+       let scale = normalized_device_scale(device_scale);
+       self.revision
+          .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+          ^ u64::from(scale.to_bits())
     }
 
     #[inline]
@@ -772,7 +783,7 @@ impl FallbackShape {
         let i_end = draw_indices.len() as u32;
         api::GlyphRun {
             atlas: atlas_handle,
-            atlas_revision: atlas.revision(),
+            atlas_revision: atlas.retained_revision(device_scale),
             vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
             ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
             sdf,
@@ -869,7 +880,7 @@ impl FallbackShape {
         let i_end = draw_indices.len() as u32;
         api::GlyphRun {
             atlas: atlas_handle,
-            atlas_revision: atlas.revision(),
+            atlas_revision: atlas.retained_revision(device_scale),
             vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
             ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
             sdf,
@@ -2422,12 +2433,17 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
     origin_y: f32,
     device_scale: f32,
 ) {
+    if !px.is_finite() || px <= 0.0 {
+        return;
+    }
     let mut pen_x = 0.0_f32;
     let mut pen_y = 0.0_f32;
-    let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
+    let scale = normalized_device_scale(device_scale);
+    let use_sdf = px >= 24.0;
+    let raster_scale = if use_sdf { 1.0 } else { scale };
+    let raster_px = (px * raster_scale).clamp(1.0, u16::MAX as f32).round();
     let ox = (origin_x * scale).round() / scale;
     let oy = (origin_y * scale).round() / scale;
-    let use_sdf = (px * device_scale) >= 24.0;
     let mut scaler = None;
     let mut render = None;
     let mut current_run: Option<(u32, u32, u32)> = None;
@@ -2438,8 +2454,12 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
     let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
 
     for glyph in glyphs.iter().copied() {
-        let key =
-            GlyphKey { font: font_id, gid: glyph.glyph_id, px: px.round() as u16, sdf: use_sdf };
+        let key = GlyphKey {
+            font: font_id,
+            gid: glyph.glyph_id,
+            raster_px: raster_px as u16,
+            sdf: use_sdf,
+        };
         let mut cached = None;
         let next_clock = atlas.clock.wrapping_add(1);
         for page_index in 0..atlas.pages.len() {
@@ -2467,7 +2487,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                     pen_y -= glyph.y_advance;
                     continue;
                 };
-                scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
+                scaler = Some(scale_context.builder(fontref).size(raster_px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
                 pen_x += glyph.x_advance;
@@ -2595,10 +2615,10 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             continue;
         };
         let run_vertex_base = (draw_vertices.len() as u32).saturating_sub(v_start);
-        let gx = ox + pen_x + glyph.x_offset + entry.l as f32;
-        let gy = oy + pen_y - glyph.y_offset - entry.t as f32;
-        let gw = entry.w as f32;
-        let gh = entry.h as f32;
+        let gx = ox + pen_x + glyph.x_offset + entry.l as f32 / raster_scale;
+        let gy = oy + pen_y - glyph.y_offset - entry.t as f32 / raster_scale;
+        let gw = entry.w as f32 / raster_scale;
+        let gh = entry.h as f32 / raster_scale;
         let atlas_w = atlas.width.max(1) as f32;
         let atlas_h = atlas.height.max(1) as f32;
         let u0 = entry.u as f32 / atlas_w;
@@ -2653,15 +2673,27 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     origin_y: f32,
     device_scale: f32,
 ) -> api::GlyphRun {
+    let v_start = draw_vertices.len() as u32;
+    let i_start = draw_indices.len() as u32;
+    if !px.is_finite() || px <= 0.0 {
+        return api::GlyphRun {
+            atlas: atlas_handle,
+            atlas_revision: atlas.retained_revision(device_scale),
+            vb: api::VertexSpan { offset: v_start, len: 0 },
+            ib: api::IndexSpan { offset: i_start, len: 0 },
+            sdf: false,
+            color,
+        };
+    }
     let mut pen_x: f32 = 0.0;
     let mut pen_y: f32 = 0.0;
-    let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
+    let scale = normalized_device_scale(device_scale);
+    let use_sdf = px >= 24.0;
+    let raster_scale = if use_sdf { 1.0 } else { scale };
+    let raster_px = (px * raster_scale).clamp(1.0, u16::MAX as f32).round();
     let ox = (origin_x * scale).round() / scale;
     let oy = (origin_y * scale).round() / scale;
 
-    let v_start = draw_vertices.len() as u32;
-    let i_start = draw_indices.len() as u32;
-    let use_sdf = (px * device_scale) >= 24.0;
     let mut scaler = None;
     let mut render = None;
     let protect_after_clock = atlas.clock;
@@ -2671,8 +2703,12 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
 
     for (glyph_index, glyph) in glyphs.iter().copied().enumerate() {
-        let key =
-            GlyphKey { font: font_id, gid: glyph.glyph_id, px: px.round() as u16, sdf: use_sdf };
+        let key = GlyphKey {
+            font: font_id,
+            gid: glyph.glyph_id,
+            raster_px: raster_px as u16,
+            sdf: use_sdf,
+        };
         let entry = if let Some(e) = atlas.map.get_mut(&key) {
             e.last_used = atlas.clock.wrapping_add(1);
             atlas.clock = e.last_used;
@@ -2688,7 +2724,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                     pen_y -= glyph.y_advance;
                     continue;
                 };
-                scaler = Some(scale_context.builder(fontref).size(px).hint(true).build());
+                scaler = Some(scale_context.builder(fontref).size(raster_px).hint(true).build());
             }
             let Some(scaler) = scaler.as_mut() else {
                 pen_x += glyph.x_advance;
@@ -2775,10 +2811,10 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
             continue;
         }
 
-        let gx = ox + pen_x + glyph.x_offset + (entry.l as f32);
-        let gy = oy + pen_y - glyph.y_offset - (entry.t as f32);
-        let gw = entry.w as f32;
-        let gh = entry.h as f32;
+        let gx = ox + pen_x + glyph.x_offset + entry.l as f32 / raster_scale;
+        let gy = oy + pen_y - glyph.y_offset - entry.t as f32 / raster_scale;
+        let gw = entry.w as f32 / raster_scale;
+        let gh = entry.h as f32 / raster_scale;
 
         let run_vertex_base = (draw_vertices.len() as u32).saturating_sub(v_start);
         if run_vertex_base.saturating_add(4) > u16::MAX as u32 {
@@ -2818,12 +2854,18 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     let i_end = draw_indices.len() as u32;
     api::GlyphRun {
         atlas: atlas_handle,
-        atlas_revision: atlas.revision(),
+        atlas_revision: atlas.retained_revision(device_scale),
         vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
         ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
         sdf: use_sdf,
         color,
     }
+}
+
+#[inline]
+fn normalized_device_scale(device_scale: f32) -> f32
+{
+   if device_scale.is_finite() && device_scale > 0.0 { device_scale } else { 1.0 }
 }
 
 fn cache_empty_glyph_entry(atlas: &mut Atlas, key: GlyphKey, left: i16, top: i16) {
@@ -2894,16 +2936,16 @@ mod sdf_tests
    }
 
    #[test]
-   fn exact_edt_matches_raster_reference_for_script_scale_and_size_matrix()
+   fn exact_edt_matches_raster_reference_for_script_and_size_matrix()
    {
       for (font, text, script) in [
          (LATIN_FONT, "O8BgjMW", "Latin"),
          (CJK_FONT, "漢字かな", "CJK"),
       ]
       {
-         for (scale, px) in [(2.0_f32, 48.0_f32), (2.0, 96.0), (3.0, 48.0), (3.0, 96.0)]
+         for px in [48.0_f32, 96.0]
          {
-            assert_raster_reference_match(font, text, scale, px, script);
+            assert_raster_reference_match(font, text, px, script);
          }
       }
    }
@@ -2936,7 +2978,7 @@ mod sdf_tests
       assert!(shaper.fallback_cluster_cache.is_empty());
    }
 
-   fn assert_raster_reference_match(data: &[u8], text: &str, scale: f32, px: f32, script: &str)
+   fn assert_raster_reference_match(data: &[u8], text: &str, px: f32, script: &str)
    {
       let font = Font::from_bytes(data.to_vec());
       let mut shaper = TextShaper::default();
@@ -2955,7 +2997,7 @@ mod sdf_tests
          {
             continue;
          }
-         let label = format!("{script} {scale}x {px}px glyph {}", glyph.glyph_id);
+         let label = format!("{script} {px}px glyph {}", glyph.glyph_id);
          assert_reference_match(
             &image.data,
             image.placement.width as usize,

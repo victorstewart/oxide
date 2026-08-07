@@ -1,5 +1,5 @@
 use oxide_renderer_api as api;
-use oxide_text::{Atlas, CaretAffinity, Font, FontDb, PagedAtlas, RasterCtx, TextShaper};
+use oxide_text::{Atlas, CaretAffinity, Font, FontDb, PagedAtlas, RasterCtx, ShapeOutput, TextShaper};
 use rustybuzz::{Face as RbFace, UnicodeBuffer};
 
 const LATIN_FONT: &[u8] = include_bytes!("fixtures/test_text_latin.ttf");
@@ -39,6 +39,91 @@ fn bake_paged_text(
         1.0,
     );
     runs
+}
+
+#[derive(Clone, Copy)]
+struct GlyphQuad
+{
+   x: f32,
+   y: f32,
+   w: f32,
+   h: f32,
+}
+
+fn glyph_quad(vertices: &[api::Vertex], run: api::GlyphRun) -> GlyphQuad
+{
+   let offset = run.vb.offset as usize;
+   GlyphQuad {
+      x: vertices[offset].x,
+      y: vertices[offset].y,
+      w: vertices[offset + 1].x - vertices[offset].x,
+      h: vertices[offset + 2].y - vertices[offset].y,
+   }
+}
+
+fn assert_logical_quad_close(one: GlyphQuad, three: GlyphQuad, label: &str)
+{
+   for (axis, left, right) in [
+      ("x", one.x, three.x),
+      ("y", one.y, three.y),
+      ("width", one.w, three.w),
+      ("height", one.h, three.h),
+   ]
+   {
+      assert!(
+         (right - left).abs() <= 1.5,
+         "{label} logical {axis} changed from {left} at 1x to {right} at 3x",
+      );
+   }
+}
+
+fn bake_atlas_scale(
+   shaped: &ShapeOutput<'_>,
+   scale: f32,
+   raster: &mut RasterCtx,
+   atlas: &mut Atlas,
+   vertices: &mut Vec<api::Vertex>,
+   indices: &mut Vec<u16>,
+) -> (api::GlyphRun, GlyphQuad)
+{
+   let run = shaped.bake_into_with(
+      raster,
+      atlas,
+      vertices,
+      indices,
+      api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+      api::ImageHandle(1),
+      8.25,
+      40.25,
+      scale,
+   );
+   (run, glyph_quad(vertices, run))
+}
+
+fn bake_paged_scale(
+   shaped: &ShapeOutput<'_>,
+   scale: f32,
+   raster: &mut RasterCtx,
+   atlas: &mut PagedAtlas,
+   vertices: &mut Vec<api::Vertex>,
+   indices: &mut Vec<u16>,
+   runs: &mut Vec<api::GlyphRun>,
+) -> (api::GlyphRun, GlyphQuad)
+{
+   let start = runs.len();
+   shaped.bake_paged_into_with(
+      raster,
+      atlas,
+      vertices,
+      indices,
+      runs,
+      api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+      8.25,
+      40.25,
+      scale,
+   );
+   let run = *runs.get(start).expect("paged glyph run");
+   (run, glyph_quad(vertices, run))
 }
 
 #[test]
@@ -191,11 +276,177 @@ fn latin_text_shapes_into_atlas() {
 
     assert_eq!(run.vb.len as usize, verts.len());
     assert_eq!(run.ib.len as usize, indices.len());
-    assert_eq!(run.atlas_revision, atlas.revision());
+    assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
     assert!(indices.iter().all(|index| usize::from(*index) < verts.len()));
     let (img, _, _) = atlas.image();
     assert!(img.iter().any(|&px| px != 0));
     assert!(!verts.is_empty());
+}
+
+#[test]
+fn device_scale_rasterizes_physical_glyphs_without_changing_logical_quads()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+   let shaped = shaper.shape(font, font_id, "j", 16.0).expect("shape A8 glyph");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = Atlas::new(512, 512);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let (scale_one, scale_one_quad) = bake_atlas_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   let scale_one_dirty = atlas.dirty_rect().expect("1x glyph upload");
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_atlas_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   let scale_three_dirty = atlas.dirty_rect().expect("3x glyph upload");
+
+   assert_eq!(atlas.glyph_count(), 2, "physical raster sizes must not alias one cache entry");
+   assert!(!scale_one.sdf && !scale_three.sdf, "small text must preserve native A8 coverage at every device scale");
+   assert_eq!(scale_one.atlas_revision, atlas.retained_revision(1.0));
+   assert_eq!(scale_three.atlas_revision, atlas.retained_revision(3.0));
+   assert_ne!(scale_one.atlas_revision, scale_three.atlas_revision, "direct retained replay must include device scale identity");
+   assert!(scale_three_dirty.w >= scale_one_dirty.w * 2, "3x glyph width was not rasterized at physical resolution");
+   assert!(scale_three_dirty.h >= scale_one_dirty.h * 2, "3x glyph height was not rasterized at physical resolution");
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "atlas A8");
+
+   atlas.clear_dirty();
+   let same_ppem = shaper.shape(font, font_id, "j", 16.25).expect("shape same ppem glyph");
+   let _ = bake_atlas_scale(
+      &same_ppem, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   assert_eq!(atlas.glyph_count(), 2, "fractional animation steps must share one rounded ppem entry");
+   assert!(atlas.dirty_rect().is_none());
+   let next_ppem = shaper.shape(font, font_id, "j", 16.75).expect("shape next ppem glyph");
+   let _ = bake_atlas_scale(
+      &next_ppem, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   assert_eq!(atlas.glyph_count(), 3, "the next rounded ppem must produce a distinct entry");
+   assert!(atlas.dirty_rect().is_some());
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = PagedAtlas::new(512, 512, 2);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let mut runs = Vec::new();
+   let (scale_one, scale_one_quad) = bake_paged_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   let scale_one_dirty = atlas.page_image(0).and_then(|page| page.5).expect("paged 1x glyph upload");
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_paged_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   let scale_three_dirty = atlas.page_image(0).and_then(|page| page.5).expect("paged 3x glyph upload");
+
+   assert_eq!(atlas.glyph_count(), 2, "paged physical raster sizes must not alias one cache entry");
+   assert!(scale_three_dirty.w >= scale_one_dirty.w * 2, "paged 3x glyph width was not rasterized at physical resolution");
+   assert!(scale_three_dirty.h >= scale_one_dirty.h * 2, "paged 3x glyph height was not rasterized at physical resolution");
+   assert!(!scale_one.sdf && !scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "paged A8");
+}
+
+#[test]
+fn sdf_rasterization_is_device_scale_independent()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+   let shaped = shaper.shape(font, font_id, "j", 30.0).expect("shape SDF glyph");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = Atlas::new(256, 256);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let (scale_one, scale_one_quad) = bake_atlas_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_atlas_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+
+   assert_eq!(atlas.glyph_count(), 1, "SDF must reuse one scale-independent cache entry");
+   assert!(atlas.dirty_rect().is_none(), "Retina SDF replay must not rerasterize or upload");
+   assert!(scale_one.sdf && scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "atlas SDF");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = PagedAtlas::new(256, 256, 2);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let mut runs = Vec::new();
+   let (scale_one, scale_one_quad) = bake_paged_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_paged_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+
+   assert_eq!(atlas.glyph_count(), 1, "paged SDF must reuse one scale-independent cache entry");
+   assert!(atlas.page_image(0).and_then(|page| page.5).is_none(), "paged Retina SDF replay must not upload");
+   assert!(scale_one.sdf && scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "paged SDF");
+}
+
+#[test]
+fn nonpositive_or_nonfinite_sizes_emit_no_glyph_geometry()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+
+   for px in [0.0_f32, -1.0, f32::NAN, f32::INFINITY]
+   {
+      let shaped = shaper.shape(font, font_id, "A", px).expect("shape rejected size");
+      let mut raster = RasterCtx::default();
+      let mut atlas = Atlas::new(128, 128);
+      let mut vertices = Vec::new();
+      let mut indices = Vec::new();
+      let run = shaped.bake_into_with(
+         &mut raster,
+         &mut atlas,
+         &mut vertices,
+         &mut indices,
+         api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+         api::ImageHandle(1),
+         0.0,
+         24.0,
+         3.0,
+      );
+      assert_eq!(run.vb.len, 0);
+      assert_eq!(run.ib.len, 0);
+      assert!(vertices.is_empty() && indices.is_empty());
+      assert_eq!(atlas.glyph_count(), 0);
+      assert!(atlas.dirty_rect().is_none());
+
+      let mut atlas = PagedAtlas::new(128, 128, 2);
+      let mut vertices = Vec::new();
+      let mut indices = Vec::new();
+      let mut runs = Vec::new();
+      shaped.bake_paged_into_with(
+         &mut raster,
+         &mut atlas,
+         &mut vertices,
+         &mut indices,
+         &mut runs,
+         api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+         0.0,
+         24.0,
+         3.0,
+      );
+      assert!(runs.is_empty() && vertices.is_empty() && indices.is_empty());
+      assert_eq!(atlas.glyph_count(), 0);
+      assert!(!atlas.has_dirty_pages());
+   }
 }
 
 #[test]
@@ -770,7 +1021,7 @@ fn atlas_pressure_evicts_and_rebakes_current_run() {
             assert_eq!(run.ib.offset as usize, i_start);
             assert_eq!(run.vb.len as usize, verts.len().saturating_sub(v_start));
             assert_eq!(run.ib.len as usize, indices.len().saturating_sub(i_start));
-            assert_eq!(run.atlas_revision, atlas.revision());
+            assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
             assert!(run.vb.len > 0, "current glyph must render after a stale slot eviction");
             assert!(atlas.dirty_rect().is_some(), "overwritten glyph slot must be uploaded");
             return;
@@ -803,7 +1054,7 @@ fn atlas_pressure_does_not_evict_glyphs_used_earlier_in_same_run() {
     );
 
     assert_eq!(atlas.eviction_count(), 0);
-    assert_eq!(run.atlas_revision, atlas.revision());
+    assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
     assert!(run.vb.len > 0, "at least one glyph should fit before pressure skips later glyphs");
 }
 

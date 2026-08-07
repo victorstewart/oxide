@@ -11,6 +11,12 @@
 ## Entry points list
 - `latin_text_shapes_into_atlas`
   Shapes Latin text and verifies glyph vertices, indices, and atlas pixels.
+- `device_scale_rasterizes_physical_glyphs_without_changing_logical_quads`
+  Verifies both atlas implementations create distinct physical-resolution 1x/3x A8 entries while keeping emitted quad placement and dimensions in logical points, requires small text to retain native A8 coverage, proves fractional sizes share or split entries only at rounded pixel-per-em boundaries, and requires direct retained-replay identities to include device scale.
+- `sdf_rasterization_is_device_scale_independent`
+  Verifies 1x/3x SDF baking reuses one atlas entry without another dirty upload while preserving logical quad dimensions.
+- `nonpositive_or_nonfinite_sizes_emit_no_glyph_geometry`
+  Verifies both atlas implementations reject zero, negative, NaN, and infinite sizes without geometry, cache entries, or dirty pixels.
 - `shaped_prefix_widths_match_ascii_prefix_shapes`
   Verifies one shaped-run prefix widths match repeated prefix shaping for simple ASCII text.
 - `shaped_positions_scale_from_font_units`
@@ -63,6 +69,7 @@
 ## Edge cases and failure modes
 - Empty and oversize glyph output is covered.
 - Repeated glyph baking with cached atlas entries is covered.
+- Cross-scale glyph baking is covered so a Retina surface cannot reuse or stretch a 1x A8 atlas entry and cannot multiply scale-independent SDF work.
 - Atlas pressure is covered without requiring a full atlas reset.
 - Smaller replacement glyphs in larger evicted slots are covered so dirty-rect uploads cannot preserve stale edge pixels.
 - Same-run pressure is covered so a tiny atlas cannot corrupt vertices emitted earlier in the same `GlyphRun`.
@@ -79,6 +86,7 @@
 - The pressure test protects the allocation-avoidance policy that reuses stale atlas slots instead of rebuilding the entire atlas.
 - The full-slot reuse test protects dirty-rect upload correctness after slot-level eviction.
 - Revision assertions protect retained draw-list invalidation after atlas eviction or reset.
+- Device-scale assertions protect the quality/cost boundary: cold A8 atlas pixels scale physically while SDF pixels and warm logical draw geometry do not.
 
 ## Feature flags and cfgs
 - No feature-specific branches.
@@ -94,6 +102,8 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
+- 2026-08-07: covered nonpositive and non-finite size rejection before glyph rasterization.
+- 2026-08-06: added 1x/3x physical-A8, scale-independent-SDF, bounded pixel-per-em quantization, and logical-quad coverage for monolithic and paged glyph atlases; collapsed the SDF oracle matrix to unique script-by-size work.
 - 2026-08-02: added direct units-per-em and positioned-glyph-offset oracles for shaping and baking.
 - 2026-07-14: added fallback cache invalidation coverage and documented the exact zero-tolerance SDF reference matrix.
 - 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
