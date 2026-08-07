@@ -38,19 +38,8 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   push_if_allowed(cases, "cpu.architecture.animation.surface_hit_test_300", || animation_surface_case(smoke));
-   push_if_allowed(cases, "cpu.architecture.spatial_metadata.glyph_mesh_10000", || {
-      retained_spatial_query_case("cpu.architecture.spatial_metadata.glyph_mesh_10000", smoke)
-   });
    push_if_allowed(cases, "cpu.architecture.damage.retained_surface_idle_10000", || {
       retained_surface_idle_case(smoke)
-   });
-   push_if_allowed(cases, "cpu.architecture.damage.retained_surface_dirty_leaf_10000", || {
-      retained_surface_dirty_case(
-         "cpu.architecture.damage.retained_surface_dirty_leaf_10000",
-         "architecture",
-         smoke,
-      )
    });
    if perf_case_allowed("gpu.architecture.damage.retained_surface_dirty_leaf_10000")
    {
@@ -273,7 +262,6 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       "immutable_minified_private_nomip",
       "immutable_minified_shared_mipmapped",
       "immutable_minified_mipmapped",
-      "immutable_minified_auto",
       "immutable_small_one_use_shared",
       "immutable_small_one_use_private",
       "immutable_small_one_use_auto",
@@ -373,26 +361,16 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   for dirty in [false, true]
+   let prepared_chunk_id = "gpu.architecture.prepared_chunks.one_dirty";
+   if perf_case_allowed(prepared_chunk_id)
    {
-      let name = if dirty { "one_dirty" } else { "clean_mixed" };
-      let id = format!("gpu.architecture.prepared_chunks.{name}");
-      if perf_case_allowed(&id)
-      {
-         cases.push(metal_prepared_chunk_case(&id, smoke, dirty)?);
-      }
+      cases.push(metal_prepared_chunk_case(prepared_chunk_id, smoke, true)?);
    }
 
-   for (id, dirty) in [
-      ("gpu.architecture.prepared_layers.clean_100x100", false),
-      ("gpu.architecture.prepared_layers.one_dirty_100x100", true),
-      ("gpu.authoring.retained_snapshot.prepared_layers_clean_100x100", false),
-   ]
+   let prepared_layer_id = "gpu.architecture.prepared_layers.one_dirty_100x100";
+   if perf_case_allowed(prepared_layer_id)
    {
-      if perf_case_allowed(id)
-      {
-         cases.push(metal_prepared_layer_case(id, smoke, dirty)?);
-      }
+      cases.push(metal_prepared_layer_case(prepared_layer_id, smoke, true)?);
    }
 
    let dynamic_property_id = "gpu.architecture.animation.dynamic_properties_300";
@@ -401,20 +379,10 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       cases.push(metal_dynamic_property_case(dynamic_property_id, smoke)?);
    }
 
-   for full_damage in [false, true]
+   let full_damage_id = "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000";
+   if perf_case_allowed(full_damage_id)
    {
-      let id = if full_damage
-      {
-         "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000"
-      }
-      else
-      {
-         "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000"
-      };
-      if perf_case_allowed(id)
-      {
-         cases.push(metal_spatial_damage_case(id, smoke, full_damage)?);
-      }
+      cases.push(metal_spatial_damage_case(full_damage_id, smoke, true)?);
    }
 
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
@@ -822,7 +790,7 @@ fn prepared_layer_matrix_snapshot(first_geometry_revision: u64, first_dirty: boo
    ).expect("prepared layer benchmark snapshot")
 }
 
-fn metal_prepared_layer_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
+pub(super) fn metal_prepared_layer_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
 {
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating prepared-layer Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing prepared-layer Metal renderer")?;
@@ -1985,11 +1953,6 @@ fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
       api::RenderChunkSequence::new(vec![api::RenderChunkInstance::new(image_chunk, [0.0, 0.0])]),
    ];
    mixed_sequences
-}
-
-fn animation_surface_case(smoke: bool) -> PerfCaseResult
-{
-   dynamic_property_surface_case("cpu.architecture.animation.surface_hit_test_300", "architecture", smoke)
 }
 
 pub(super) fn authoring_dynamic_property_surface_case(smoke: bool) -> PerfCaseResult

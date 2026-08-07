@@ -655,7 +655,6 @@ fn persisted_workspace_native_renderer_metric_keys_are_frozen() {
         "gpu.scene.controls.frame",
         "gpu.scene.text_layout.frame",
         "gpu.scene.zoom_image.frame",
-        "gpu.scene.anim_timeline.frame",
         "gpu.scene.collection.frame",
         "gpu.scene.damage_lab.frame",
         "gpu.scene.input_lab.frame",
@@ -4975,7 +4974,7 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
             "OXIDE_PERF_RUNNER_FILTER",
-            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.animation.surface_hit_test_300,cpu.architecture.idle.static_foreground",
+            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.idle.static_foreground",
         )
         .arg("--run-suite")
         .arg("--smoke")
@@ -4987,15 +4986,14 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=5"), "stdout: {stdout}");
+    assert!(stdout.contains("cases=4"), "stdout: {stdout}");
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
     let report = std::fs::read_to_string(&json_out).expect("read rendering architecture report");
     let retained = report_case_slice(&report, "cpu.architecture.retained.depth_16.clean");
     let hot = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.hot_reuse");
     let churn = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.one_use_churn");
-    let animation = report_case_slice(&report, "cpu.architecture.animation.surface_hit_test_300");
     let idle = report_case_slice(&report, "cpu.architecture.idle.static_foreground");
-    for row in [retained, hot, churn, animation, idle] {
+    for row in [retained, hot, churn, idle] {
         assert!(row.contains("\"family\": \"architecture\""));
         assert!(row.contains("\"scenario\": \"rendering-architecture\""));
     }
@@ -5013,17 +5011,72 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     assert_eq!(report_f64(churn, "retained_chunk_bytes"), 0.0);
     assert_eq!(report_f64(churn, "retained_sequence_bytes"), 0.0);
     assert_eq!(report_f64(churn, "flat_fallback_uses"), 1.0);
-    assert_eq!(report_f64(animation, "animated_nodes"), 300.0);
-    assert_eq!(report_f64(animation, "active_animations"), 600.0);
-    assert_eq!(report_f64(animation, "chunks_rebuilt_avg"), 0.0);
-    assert_eq!(report_f64(animation, "sequences_rebuilt_avg"), 0.0);
-    assert_eq!(report_f64(animation, "command_bytes_copied_avg"), 0.0);
-    assert_eq!(report_f64(animation, "vertex_bytes_copied_avg"), 0.0);
-    assert_eq!(report_f64(animation, "index_bytes_copied_avg"), 0.0);
-    assert!(report_f64(animation, "property_records_avg") >= 600.0);
     assert_eq!(report_f64(idle, "submissions"), 0.0);
     assert_eq!(report_f64(idle, "wakeups"), 0.0);
     let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn retired_exact_aliases_are_not_registered()
+{
+   let aliases = [
+      "cpu.architecture.animation.surface_hit_test_300",
+      "cpu.architecture.damage.retained_surface_dirty_leaf_10000",
+      "cpu.architecture.spatial_metadata.glyph_mesh_10000",
+      "gpu.architecture.images.immutable_minified_auto",
+      "gpu.architecture.prepared_chunks.clean_mixed",
+      "gpu.architecture.prepared_layers.clean_100x100",
+      "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000",
+      "gpu.scene.anim_timeline.frame",
+   ];
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-retired-aliases-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", aliases.join(","))
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run retired exact-alias inventory");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "retired exact-alias inventory failed: {stderr}");
+   assert!(stdout.contains("cases=0"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read retired exact-alias inventory");
+   for alias in aliases
+   {
+      assert!(!report.contains(alias), "retired exact alias remains registered: {alias}");
+   }
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn gpu_scene_inventory_defers_timeline_work_to_animation_battery()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-gpu-scene-inventory-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.scene.")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run GPU scene inventory");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "GPU scene inventory failed: {stderr}");
+   assert!(stdout.contains("suite=touched-smoke cases=16"), "stdout: {stdout}");
+   let report: PerfReport = serde_json::from_slice(
+      &std::fs::read(&json_out).expect("read GPU scene inventory"),
+   ).expect("parse GPU scene inventory");
+   assert_eq!(report.coverage.scenes_gpu_total, 16);
+   assert_eq!(report.coverage.scenes_gpu_covered.len(), 16);
+   assert!(!report.cases.iter().any(|case| case.id == "gpu.scene.anim_timeline.frame"));
+   let _ = std::fs::remove_file(json_out);
 }
 
 #[test]
@@ -5083,41 +5136,31 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
 }
 
 #[test]
-fn retained_spatial_queries_have_engine_and_authoring_contracts()
+fn retained_spatial_query_has_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-spatial-query-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env(
-         "OXIDE_PERF_RUNNER_FILTER",
-         "cpu.architecture.spatial_metadata.glyph_mesh_10000,cpu.authoring.retained_snapshot.spatial_query_10000",
-      )
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.retained_snapshot.spatial_query_10000")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
       .arg(&json_out)
       .output()
-      .expect("run retained spatial-query rows");
+      .expect("run retained spatial-query authoring row");
    let stderr = String::from_utf8_lossy(&output.stderr);
-   assert!(output.status.success(), "retained spatial-query rows failed: {stderr}");
+   assert!(output.status.success(), "retained spatial-query authoring row failed: {stderr}");
    let report = std::fs::read_to_string(&json_out).expect("read retained spatial-query report");
-   for id in [
-      "cpu.architecture.spatial_metadata.glyph_mesh_10000",
-      "cpu.authoring.retained_snapshot.spatial_query_10000",
-   ]
-   {
-      let row = report_case_slice(&report, id);
-      assert_eq!(report_f64(row, "instance_count"), 512.0);
-      assert_eq!(report_f64(row, "damage_instances_visited"), 1.0);
-      assert_eq!(report_f64(row, "damage_instances_matched"), 1.0);
-      assert_eq!(report_f64(row, "damage_vertices_visited"), 0.0);
-      assert!(report_f64(row, "snapshot_metadata_bytes") > 0.0);
-   }
    let authoring = report_case_slice(
       &report,
       "cpu.authoring.retained_snapshot.spatial_query_10000",
    );
    assert!(authoring.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(authoring, "instance_count"), 512.0);
+   assert_eq!(report_f64(authoring, "damage_instances_visited"), 1.0);
+   assert_eq!(report_f64(authoring, "damage_instances_matched"), 1.0);
+   assert_eq!(report_f64(authoring, "damage_vertices_visited"), 0.0);
+   assert!(report_f64(authoring, "snapshot_metadata_bytes") > 0.0);
    let _ = std::fs::remove_file(json_out);
 }
 
@@ -5462,7 +5505,10 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-prepared-chunks-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.prepared_chunks.")
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.prepared_chunks.one_dirty,gpu.authoring.retained_snapshot.clean_mixed",
+      )
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5475,7 +5521,7 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
    assert!(output.status.success(), "Metal prepared-chunk suite failed: {stderr}");
    assert!(stdout.contains("cases=2"), "stdout: {stdout}");
    let report = std::fs::read_to_string(&json_out).expect("read prepared-chunk report");
-   let clean = report_case_slice(&report, "gpu.architecture.prepared_chunks.clean_mixed");
+   let clean = report_case_slice(&report, "gpu.authoring.retained_snapshot.clean_mixed");
    let dirty = report_case_slice(&report, "gpu.architecture.prepared_chunks.one_dirty");
 
    assert_eq!(report_f64(clean, "chunk_count"), 256.0);
@@ -5524,33 +5570,29 @@ fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
    let stderr = String::from_utf8_lossy(&output.stderr);
 
    assert!(output.status.success(), "Metal prepared-layer suite failed: {stderr}");
-   assert!(stdout.contains("cases=3"), "stdout: {stdout}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
    let report = std::fs::read_to_string(&json_out).expect("read prepared-layer report");
-   let clean = report_case_slice(&report, "gpu.architecture.prepared_layers.clean_100x100");
-   let dirty = report_case_slice(&report, "gpu.architecture.prepared_layers.one_dirty_100x100");
-   let authoring = report_case_slice(
+   let clean = report_case_slice(
       &report,
       "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100",
    );
+   let dirty = report_case_slice(&report, "gpu.architecture.prepared_layers.one_dirty_100x100");
 
-   for row in [clean, authoring]
-   {
-      assert_eq!(report_f64(row, "layers"), 100.0);
-      assert_eq!(report_f64(row, "draws_per_layer"), 100.0);
-      assert_eq!(report_f64(row, "layer_body_commands_scanned_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_body_commands_copied_avg"), 0.0);
-      assert_eq!(report_f64(row, "geometry_bytes_copied_avg"), 0.0);
-      assert_eq!(report_f64(row, "buffer_upload_bytes_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_texture_creates_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_cache_hits_avg"), 100.0);
-      assert_eq!(report_f64(row, "layer_cache_misses_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_offscreen_draws_avg"), 0.0);
-      assert_eq!(report_f64(row, "render_passes_avg"), 1.0);
-      assert_eq!(report_f64(row, "draws_avg"), 100.0);
-      assert_eq!(report_f64(row, "chunks_prepared_avg"), 0.0);
-      assert!(report_f64(row, "layer_cache_bytes_peak") > 0.0);
-   }
-   assert!(authoring.contains("\"family\": \"authoring\""));
+   assert!(clean.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(clean, "layers"), 100.0);
+   assert_eq!(report_f64(clean, "draws_per_layer"), 100.0);
+   assert_eq!(report_f64(clean, "layer_body_commands_scanned_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_body_commands_copied_avg"), 0.0);
+   assert_eq!(report_f64(clean, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(clean, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_texture_creates_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_cache_hits_avg"), 100.0);
+   assert_eq!(report_f64(clean, "layer_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_offscreen_draws_avg"), 0.0);
+   assert_eq!(report_f64(clean, "render_passes_avg"), 1.0);
+   assert_eq!(report_f64(clean, "draws_avg"), 100.0);
+   assert_eq!(report_f64(clean, "chunks_prepared_avg"), 0.0);
+   assert!(report_f64(clean, "layer_cache_bytes_peak") > 0.0);
    assert_eq!(report_f64(dirty, "dirty_layers_per_frame"), 1.0);
    assert_eq!(report_f64(dirty, "layer_body_commands_scanned_avg"), 0.0);
    assert_eq!(report_f64(dirty, "layer_body_commands_copied_avg"), 0.0);
@@ -5608,7 +5650,10 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-spatial-metal-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.spatial_metadata.")
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000,gpu.authoring.retained_snapshot.spatial_damage_10000",
+      )
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5620,7 +5665,7 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
    let report = std::fs::read_to_string(&json_out).expect("read Metal spatial report");
    let small = report_case_slice(
       &report,
-      "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000",
+      "gpu.authoring.retained_snapshot.spatial_damage_10000",
    );
    let full = report_case_slice(
       &report,

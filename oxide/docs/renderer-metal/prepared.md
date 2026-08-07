@@ -89,7 +89,7 @@ Unsupported layers, effects, spinners, or malformed resource dependencies use `R
 
 Clean replay allocates no new Metal buffers and copies no immutable geometry. Sampling selection reads immutable image metadata and reuses prebuilt sampler objects; only an actual mode change partitions an otherwise-compatible image batch. C26 moves dynamic records into a separate completion-protected property ring and tracks the last value revision per physical frame slot, so unchanged records upload zero bytes and changed records copy exactly 48 bytes each. C27's property-free full-damage path reuses the unchanged frame plan after validating unique cache keys; its small-damage path visits only selected indexed entries and records instance/command/vertex query counts plus query CPU. The retained frame-plan vector, property cache, damage scratch, and clip-stack pool preserve capacity. Miss cost is proportional only to the changed chunk. The default hard budget is 32 MiB.
 
-The C29 cases are `gpu.architecture.prepared_layers.{clean_100x100,one_dirty_100x100}` and `gpu.authoring.retained_snapshot.prepared_layers_clean_100x100`. Clean replay requires 100 texture hits and zero body/offscreen/upload work. The dirty row requires 99 clean hits, one miss, one offscreen body render, one main composite, and no new layer texture after warmup. All rows report frame/encode/GPU distributions, passes, draws, body scans/copies, geometry copies, uploads, texture creates, cache outcomes, prepared chunks, and layer residency.
+The C29 cases are the public clean row `gpu.authoring.retained_snapshot.prepared_layers_clean_100x100` and the one-dirty control `gpu.architecture.prepared_layers.one_dirty_100x100`. Clean replay requires 100 texture hits and zero body/offscreen/upload work. The dirty row requires 99 clean hits, one miss, one offscreen body render, one main composite, and no new layer texture after warmup. Both rows report frame/encode/GPU distributions, passes, draws, body scans/copies, geometry copies, uploads, texture creates, cache outcomes, prepared chunks, and layer residency.
 
 C31 preflights every unique prepared layer through `heapTextureSizeAndAlign`. If the complete protected set fits, refreshes acquire exact-format compatible textures from the pool before allocating; clean and refreshed composites update their last-used frame. If the set cannot fit, the immutable snapshot takes the existing exact flat path before any layer pass is encoded. This keeps the hard budget authoritative without weakening prepared-layer or resource-generation keys.
 
@@ -110,7 +110,7 @@ Prepared pipelines are unavailable in the direct-camera-preview-only renderer co
 - `snapshot_runtime_image_sampling_covers_prepared_images_and_meshes` freezes mixed linear/nearest image partitioning and prepared image-mesh filtering through readback.
 - `perf-runner/tests/report_tests.rs` freezes clean zero-upload/zero-traversal and one-dirty exact-work counters.
 - Run `MTL_DEBUG_LAYER=1 cargo test --locked -p oxide-renderer-metal --test snapshots prepared_snapshot --features snapshot-tests`.
-- Run `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.prepared_chunks. cargo run --release --locked -p oxide-perf-runner -- --run-suite`.
+- Run `OXIDE_PERF_RUNNER_FILTER=gpu.authoring.retained_snapshot.clean_mixed,gpu.architecture.prepared_chunks.one_dirty cargo run --release --locked -p oxide-perf-runner -- --run-suite`.
 
 ## Examples
 
@@ -122,6 +122,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-08-07: made the public clean prepared-chunk/layer and small spatial-damage IDs the sole owners of their workloads while retaining one-dirty and full-damage architecture controls.
 - 2026-08-07: aligned prepared body pipelines with straight-alpha source-over while retaining premultiplied cached-layer composites.
 - 2026-08-06: retained immutable runtime-image sampling in prepared Images and ImageMesh operations and split batches only at sampling changes.
 - 2026-07-15: exposed exact prepared-chunk invalidation for generation-safe atlas slot eviction without page-wide cache loss.

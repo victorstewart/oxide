@@ -13,14 +13,16 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot and nonzero direct-GPU distributions for both frame rows.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
-- `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean architecture/authoring replay and one bounded dirty layer refresh with no new warm texture.
+- `metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()` requires body-free clean public-authoring replay and one bounded architecture-control dirty refresh with no new warm texture.
 - `metal_architecture_reports_reconciled_renderer_resource_families()` requires the warm static ID-mask row to hit once, skip raster/seed/JFA, encode one compositor pass, retain one cache/in-flight generation, create no target, report nonzero in-flight/total/peak bytes and zero blocked reuse, and stay within its byte budget while preserving the broader resource-family accounting contract. It also freezes C58 no-bloom, one-/three-layer, clipped-viewport, and overlay rows; source/pass/resource/alias/plan counters; indexed raw samples; and reduced conservative-region work.
 - `metal_blur_sigma_sweep_freezes_quality_ladder_work()` requires sigma 2 to retain exact samples and exponential taps, sigma 8/16/32/64 to select two paired passes with zero runtime exponentials, and process-resident table bytes to grow only after paired first use.
 - `metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()` requires the C59 production guardrails, isolated Shared/Private mip controls, exact quality equivalence, sampled-plus-staging peak accounting, release accounting, indexed timing samples, and 1,089 public `ImageView` encodes in the authoring row.
 - `metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()` requires C60's 100/1,000/10,000 display-size decode, exact atlas page residency, zero clear upload, one draw, explicit first-frame completion/readback, hard budgets, and exact 64-slot authoring invalidation/reuse contract.
-- `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
+- `retained_spatial_query_has_a_public_authoring_contract()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
+- `retired_exact_aliases_are_not_registered()` proves filters cannot select any of the eight retired duplicate IDs.
+- `gpu_scene_inventory_defers_timeline_work_to_animation_battery()` freezes the 16-row GPU scene inventory after the animation battery becomes the sole owner of timeline GPU work.
 - `filtered_run_suite_supports_text_sdf_bake_metrics()` requires the focused
   SDF row to declare a cold cache state, execute both pre-shaped Latin and CJK
   glyph runs, and publish nonzero geometry and dirty-pixel counters.
@@ -81,6 +83,7 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-sui
 
 ## Changelog
 - 2026-08-07: froze the exact 23-row canonical smoke inventory and explicit touched-only execution after retiring the exhaustive workspace mode.
+- 2026-08-07: retired eight exact duplicate IDs, kept their canonical public rows, and froze the 16-row GPU scene inventory after timeline GPU work moved solely to the animation battery.
 - 2026-08-06: required linear and nearest first-visible image rows to report cold resource state and an explicit begin/encode/submit timing boundary.
 - 2026-08-06: froze the 401-row workspace case set after the SDF addition and semantic cutover to hit-test-only dynamic-animation row IDs.
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.

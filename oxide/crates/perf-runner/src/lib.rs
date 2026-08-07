@@ -51,6 +51,7 @@ const PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
 const PERF_120_HZ_STEP_NS: u64 = 8_333_333;
 const PERF_SCROLL_TRACE_START_NS: u64 = 1_000_000_000;
 const FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS: u64 = 1_024;
+const GPU_SCENE_OWNED_BY_ANIMATION_BATTERY: &str = "anim_timeline";
 static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
 
 const CANONICAL_CASE_IDS: &[&str] = &[
@@ -381,6 +382,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.clean_mixed",
         name: "Retained Snapshot Metal Replay",
+    },
+    AuthoringPerfSpec {
+        id: "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100",
+        name: "Retained Snapshot Prepared Layers",
     },
     AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.spatial_damage_10000",
@@ -2548,7 +2553,10 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
         primitive_lifecycle_covered: covered_primitive_lifecycle.into_iter().collect(),
         scenes_cpu_total: PERF_SCENE_SPECS.len(),
         scenes_cpu_covered: covered_cpu_scenes.into_iter().collect(),
-        scenes_gpu_total: PERF_SCENE_SPECS.len(),
+        scenes_gpu_total: PERF_SCENE_SPECS
+            .iter()
+            .filter(|spec| spec.slug != GPU_SCENE_OWNED_BY_ANIMATION_BATTERY)
+            .count(),
         scenes_gpu_covered: covered_gpu_scenes.into_iter().collect(),
         journeys_total: PERF_JOURNEY_SPECS.len(),
         journeys_covered: covered_journeys.into_iter().collect(),
@@ -3369,6 +3377,9 @@ fn push_gpu_scene_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_SCENE_SPECS {
+        if spec.slug == GPU_SCENE_OWNED_BY_ANIMATION_BATTERY {
+            continue;
+        }
         let case_id = format!("gpu.scene.{}.frame", spec.slug);
         if !perf_case_allowed(&case_id) {
             continue;
@@ -3482,6 +3493,9 @@ fn push_authoring_cases(
             }
             "gpu.authoring.retained_snapshot.clean_mixed" => {
                 architecture_matrix::metal_prepared_chunk_case(spec.id, smoke, false)?
+            }
+            "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100" => {
+                architecture_matrix::metal_prepared_layer_case(spec.id, smoke, false)?
             }
             "gpu.authoring.retained_snapshot.spatial_damage_10000" => {
                 architecture_matrix::metal_spatial_damage_case(spec.id, smoke, false)?

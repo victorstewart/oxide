@@ -141,6 +141,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 ## Changelog
 
 - 2026-08-07: replaced the exhaustive workspace run with an exact 23-row canonical battery plus explicit touched-case filters, removed the full-coverage gate, and named the repeated flat-rect teardown workload as a remove/rebuild cycle.
+- 2026-08-07: removed eight exact duplicate architecture/scene case aliases; the public authoring IDs now solely own their identical CPU query, retained damage, dynamic-property, clean prepared-chunk/layer, small spatial-damage, and automatic immutable-image workloads, while `gpu.animation.effects.refresh_matrix` solely owns the duplicate GPU timeline scene workload.
 - 2026-08-07: retired `cpu.authoring.surface_retained.text_atlas_context` because it encoded text into a detached builder and measured only primitive surface replay; the real multi-atlas retained draw-list case remains.
 - 2026-08-07: renamed the corrected paged-atlas locality workload to `cpu.architecture.text.paged_atlas_locality.single_scale`; its deterministic pressure stays at 1x instead of mixing scale-driven glyph variants into the eviction signal.
 - 2026-08-06: added one compact warmed authoring row for the app-owned prepared-frame boundary.
