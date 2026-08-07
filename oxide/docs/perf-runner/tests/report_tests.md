@@ -28,7 +28,11 @@ This integration suite freezes performance-report schemas, filtered execution, c
   glyph runs, and publish nonzero geometry and dirty-pixel counters.
 - `filtered_run_suite_classifies_first_visible_images_as_cold()` runs the linear and nearest first-visible image rows, requires cold resource metadata, and freezes the render-only note boundary after texture publication and draw-list construction.
 - `canonical_smoke_suite_keeps_exact_inventory()` freezes the exact 23-row canonical count and ID digest.
+- `persisted_report_case_id_sets_are_frozen()` requires the committed workspace report to contain that same 23-row canonical ID set; device and browser report inventories keep their independent freezes.
+- `persisted_workspace_canonical_renderer_metric_keys_are_frozen()` freezes metric keys only for canonical native renderer rows.
+- `workspace_latest_gates_canonical_retained_and_layout_rows()` requires retained dirty-leaf reuse/rebuild evidence and incremental dirty-subtree work bounded below cold layout.
 - `filtered_run_suite_runs_only_the_touched_case()` proves an explicit filter executes and validates only its requested noncanonical row.
+- Focused collection, text-cache, atlas, wrapped/picker, cursor-map, and WebGPU-profile tests preserve noncanonical work contracts without adding persisted workspace rows.
 - `baseline_write_rejects_smoke_sampling()` and `baseline_write_rejects_touched_filter()` prevent sampled or touched-only runs from replacing the canonical baseline.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 

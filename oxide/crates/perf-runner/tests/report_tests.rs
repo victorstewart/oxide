@@ -142,10 +142,6 @@ fn workspace_metric(case: &PerfCaseResult, key: &str) -> f64 {
     *case.metrics.get(key).unwrap_or_else(|| panic!("{} missing metric {key}", case.id))
 }
 
-fn workspace_missing_case(report: &PerfReport, id: &str) -> bool {
-    report.cases.iter().all(|case| case.id != id)
-}
-
 fn persisted_report_json(relative_path: &str) -> Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -532,7 +528,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 401, 0x523d28514fcde0bd);
+    assert_report_case_id_set(&workspace, "workspace latest", 23, 0x025eafdefc5ce69b);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -618,60 +614,33 @@ fn persisted_report_nested_key_sets_are_frozen()
 }
 
 #[test]
-fn persisted_workspace_native_renderer_metric_keys_are_frozen() {
-    let report = workspace_latest_report();
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.system.id_mask_compositor.current",
-        24,
-        0x6d1f4edb402039fa,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.animation.effects.refresh_matrix",
-        32,
-        0x12223d95b0c97df8,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.journey.collection_navigation.frame_pacing",
-        34,
-        0x6c24fadfa02d6f63,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.authoring.scene3d.mixed_frame",
-        22,
-        0xf685d05bf68a0cc2,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.image_pipeline.png.first_visible",
-        22,
-        0x82cb16697b8606dd,
-    );
-
-    let scene_rows = [
-        "gpu.scene.controls.frame",
-        "gpu.scene.text_layout.frame",
-        "gpu.scene.zoom_image.frame",
-        "gpu.scene.collection.frame",
-        "gpu.scene.damage_lab.frame",
-        "gpu.scene.input_lab.frame",
-        "gpu.scene.nine_slice.frame",
-        "gpu.scene.sdf_text.frame",
-        "gpu.scene.snapshot.frame",
-        "gpu.scene.camera.frame",
-        "gpu.scene.elements_extended.frame",
-        "gpu.scene.animation_config.frame",
-        "gpu.scene.orchestration.frame",
-        "gpu.scene.permissions.frame",
-        "gpu.scene.integration.frame",
-        "gpu.scene.stress.frame",
-    ];
-    for id in scene_rows {
-        assert_workspace_case_metric_key_digest(&report, id, 31, 0xf2dee20e9220b171);
-    }
+fn persisted_workspace_canonical_renderer_metric_keys_are_frozen()
+{
+   let report = workspace_latest_report();
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.animation.effects.refresh_matrix",
+      32,
+      0x12223d95b0c97df8,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.journey.collection_navigation.frame_pacing",
+      34,
+      0x6c24fadfa02d6f63,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.authoring.scene3d.mixed_frame",
+      22,
+      0xf685d05bf68a0cc2,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.image_pipeline.png.first_visible",
+      22,
+      0x82cb16697b8606dd,
+   );
 }
 
 #[test]
@@ -1157,20 +1126,6 @@ fn workspace_latest_frame_rows_satisfy_metric_contract() {
         .unwrap_or_else(|err| panic!("workspace latest frame metric contract failed: {err}"));
 }
 
-#[test]
-fn workspace_latest_keeps_webgpu_pipeline_profile_counts()
-{
-   let report = workspace_latest_report();
-   let case = workspace_case(&report, "cpu.authoring.webgpu_pipeline_profile.compose");
-   assert_eq!(case.family, "authoring");
-   assert_eq!(case.scenario, "authoring");
-   assert_eq!(workspace_metric(case, "full_declared_pipelines"), 43.0);
-   assert_eq!(workspace_metric(case, "minimal_declared_pipelines"), 2.0);
-   assert_eq!(workspace_metric(case, "mixed_declared_pipelines"), 9.0);
-   assert_eq!(workspace_metric(case, "minimal_pipelines_avoided"), 41.0);
-   assert_eq!(workspace_metric(case, "mixed_pipelines_avoided"), 34.0);
-}
-
 fn assert_workspace_metal_pacing_row(case: &PerfCaseResult, family: &str, scenario: &str) {
     assert_eq!(case.layer, "flow");
     assert_eq!(case.family, family);
@@ -1249,211 +1204,35 @@ fn assert_workspace_cpu_row(case: &PerfCaseResult, family: &str, scenario: &str)
     assert!(case.max >= case.p99);
 }
 
-fn assert_workspace_zero_layout_dirty_row(case: &PerfCaseResult) {
-    assert_workspace_cpu_row(case, "layout", "layout-invalidation");
-    assert_eq!(workspace_metric(case, "dirty_nodes"), 1.0);
-    assert_eq!(workspace_metric(case, "layout_passes"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_visited_nodes_per_op"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_measured_children_per_op"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_updates_per_op"), 0.0);
-    assert!(workspace_metric(case, "layout_ops_sampled") > 0.0);
-}
-
 #[test]
-fn workspace_latest_gates_retained_layout_dirty_class_rows() {
-    let report = workspace_latest_report();
+fn workspace_latest_gates_canonical_retained_and_layout_rows()
+{
+   let report = workspace_latest_report();
+   let dirty_leaf = workspace_case(&report, "cpu.authoring.surface_retained.dirty_leaf_encode");
+   assert_workspace_cpu_row(dirty_leaf, "authoring", "authoring");
+   assert_eq!(workspace_metric(dirty_leaf, "dirty_nodes"), 1.0);
+   assert!(workspace_metric(dirty_leaf, "retained_node_reuse_ratio") > 0.9);
+   assert!(
+      workspace_metric(dirty_leaf, "retained_reused_nodes_per_op")
+         > workspace_metric(dirty_leaf, "retained_rebuilt_nodes_per_op")
+   );
+   assert!(workspace_metric(dirty_leaf, "tracked_nodes") >= 1000.0);
 
-    let clean = workspace_case(&report, "cpu.authoring.surface_retained.clean_encode");
-    assert_workspace_cpu_row(clean, "authoring", "authoring");
-    assert_eq!(workspace_metric(clean, "retained_reuse_ratio"), 1.0);
-    assert_eq!(workspace_metric(clean, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(clean, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(clean, "draw_items") > 0.0);
-
-    let dirty_leaf = workspace_case(&report, "cpu.authoring.surface_retained.dirty_leaf_encode");
-    assert_workspace_cpu_row(dirty_leaf, "authoring", "authoring");
-    assert_eq!(workspace_metric(dirty_leaf, "dirty_nodes"), 1.0);
-    assert!(workspace_metric(dirty_leaf, "retained_node_reuse_ratio") > 0.9);
-    assert!(
-        workspace_metric(dirty_leaf, "retained_reused_nodes_per_op")
-            > workspace_metric(dirty_leaf, "retained_rebuilt_nodes_per_op")
-    );
-    assert!(workspace_metric(dirty_leaf, "tracked_nodes") >= 1000.0);
-
-    let transform = workspace_case(&report, "cpu.layout.transform_only.reposition");
-    assert_workspace_zero_layout_dirty_row(transform);
-    assert!(workspace_metric(transform, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(transform, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let paint = workspace_case(&report, "cpu.layout.paint_only.opacity_clip");
-    assert_workspace_zero_layout_dirty_row(paint);
-    assert!(workspace_metric(paint, "opacity_ops") > 0.0);
-    assert!(workspace_metric(paint, "clip_ops") > 0.0);
-    assert!(workspace_metric(paint, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(paint, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let content = workspace_case(&report, "cpu.layout.node_content_dirty.retained_replay");
-    assert_workspace_zero_layout_dirty_row(content);
-    assert!(workspace_metric(content, "text_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "image_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "camera_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(content, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let hit_test = workspace_case(&report, "cpu.layout.hit_test_dirty.retained_reuse");
-    assert_workspace_zero_layout_dirty_row(hit_test);
-    assert_eq!(workspace_metric(hit_test, "retained_rebuilt_nodes_per_op"), 0.0);
-    assert_eq!(workspace_metric(hit_test, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(hit_test, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(hit_test, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(hit_test, "hit_test_dirty_ops") > 0.0);
-}
-
-#[test]
-fn workspace_latest_gates_collection_identity_and_prefix_ab_rows() {
-    let report = workspace_latest_report();
-    let indexed = workspace_case(&report, "cpu.authoring.collection_key_reconcile.indexed");
-    let scan = workspace_case(&report, "cpu.authoring.collection_key_reconcile.scan");
-    assert_workspace_cpu_row(indexed, "authoring", "authoring");
-    assert_workspace_cpu_row(scan, "authoring", "authoring");
-    assert!(indexed.median < scan.median);
-    assert_eq!(workspace_metric(indexed, "collection_key_index_enabled"), 1.0);
-    assert_eq!(workspace_metric(scan, "collection_key_index_enabled"), 0.0);
-    assert!(workspace_metric(indexed, "collection_key_index_hits_total") > 0.0);
-    assert_eq!(workspace_metric(scan, "collection_key_index_hits_total"), 0.0);
-    assert_eq!(
-        workspace_metric(indexed, "collection_key_index_queries_total"),
-        workspace_metric(indexed, "collection_key_index_hits_total"),
-    );
-    assert!(
-        workspace_metric(indexed, "collection_item_key_queries_per_lookup")
-            < workspace_metric(scan, "collection_item_key_queries_per_lookup")
-    );
-    assert_eq!(
-        workspace_metric(indexed, "collection_reconciled_index"),
-        workspace_metric(scan, "collection_reconciled_index"),
-    );
-
-    let bounded_cache =
-        workspace_case(&report, "cpu.authoring.collection_measure_cache.bounded_churn");
-    assert_workspace_cpu_row(bounded_cache, "authoring", "authoring");
-    assert!(workspace_metric(bounded_cache, "collection_count") >= 20_000.0);
-    assert!(
-        workspace_metric(bounded_cache, "collection_initial_measure_calls_per_op")
-            >= workspace_metric(bounded_cache, "collection_count")
-    );
-    assert!(workspace_metric(bounded_cache, "collection_repair_measure_calls_per_op") > 0.0);
-    assert!(workspace_metric(bounded_cache, "collection_repair_measure_calls_per_op") < 32.0);
-    assert!(workspace_metric(bounded_cache, "collection_repair_to_initial_measure_ratio") < 0.01);
-    assert!(workspace_metric(bounded_cache, "collection_repair_draw_items_per_op") > 0.0);
-
-    let incremental = workspace_case(&report, "cpu.authoring.collection_prefix_update.incremental");
-    let full_scan = workspace_case(&report, "cpu.authoring.collection_prefix_update.full_scan");
-    assert_workspace_cpu_row(incremental, "authoring", "authoring");
-    assert_workspace_cpu_row(full_scan, "authoring", "authoring");
-    assert!(incremental.median < full_scan.median);
-    assert_eq!(workspace_metric(incremental, "collection_changed_range_enabled"), 1.0);
-    assert_eq!(workspace_metric(full_scan, "collection_changed_range_enabled"), 0.0);
-    assert_eq!(
-        workspace_metric(incremental, "collection_changed_index"),
-        workspace_metric(full_scan, "collection_changed_index"),
-    );
-    assert!(
-        workspace_metric(incremental, "collection_item_revision_queries_per_op")
-            < workspace_metric(full_scan, "collection_item_revision_queries_per_op")
-    );
-    assert_eq!(
-        workspace_metric(incremental, "collection_measure_calls_total"),
-        workspace_metric(full_scan, "collection_measure_calls_total"),
-    );
-}
-
-#[test]
-fn workspace_latest_gates_text_cache_atlas_and_cursor_rows() {
-    let report = workspace_latest_report();
-
-    let prefix = workspace_case(&report, "cpu.system.text_prefix_width_map");
-    assert_workspace_cpu_row(prefix, "system", "system");
-    assert!(workspace_metric(prefix, "text_bytes") > 0.0);
-    assert!(workspace_metric(prefix, "prefix_boundaries") > 0.0);
-    assert_eq!(
-        workspace_metric(prefix, "prefix_boundaries"),
-        workspace_metric(prefix, "width_entries"),
-    );
-    assert_eq!(workspace_metric(prefix, "shaped_runs"), 1.0);
-
-    let atlas_pressure = workspace_case(&report, "cpu.system.text_atlas_pressure");
-    assert_workspace_cpu_row(atlas_pressure, "system", "system");
-    assert!(workspace_metric(atlas_pressure, "atlas_shape_count") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_rendered_glyph_runs") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_evictions") > 0.0);
-    assert_eq!(
-        workspace_metric(atlas_pressure, "atlas_revision"),
-        workspace_metric(atlas_pressure, "atlas_evictions"),
-    );
-    assert!(workspace_metric(atlas_pressure, "atlas_resident_glyphs") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_dirty_rects") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_dirty_pixels") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_max_dirty_pixels") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_pressure_vertices") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_pressure_indices") > 0.0);
-
-    let dirty_upload = workspace_case(&report, "cpu.system.text_atlas_dirty_rect_upload");
-    assert_workspace_cpu_row(dirty_upload, "system", "system");
-    assert_eq!(workspace_metric(dirty_upload, "atlas_create_calls"), 1.0);
-    assert!(workspace_metric(dirty_upload, "atlas_update_calls") >= 2.0);
-    assert!(workspace_metric(dirty_upload, "dirty_upload_pixels") > 0.0);
-    assert!(workspace_metric(dirty_upload, "max_dirty_update_pixels") > 0.0);
-    assert!(workspace_metric(dirty_upload, "dirty_to_full_upload_ratio") < 0.01);
-
-    let wrapped = workspace_case(&report, "cpu.system.wrapped_label_cached_encode");
-    assert_workspace_cpu_row(wrapped, "system", "system");
-    assert_eq!(workspace_metric(wrapped, "wrapped_label_variants"), 4096.0);
-    assert!(workspace_metric(wrapped, "wrapped_label_glyph_runs") > 0.0);
-    assert!(workspace_metric(wrapped, "wrapped_label_vertices") > 0.0);
-    assert!(workspace_metric(wrapped, "dirty_to_full_upload_ratio") < 0.01);
-    assert!(workspace_missing_case(&report, "cpu.system.wrapped_label_legacy_fit_shape"));
-
-    let picker = workspace_case(&report, "cpu.system.picker_text_cached_encode");
-    assert_workspace_cpu_row(picker, "system", "system");
-    assert_eq!(workspace_metric(picker, "atlas_create_calls"), 1.0);
-    assert_eq!(workspace_metric(picker, "atlas_update_calls"), 0.0);
-    assert!(workspace_metric(picker, "picker_glyph_runs") > 0.0);
-    assert!(workspace_metric(picker, "picker_vertices") > 0.0);
-    assert!(workspace_metric(picker, "dirty_to_full_upload_ratio") < 0.01);
-    assert!(workspace_missing_case(&report, "cpu.system.picker_text_legacy_shape_upload"));
-
-    let cluster = workspace_case(&report, "cpu.text_input.cursor_pick.cluster_map");
-    let rtl = workspace_case(&report, "cpu.text_input.cursor_pick.rtl_cluster_map");
-    let fallback = workspace_case(&report, "cpu.text_input.cursor_pick.fallback_cluster_map");
-    let mixed = workspace_case(&report, "cpu.text_input.cursor_pick.mixed_bidi_affinity");
-    for case in [cluster, rtl, fallback, mixed] {
-        assert_workspace_cpu_row(case, "text-input", "text-input");
-        assert_eq!(workspace_metric(case, "cursor_pick_positions"), 6.0);
-        assert!(workspace_metric(case, "text_bytes") > 0.0);
-    }
-    assert_text_cursor_map_workspace_metrics(cluster, "cursor_map");
-    assert_text_cursor_map_workspace_metrics(rtl, "rtl_cursor_map");
-    assert_text_cursor_map_workspace_metrics(fallback, "fallback_cursor_map");
-    assert_text_cursor_map_workspace_metrics(mixed, "mixed_bidi_cursor_map");
-    assert!(workspace_metric(cluster, "cursor_checksum") > 0.0);
-    assert!(workspace_metric(rtl, "rtl_cursor_checksum") > 0.0);
-    assert!(workspace_metric(fallback, "fallback_cursor_checksum") > 0.0);
-    assert!(workspace_metric(fallback, "fallback_fonts") >= 1.0);
-    assert!(workspace_metric(fallback, "fallback_shape_runs") >= 3.0);
-    assert!(workspace_metric(mixed, "mixed_bidi_cursor_checksum") > 0.0);
-    assert_eq!(workspace_metric(mixed, "mixed_bidi_boundary_positions"), 2.0);
-    assert!(workspace_metric(mixed, "mixed_bidi_cursor_map_affinity_splits") >= 2.0);
-    assert!(workspace_metric(mixed, "rtl_font_loaded") >= 1.0);
-}
-
-fn assert_text_cursor_map_workspace_metrics(case: &PerfCaseResult, prefix: &str) {
-    let cursor_count = workspace_metric(case, &format!("{prefix}_cursor_count"));
-    let byte_boundaries = workspace_metric(case, &format!("{prefix}_byte_boundaries"));
-    assert!(cursor_count > 0.0);
-    assert_eq!(byte_boundaries, cursor_count + 1.0);
-    assert!(workspace_metric(case, &format!("{prefix}_boundary_checksum")) > 0.0);
-    assert!(workspace_metric(case, &format!("{prefix}_width_span")) > 0.0);
+   let dirty_subtree = workspace_case(&report, "cpu.layout.dirty_subtree.incremental_relayout");
+   assert_workspace_cpu_row(dirty_subtree, "layout", "layout-invalidation");
+   assert_eq!(workspace_metric(dirty_subtree, "dirty_nodes"), 1.0);
+   assert_eq!(workspace_metric(dirty_subtree, "layout_passes"), 1.0);
+   assert!(workspace_metric(dirty_subtree, "layout_ops_sampled") > 0.0);
+   assert!(workspace_metric(dirty_subtree, "layout_skipped_subtrees_per_op") > 0.0);
+   assert!(workspace_metric(dirty_subtree, "layout_updates_per_op") > 0.0);
+   assert!(
+      workspace_metric(dirty_subtree, "layout_visited_nodes_per_op")
+         < workspace_metric(dirty_subtree, "cold_visited_nodes")
+   );
+   assert!(
+      workspace_metric(dirty_subtree, "layout_measured_children_per_op")
+         < workspace_metric(dirty_subtree, "cold_measured_children")
+   );
 }
 
 fn web_report_case<'a>(report: &'a Value, id: &str) -> &'a Value {
