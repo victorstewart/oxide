@@ -22,6 +22,10 @@
   Exposes renderer-agnostic draw-list replay helpers for translated CPU composition paths.
 - `pub mod collection`
   Exposes keyed, virtualized collection layout and rendering with fixed-extent and variable-extent measurement caches.
+- `pub mod vertical_scroll`
+  Exposes raw-touch vertical drag, deterministic inertia, frame-demand, and settled-state ownership.
+- `pub use vertical_scroll::VerticalScrollSurface`
+  Makes the production vertical scrolling state available at the crate root for ordinary app composition.
 - `collection::Measure::item_index_for_key`
   Optional key-to-index lookup that lets keyed collections reconcile focus and hover after data reorder without scanning every item.
 - `collection::Measure::collection_revision`
@@ -108,6 +112,7 @@
 - `elements.rs` also owns the old iOS spinner contract, so downstream apps stop passing phase or stroke data and instead issue one atom-driven large-indicator request.
 - `elements.rs` also owns the old iOS sliding-switch interaction contract, so downstream apps stop re-implementing the 0.3s press gate, one-shot inactivity callback semantics, and bounds cancellation around `SlidingSwitchState`.
 - `collection.rs` owns stable item identity for virtualized grids and rows. Focus/hover state is keyed by `Measure::item_key`, while keyboard navigation can still move by current index and rematerialize the actual item key on the next layout pass.
+- `vertical_scroll.rs` composes raw-touch surface events with `ScrollState`, a fixed velocity sample ring, and frame-partition-independent inertial decay. Apps pass its offset into `CollectionView` and use its frame/settled queries without moving gesture state into a platform host.
 - The popup-picker move follows the same boundary: Oxide owns the reusable multi-column legacy-picker interaction state, scroll-end commit result, and fixed medium-impact haptic intent, while apps keep their own anchored layouts, copy, and visual treatments.
 - The emitter move follows that same pattern: Oxide owns the reusable burst timing, source-shape, and particle sampling math, while apps keep scene-specific asset choice and draw calls.
 - The spinner move follows the same rule at runtime too: the iOS host can now promote spinner draws into native `UIActivityIndicatorViewStyleLarge` views while non-iOS fallbacks still share one Oxide-owned contract.
@@ -160,6 +165,7 @@
 - `CollectionView` caches variable item measurements by item key, constraint, and revision; keyed focus reconciliation preserves identity across visible reorders without invalidating warm measurement caches, and can use `Measure::item_index_for_key` to avoid full scans after far reorders.
 - `CollectionView` bounds its variable measurement cache and prunes cold key/constraint/revision entries under large churn, so long-lived virtualized collections do not retain every historical measurement.
 - `CollectionView` can reuse variable row/grid prefix offsets across scroll passes when `Measure::collection_revision` reports an unchanged epoch, and epoch-backed measures can provide `Measure::changed_item_range` to repair only affected prefix rows/items after small mutations. Legacy measures without a dirty range keep the existing full signature validation.
+- `VerticalScrollSurface` keeps normal raw-touch handling and inertial advancement O(1), uses caller-supplied monotonic time, and requests continued frames only while velocity remains active.
 - `UICameraView` emits Oxide renderer camera commands only; host-native visible preview planes are diagnostic-only outside this authoring surface.
 - Consolidating the text-input engines here removes duplicate app-side implementations without adding runtime indirection.
 - `prepare_draws` preallocates the resolved clip stack for the common shallow nested-clip path, avoiding the first frame-loop stack growth on representative clipping workloads.
@@ -194,6 +200,7 @@
 - `crates/ui-core/tests/surface.rs` covers transform-only retained repositioning without layout work and validates translated hit testing.
 - `crates/ui-core/tests/collection_transition.rs` covers fixed-extent measurement elision, variable measurement reuse by key/revision, bounded variable-measurement cache eviction, visible keyed cell identity, keyed focus preservation/navigation after reorder, and key-index reconciliation without broad scans.
 - `crates/ui-core/tests/collection_transition.rs` covers epoch-stable variable grid/row prefix reuse, dirty-range prefix repair, and verifies warm scroll or small-revision passes avoid full signature scans when the measure provides the necessary epoch/range contract.
+- `crates/ui-core/tests/vertical_scroll_tests.rs` covers raw-touch slop, direction, release, multi-touch restart, cancellation, bounds, settlement, and callback-partition-independent travel.
 - `crates/ui-core/tests/draw_replay_tests.rs` covers translated replay geometry and clip restoration.
 - `crates/ui-core/tests/anim_helpers.rs` covers the shared animation-helper surface.
 - `crates/ui-core/tests/text_fields_tests.rs` covers the text-input surface.
@@ -217,6 +224,7 @@ assert_eq!(text.value(), "");
 
 ## Changelog
 - 2026-08-06: removed the accessibility-frame API and active dirty-bit writes while retaining only the inert released dirty-class value.
+- 2026-08-06: added and re-exported `VerticalScrollSurface`.
 - 2026-07-14: hard-cut deterministic bitmap-overlay drawing to the explicit A8 `BitmapTextAtlas`/`GlyphRun` path and removed the production solid-alpha-run renderer.
 - 2026-07-14: added C43 frame-scoped text preparation, provisional glyph handles, merged atlas publication, opt-in text counters, and allocation coverage.
 - 2026-07-13: added C26 node-local retained geometry, generation-checked dynamic slots, complete nested affine/opacity composition, and synchronized hit-test geometry.
