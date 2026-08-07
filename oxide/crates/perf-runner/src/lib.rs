@@ -384,6 +384,10 @@ const PERF_IMAGE_PIPELINE_SPECS: &[NamedPerfSpec] = &[
     NamedPerfSpec { id: "cpu.image_pipeline.png.decode", name: "PNG Decode" },
     NamedPerfSpec { id: "gpu.image_pipeline.png.upload", name: "PNG Upload" },
     NamedPerfSpec { id: "gpu.image_pipeline.png.first_visible", name: "PNG First Visible" },
+    NamedPerfSpec {
+        id: "gpu.image_pipeline.rgba.nearest_first_visible",
+        name: "RGBA Nearest First Visible",
+    },
 ];
 
 const PERF_NAVIGATION_SPECS: &[NamedPerfSpec] = &[
@@ -2665,8 +2669,9 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "cpu.image_pipeline.png.decode",
                 "gpu.image_pipeline.png.upload",
                 "gpu.image_pipeline.png.first_visible",
+                "gpu.image_pipeline.rgba.nearest_first_visible",
             ]),
-            "The committed image battery now splits PNG decode, Metal texture upload, and first-visible presentation into separate persisted workloads.",
+            "The compact image battery splits PNG decode, Metal texture upload, linear first-visible presentation, and one nearest-sampled first-visible path into separate persisted workloads without a count/style permutation matrix.",
             "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics.",
         ),
         contract_battery_entry(
@@ -3484,7 +3489,18 @@ fn push_image_pipeline_cases(
         let case = match spec.id {
             "cpu.image_pipeline.png.decode" => image_pipeline_png_decode_case(smoke)?,
             "gpu.image_pipeline.png.upload" => image_pipeline_png_upload_case(smoke)?,
-            "gpu.image_pipeline.png.first_visible" => image_pipeline_png_first_visible_case(smoke)?,
+            "gpu.image_pipeline.png.first_visible" => image_pipeline_first_visible_case(
+                smoke,
+                spec.id,
+                api::ImageSampling::Linear,
+                "Dedicated first-visible render phase over a freshly uploaded linear-sampled RGBA checker texture and a prebuilt ImageView draw list: begin, encode, and submit its first Metal frame.",
+            )?,
+            "gpu.image_pipeline.rgba.nearest_first_visible" => image_pipeline_first_visible_case(
+                smoke,
+                spec.id,
+                api::ImageSampling::Nearest,
+                "Dedicated first-visible render phase over a freshly uploaded nearest-sampled RGBA checker texture and a prebuilt ImageView draw list: begin, encode, and submit its first Metal frame.",
+            )?,
             other => bail!("unknown image-pipeline perf case `{}`", other),
         };
         cases.push(case);
@@ -7811,7 +7827,8 @@ fn image_pipeline_png_upload_case(smoke: bool) -> Result<PerfCaseResult> {
     })
 }
 
-fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> {
+fn image_pipeline_first_visible_case(smoke: bool, id: &str, sampling: api::ImageSampling, note: &str) -> Result<PerfCaseResult>
+{
     let png_bytes =
         checker_png_bytes(128, 128).with_context(|| "encoding generated checker PNG payload")?;
     let (w, h, rgba) =
@@ -7824,7 +7841,8 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     let warmups = if smoke { 1 } else { 2 };
     let sample_count = if smoke { 6 } else { 10 };
     for _ in 0..warmups {
-        let handle = renderer.image_create_rgba8(w, h, &rgba, (w as usize) * 4);
+        let handle =
+            renderer.image_create_rgba8_sampled(w, h, &rgba, (w as usize) * 4, sampling);
         let mut builder = ui::DrawListBuilder::new();
         let image = ui::elements::ImageView {
             image: handle,
@@ -7846,7 +7864,8 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     let mut gpu_samples = Vec::with_capacity(sample_count);
     let mut draws_sum = 0.0f64;
     for _ in 0..sample_count {
-        let handle = renderer.image_create_rgba8(w, h, &rgba, (w as usize) * 4);
+        let handle =
+            renderer.image_create_rgba8_sampled(w, h, &rgba, (w as usize) * 4, sampling);
         let mut builder = ui::DrawListBuilder::new();
         let image = ui::elements::ImageView {
             image: handle,
@@ -7873,7 +7892,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
 
     let summary = summarize(&frame_samples);
     let (layer, scenario, variant, cache_state, refresh_mode) =
-        perf_case_contract_metadata("gpu.image_pipeline.png.first_visible", "image-pipeline");
+        perf_case_contract_metadata(id, "image-pipeline");
     let mut metrics = BTreeMap::new();
     metrics.insert(String::from("encoded_bytes"), png_bytes.len() as f64);
     metrics.insert(String::from("texture_bytes"), rgba.len() as f64);
@@ -7884,7 +7903,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     insert_frame_pacing_metrics(&mut metrics, &frame_samples);
 
     Ok(PerfCaseResult {
-        id: String::from("gpu.image_pipeline.png.first_visible"),
+        id: String::from(id),
         family: String::from("image-pipeline"),
         layer: String::from(layer),
         scenario: String::from(scenario),
@@ -7902,9 +7921,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
         mean: summary.mean,
         samples: frame_samples.len(),
         ops_per_sample: 1,
-        notes: vec![String::from(
-            "Dedicated first-visible image phase: upload the shared PNG payload, encode one retained image, and submit its first Metal frame.",
-        )],
+        notes: vec![String::from(note)],
         metrics,
     })
 }
@@ -9176,7 +9193,11 @@ fn perf_case_contract_metadata(
         return ("engine", "text-input", "oxide", "warm", "offscreen");
     }
     if family == "image-pipeline" {
-        let cache_state = if id.contains(".decode") { "cold" } else { "warm" };
+        let cache_state = if id.contains(".decode") || id.contains(".upload") || id.ends_with("first_visible") {
+            "cold"
+        } else {
+            "warm"
+        };
         return ("engine", "image-pipeline", "oxide", cache_state, "offscreen");
     }
     if family == "navigation" {

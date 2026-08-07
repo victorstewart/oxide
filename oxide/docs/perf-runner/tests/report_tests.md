@@ -24,6 +24,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `filtered_run_suite_supports_text_sdf_bake_metrics()` requires the focused
   SDF row to declare a cold cache state, execute both pre-shaped Latin and CJK
   glyph runs, and publish nonzero geometry and dirty-pixel counters.
+- `filtered_run_suite_classifies_first_visible_images_as_cold()` runs the linear and nearest first-visible image rows, requires cold resource metadata, and freezes the render-only note boundary after texture publication and draw-list construction.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
@@ -72,6 +73,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-06: required linear and nearest first-visible image rows to report cold resource state and an explicit begin/encode/submit timing boundary.
 - 2026-08-06: froze the 401-row workspace case set after the SDF addition and semantic cutover to hit-test-only dynamic-animation row IDs.
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.
 - 2026-07-15: required C18 frame-resource rows to retain their completed-command-buffer GPU distributions so the complete C61 report satisfies the frame metric contract.

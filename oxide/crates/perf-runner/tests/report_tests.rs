@@ -5009,6 +5009,45 @@ fn filtered_run_suite_supports_central_noop_rejection_cases()
 
 #[cfg(target_os = "macos")]
 #[test]
+fn filtered_run_suite_classifies_first_visible_images_as_cold()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-image-first-visible-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.image_pipeline.png.first_visible,gpu.image_pipeline.rgba.nearest_first_visible",
+      )
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered first-visible image smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+
+   let report: PerfReport = serde_json::from_slice(
+      &std::fs::read(&json_out).expect("read first-visible image report"),
+   ).expect("parse first-visible image report");
+   for (id, sampling) in [
+      ("gpu.image_pipeline.png.first_visible", "linear-sampled"),
+      ("gpu.image_pipeline.rgba.nearest_first_visible", "nearest-sampled"),
+   ]
+   {
+      let case = report.cases.iter().find(|case| case.id == id).expect("first-visible case");
+      assert_eq!(case.cache_state, "cold");
+      assert!(case.notes.iter().any(|note| {
+         note.contains(sampling) && note.contains("prebuilt ImageView draw list")
+      }));
+   }
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn filtered_run_suite_supports_image_view_crop_authoring_cases()
 {
     let mut json_out = std::env::temp_dir();
