@@ -625,6 +625,108 @@ private final class FeedV1UIKitRunRecorder: NSObject, FeedV1UIKitObservationSink
    }
 }
 
+@main
+@MainActor
+final class FeedV1UIKitAppDelegate: UIResponder, UIApplicationDelegate
+{
+   var window: UIWindow?
+   private var recorder: FeedV1UIKitRunRecorder?
+
+   func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
+   {
+      let environment = ProcessInfo.processInfo.environment
+      do
+      {
+         let metadata = try parseMetadata(environment)
+         let startState = try parseStartState(metadata.startState)
+         guard let variant = FeedV1UIKitVariant(rawValue: metadata.treatment) else
+         {
+            throw FeedV1ContractError.invariant("UIKit app received a non-UIKit treatment")
+         }
+         let root = try FeedV1RootFactory.make(variant: variant)
+         let window = UIWindow(frame: CGRect(
+            x: 0,
+            y: 0,
+            width: FeedV1Contract.hostWidthPoints,
+            height: FeedV1Contract.hostHeightPoints
+         ))
+         window.rootViewController = root
+         window.makeKeyAndVisible()
+         root.view.layoutIfNeeded()
+         root.mount(at: startState)
+         let screen = window.windowScene?.screen ?? window.screen
+         let recorder = FeedV1UIKitRunRecorder(
+            metadata: metadata,
+            startState: startState,
+            root: root,
+            screen: screen
+         )
+         root.observationSink = recorder
+         self.window = window
+         self.recorder = recorder
+         return true
+      }
+      catch
+      {
+         persistLaunchFailure(environment: environment, message: String(describing: error))
+         return false
+      }
+   }
+}
+
+private func parseMetadata(_ environment: [String: String]) throws -> FeedV1RunMetadata
+{
+   func required(_ key: String) throws -> String
+   {
+      guard let value = environment[key], !value.isEmpty else
+      {
+         throw FeedV1ContractError.invariant("missing launch environment \(key)")
+      }
+      return value
+   }
+
+   let nonce = try required(FeedV1Contract.completionNonceEnvironmentKey)
+   guard FeedV1Contract.completionNonceIsValid(nonce) else
+   {
+      throw FeedV1ContractError.invariant("completion nonce is not 1...128 ASCII alphanumeric-or-hyphen bytes")
+   }
+   let phase = try required("OXIDE_FEED_V1_PHASE")
+   guard phase == "smoke" || phase == "primary" else
+   {
+      throw FeedV1ContractError.invariant("unknown sampling phase")
+   }
+   func index(_ key: String) throws -> Int
+   {
+      guard let value = Int(try required(key)), value >= 0 else
+      {
+         throw FeedV1ContractError.invariant("invalid non-negative index \(key)")
+      }
+      return value
+   }
+   let treatment = try required(FeedV1Contract.treatmentEnvironmentKey)
+   let startState = try required(FeedV1Contract.startStateEnvironmentKey)
+   let parsedState = try parseStartState(startState)
+   return FeedV1RunMetadata(
+      nonce: nonce,
+      phase: phase,
+      sessionIndex: try index("OXIDE_FEED_V1_SESSION_INDEX"),
+      pairIndex: try index("OXIDE_FEED_V1_PAIR_INDEX"),
+      orderIndex: try index("OXIDE_FEED_V1_ORDER_INDEX"),
+      treatment: treatment,
+      startState: startState,
+      direction: parsedState.outboundDirection.rawValue
+   )
+}
+
+private func parseStartState(_ value: String) throws -> FeedV1StartState
+{
+   guard let state = FeedV1StartState(rawValue: value) else
+   {
+      throw FeedV1ContractError.invariant("unknown start state")
+   }
+   return state
+}
+
 private func physicalRect(_ rect: CGRect) -> FeedV1RunRect
 {
    let scale = CGFloat(FeedV1Contract.surfaceScale)
@@ -685,3 +787,32 @@ private func postDarwin(_ name: String)
    )
 }
 
+private func persistLaunchFailure(environment: [String: String], message: String)
+{
+   guard let nonce = environment[FeedV1Contract.completionNonceEnvironmentKey],
+         FeedV1Contract.completionNonceIsValid(nonce) else
+   {
+      return
+   }
+   let body: [String: Any] = [
+      "schema": "oxide.feed-v1.failure",
+      "schema_revision": 1,
+      "fixture": [
+         "schema": FeedV1Contract.schema,
+         "revision": FeedV1Contract.revision,
+         "canonical_sha256": FeedV1Contract.expectedCanonicalSHA256,
+         "canonical_byte_count": FeedV1Contract.expectedCanonicalByteCount
+      ],
+      "nonce": nonce,
+      "treatment": environment[FeedV1Contract.treatmentEnvironmentKey] ?? NSNull(),
+      "stage": "launch",
+      "message": message
+   ]
+   if JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys])
+   {
+      let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+      let url = documents.appendingPathComponent(FeedV1Contract.resultFilePrefix + nonce + FeedV1Contract.resultFileSuffix)
+      try? data.write(to: url, options: .atomic)
+   }
+   postDarwin(FeedV1Contract.failureNotificationPrefix + nonce)
+}
