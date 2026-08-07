@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oxide_feed_v1_reducer::{
-   callback_deadline_counts, deterministic_bootstrap_interval, frozen_components,
+   callback_deadline_counts, exact_median_confidence_interval, frozen_components,
    frozen_order_index, reduce, strict_validate_failure_json, strict_validate_run_json,
    travel_equivalence_passes, verify_attachment_export, verify_smoke, visual_metrics,
    ReducePaths, RgbaImage,
@@ -150,13 +150,21 @@ fn visual_gate_rejects_one_corrupt_48_pixel_tile() -> Result<(), String>
 }
 
 #[test]
-fn clustered_bootstrap_is_seeded_and_deterministic() -> Result<(), String>
+fn exact_nine_cluster_interval_freezes_ranks_and_coverage() -> Result<(), String>
 {
    let deltas = [-0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06];
-   let first = deterministic_bootstrap_interval(&deltas)?;
-   let second = deterministic_bootstrap_interval(&deltas)?;
-   assert_eq!(first, second);
-   assert!(first.0 <= first.1);
+   let interval = exact_median_confidence_interval(&deltas)?;
+   assert_eq!(interval.method, "exact-binomial-median");
+   assert_eq!(interval.target_coverage, 0.95);
+   assert_eq!(interval.achieved_coverage, 0.960_937_5);
+   assert_eq!(interval.sample_count, 9);
+   assert_eq!([interval.lower_rank, interval.upper_rank], [2, 8]);
+   assert_eq!(interval.bounds, [-0.01, 0.05]);
+   let error = exact_median_confidence_interval(&deltas[..8]).unwrap_err();
+   assert_eq!(error, "exact median confidence interval has 8 gesture pairs, expected 9");
+   let mut nonfinite = deltas;
+   nonfinite[4] = f64::NAN;
+   assert!(exact_median_confidence_interval(&nonfinite).is_err());
    Ok(())
 }
 
@@ -708,7 +716,7 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    let first_markdown = fs::read(&paths.output_markdown).map_err(|error| error.to_string())?;
    let report: Value = serde_json::from_slice(&first_json).map_err(|error| error.to_string())?;
    assert_eq!(report["status"], "complete");
-   assert_eq!(report["schema_revision"], 3);
+   assert_eq!(report["schema_revision"], 4);
    assert_eq!(report["run_count_total"], 60);
    assert_eq!(report["run_count_primary"], 54);
    let travel = report["travel_equivalence"].as_array()
@@ -719,11 +727,31 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
          && matches!(result["direction"].as_str(), Some("forward" | "reverse"))
          && result["pair_count"] == 9
          && result["median_relative_delta"].as_f64().is_some()
-         && result["confidence_95_lower"].as_f64().is_some()
-         && result["confidence_95_upper"].as_f64().is_some()
+         && result["confidence_interval"]["method"] == "exact-binomial-median"
+         && result["confidence_interval"]["achieved_coverage"] == 0.960_937_5
+         && result["confidence_interval"]["lower_rank"] == 2
+         && result["confidence_interval"]["upper_rank"] == 8
+         && result["confidence_interval"]["bounds"].as_array().is_some_and(|bounds| bounds.len() == 2)
+         && result.get("confidence_95_lower").is_none()
+         && result.get("confidence_95_upper").is_none()
          && result["median_margin"] == 0.05
          && result["confidence_margin"] == 0.10
          && result["passes"] == true
+   }));
+   let comparisons = report["comparisons"].as_array()
+      .ok_or_else(|| "report comparisons is not an array".to_string())?;
+   assert_eq!(comparisons.len(), 2);
+   assert!(comparisons.iter().all(|comparison| {
+      comparison["confidence_interval"]["method"] == "exact-binomial-median"
+         && comparison["confidence_interval"]["target_coverage"] == 0.95
+         && comparison["confidence_interval"]["achieved_coverage"] == 0.960_937_5
+         && comparison["confidence_interval"]["sample_count"] == 9
+         && comparison["confidence_interval"]["lower_rank"] == 2
+         && comparison["confidence_interval"]["upper_rank"] == 8
+         && comparison.get("bootstrap_resamples").is_none()
+         && comparison.get("bootstrap_seed_hex").is_none()
+         && comparison.get("confidence_95_lower").is_none()
+         && comparison.get("confidence_95_upper").is_none()
    }));
    let runs = report["runs"].as_array().ok_or_else(|| "report runs are not an array".to_string())?;
    assert_eq!(runs.len(), 54);
@@ -740,6 +768,7 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    let markdown = String::from_utf8_lossy(&first_markdown);
    assert!(markdown.contains("## Travel equivalence"));
    assert!(markdown.contains("| oxide | forward | 9 |"));
+   assert!(markdown.contains("`exact-binomial-median`, ranks 2-8 of 9"));
    assert!(markdown.contains("## Per-run callback evidence"));
 
    reduce(&paths)?;
@@ -789,8 +818,8 @@ fn full_reduction_rejects_systematic_primary_travel_mismatch() -> Result<(), Str
    assert_eq!(oxide_results.len(), 2);
    assert!(oxide_results.iter().all(|result| {
       result["median_relative_delta"].as_f64().is_some_and(|delta| (delta - 0.06).abs() < 1e-12)
-         && result["confidence_95_lower"].as_f64().is_some_and(|lower| lower > 0.05)
-         && result["confidence_95_upper"].as_f64().is_some_and(|upper| upper < 0.10)
+         && result["confidence_interval"]["bounds"][0].as_f64().is_some_and(|lower| lower > 0.05)
+         && result["confidence_interval"]["bounds"][1].as_f64().is_some_and(|upper| upper < 0.10)
          && result["passes"] == false
    }));
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;

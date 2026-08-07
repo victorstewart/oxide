@@ -122,8 +122,9 @@ inertial motion.
 For full-population travel equivalence, pair each optimized UIKit or Oxide
 primary run with idiomatic UIKit from the same session, pair index, and
 direction. For each treatment and direction, the absolute median of those nine
-relative travel deltas must be at most `5%`, and its deterministic 95% cluster
-bootstrap interval must remain inside `[-10%, +10%]`. This replicated gate
+relative travel deltas must be at most `5%`, and its exact two-sided median
+interval from ranks 2 and 8 must remain inside `[-10%, +10%]`. This interval
+has `96.09375%` achieved binomial coverage. The replicated gate
 rejects a systematic workload mismatch without treating one XCTest velocity
 delivery as exact ground truth.
 
@@ -239,9 +240,9 @@ per block. Run one smoke prefix, then exactly three sessions of three
 forward/reverse pairs per implementation. Those nine paired clusters are the
 maximum population; do not add a second block after observing the result.
 
-Bootstrap by session/gesture pair, not by pretending every frame is an
-independent trial. Compare Oxide separately with idiomatic UIKit and optimized
-UIKit:
+Treat the nine session/gesture pairs as the independent population, not every
+frame as an independent trial. Compare Oxide separately with idiomatic UIKit
+and optimized UIKit:
 
 - `faster`: Oxide callback-interval p50 and p95 are lower and the 95% interval
   excludes zero in Oxide's favor;
@@ -252,10 +253,12 @@ UIKit:
 - `blocked`: build, workload, travel, visual, thermal, or collector identity is
   invalid.
 
-Use `100,000` deterministic cluster bootstrap resamples with seed
-`0x6f786964655f7631` for both the travel-equivalence and callback-pacing
-intervals. The pacing decision interval is the 95% percentile interval of the
-median pair-level relative p95 delta, where positive means Oxide is slower.
+Use the exact two-sided binomial median interval for both travel equivalence and
+callback pacing. Sort the nine pair-level deltas once and use one-based ranks 2
+and 8, which conservatively achieve `96.09375%` coverage for the requested 95
+percent interval. The pacing decision interval applies to the median pair-level
+relative p95 delta, where positive means Oxide is slower. No random seed,
+Monte Carlo approximation, or resampling loop belongs in this frozen protocol.
 The missed-callback-deadline guardrail requires Oxide to be at most `0.5`
 percentage points above its comparator and at most `2%` absolute. The
 callback-hitch guardrail requires Oxide to be at most `2 ms/s` above its

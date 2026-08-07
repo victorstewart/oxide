@@ -17,7 +17,9 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `travel_equivalence_decision_honors_both_inclusive_frozen_boundaries` covers exact admission boundaries plus isolated median and confidence-interval violations through the production decision kernel.
 - `frozen_recipe_matches_contract_extent_and_component_states` checks both endpoint component manifests against the reducer-owned 2,000-row recipe.
 - `visual_gate_rejects_one_corrupt_48_pixel_tile` proves localized corruption cannot hide behind whole-image averaging.
-- `clustered_bootstrap_is_seeded_and_deterministic` freezes the confidence kernel and ordering.
+- `exact_nine_cluster_interval_freezes_ranks_and_coverage` requires the
+  production interval to select ranks 2 and 8, report 96.09375 percent achieved
+  coverage, and reject any population other than the frozen nine clusters.
 - `frozen_order_maps_each_treatment_and_both_directions_share_it` checks the smoke/primary rotation contract.
 - `deadline_formula_uses_previous_callback_target_period` protects aligned missed-callback accounting.
 - `callback_admission_rejects_nonfinite_and_terminal_invalid_targets` rejects NaN, a bad final target, and an observed 60 Hz sequence outside `7.5 .. 9.2 ms`.
@@ -31,7 +33,7 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
 - `smoke_rejects_symlink_roots_entries_and_nonregular_files` proves Unix evidence discovery rejects root aliases, nested symlinks, and socket entries instead of silently omitting them.
 - `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
-- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, verifies the exact six-PNG export and full-screen dimensions, requires all 54 primary timing/inertia summaries, and proves a second reduction over the exact same output paths is byte-identical.
+- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, verifies the exact six-PNG export and full-screen dimensions, requires revision-4 exact-method/rank/coverage metadata plus all 54 primary timing/inertia summaries, rejects legacy bootstrap fields, and proves a second reduction over the exact same output paths is byte-identical.
 - `full_reduction_rejects_systematic_primary_travel_mismatch` proves a repeatable six-percent Oxide workload mismatch blocks both direction comparisons even though each confidence interval remains inside the wider ten-percent bound.
 
 ## Logic narrative
@@ -59,7 +61,8 @@ Tests are independent and use unique temporary directories. Each integration tes
 
 - Population admission precedes expensive image/adversarial work, keeping malformed or incomplete test cases cheap.
 - The two full-image synthetic tests exercise streamed hostile mutations, shared RGB accumulation, and exact identity rows over the frozen 3 MP surface.
-- The bootstrap test uses the production fixed seed; there is no unbounded randomized soak loop.
+- The exact-interval test contains no RNG, resample budget, or randomized soak
+  loop.
 - The full synthetic population contains exactly one 54-run primary block and nine paired clusters; no second block is generated.
 
 ## Feature flags and cfgs
@@ -77,6 +80,8 @@ Expected integration result: every focused integration case passes.
 
 ## Changelog
 
+- 2026-08-07: replaced bootstrap determinism with exact rank, achieved-coverage,
+  population-cardinality, revision-4 serialization, and retired-field checks.
 - 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Reduced synthetic smoke evidence to six full-screen PNGs, added pre-cropped-input rejection, and limited full-report assertions to the 54 primary rows.
 - 2026-08-06: Added cleanup, provenance, transition/inertia, full-population per-run, and byte-identical rerun regressions.

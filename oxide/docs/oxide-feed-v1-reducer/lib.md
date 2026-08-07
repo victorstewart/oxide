@@ -20,18 +20,22 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 - `build_evidence_manifest(source_root, repository_root, uikit_app, oxide_app, controller_runner, controller_xctest, output)` requires a clean named Git `HEAD` and hashes its ref/commit/tree, the strict `protocol.md` plus `ios/**` and `reducer/**` source allowlist, both built app bundles, both compiled controller products/executables, the executing reducer, and both frozen fonts.
 - `strict_validate_run_json` and `strict_validate_failure_json` expose strict schema admission to regression tests.
 - `visual_metrics` evaluates frozen luma SSIM, worst-tile RGB error, and exact whole-image RGB error for equal-size RGBA images; `travel_equivalence_passes` applies the inclusive frozen median and confidence-interval margins.
-- `frozen_components`, `frozen_order_index`, `callback_deadline_counts`, and `deterministic_bootstrap_interval` expose small deterministic kernels for focused contract tests.
+- `MedianConfidenceInterval` carries the exact method, requested and achieved
+  coverage, sample count, one-based rank bounds, and numeric interval bounds.
+- `frozen_components`, `frozen_order_index`, `callback_deadline_counts`, and
+  `exact_median_confidence_interval` expose small deterministic kernels for
+  focused contract tests.
 
 ## Logic narrative
 
 1. Recursively enumerate every retained evidence directory, rejecting a symlink root, nested symlinks, and non-regular filesystem entries rather than silently omitting them, while rejecting retained result bundles/tools/reducer binaries and more than 512 MiB of input. Names such as `.git`, `target`, and `build` receive no discovery exemption. The cleanup proof attests only that the reducer is absent from this retained root; the runner separately removes its external temporary executable after reduction and owns the final exit status.
 2. Parse success and failure records with unknown-field rejection. Require each nonce-derived app record under its treatment's retrieved documents tree, exactly one authority manifest and cleanup proof at their frozen paths, and the six nonce-derived smoke PNGs in the exact controller test's single-detail attachment manifest. Reject canonical-path and Unix hard-link aliases. Any app failure record blocks the population.
 3. Admit one booted physical 120 Hz iPhone with unchanged pre/post identity, unlocked preflight records, nominal thermal state, low-power mode off, zero thermal/power transition counts, and exact configured 120 Hz ranges. Require the controller's app-container runtime proof to remain within 20 minutes total and 10 minutes per treatment.
-4. Validate fixture identity, canvas, frozen geometry, direction, at least 524 points of travel, observed inertial entry, order, and the exact smoke or full tuple population. Smoke makes no unreplicated cross-treatment travel claim. Full mode forms nine balanced primary deltas for each candidate treatment and direction, then requires the median inside 5 percent and its deterministic bootstrap interval inside 10 percent.
+4. Validate fixture identity, canvas, frozen geometry, direction, at least 524 points of travel, observed inertial entry, order, and the exact smoke or full tuple population. Smoke makes no unreplicated cross-treatment travel claim. Full mode forms nine balanced primary deltas for each candidate treatment and direction, then requires the median inside 5 percent and its exact rank-2-to-rank-8 interval inside 10 percent.
 5. Derive callback pacing from each preceding `targetTimestamp - timestamp`. Every sample must be finite and forward; at least 95 percent of observed target periods must lie in `7.5 .. 9.2 ms`.
 6. Require each smoke PNG to be the full `1320 x 2868` XCUIScreen capture, reject already-cropped input, extract `(75, 168) + 1170 x 2532`, and compare each Oxide/optimized surface with the matching idiomatic UIKit state. The six smoke visuals gate the manifest-hashed app builds used by the 54 primary timing runs; primary tuples add no screenshots, and there is no capture JSON or repeat gate.
 7. Require luma SSIM `>= 0.96`, worst non-overlapping 48-by-48 RGB mean absolute error `<= 18`, and rejection of all nine hostile visual mutations.
-8. Persist the four full-population travel-equivalence results with their pair counts, medians, confidence intervals, frozen margins, and decisions. For an otherwise admitted full population only, emit the 54 primary per-run callback summaries with inertia, environment-transition, and signed/absolute-travel evidence, summarize treatment p50/p95/p99/peak and missed/hitch metrics, then run the fixed 100,000-resample clustered pacing bootstrap over nine session/pair deltas. The six smoke records remain diagnostic evidence; blocked/smoke evaluations contain no timing rows.
+8. Persist the four full-population travel-equivalence results with their pair counts, medians, exact interval metadata, frozen margins, and decisions. For an otherwise admitted full population only, emit the 54 primary per-run callback summaries with inertia, environment-transition, and signed/absolute-travel evidence, summarize treatment p50/p95/p99/peak and missed/hitch metrics, then sort each comparison's nine session/pair deltas once and select exact ranks 2 and 8. The six smoke records remain diagnostic evidence; blocked/smoke evaluations contain no timing rows.
 9. Write JSON and one Markdown report through same-directory temporary files and atomic renames, excluding those exact output paths from future discovery so repeated reduction is byte-identical.
 
 ## Preconditions and postconditions
@@ -40,7 +44,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 - Smoke admission requires exactly six treatment/direction tuples and produces no report.
 - Smoke and full evidence each retain exactly six full-screen smoke PNG attachments and no controller capture records.
 - Publication requires six diagnostic smoke records plus exactly one primary block: 54 runs arranged as three sessions, three pairs per session, three treatments, and two directions, yielding nine paired clusters. The publication tables contain only those 54 primary runs.
-- A successful full reduction produces revision-3 JSON and Markdown with status `complete`, including the four auditable travel-equivalence decisions; a blocked population produces no timing classification.
+- A successful full reduction produces revision-4 JSON and Markdown with status `complete`, including the four auditable travel-equivalence decisions; a blocked population produces no timing classification. Historical revision-3 bootstrap reports remain unchanged.
 
 ## Edge cases and failure modes
 
@@ -54,7 +58,9 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 - Reduction is deterministic and single-process; it creates no worker pool and launches no app.
 - Visual evaluation is linear in the cropped RGBA surfaces. Exact-population admission runs before expensive screenshot and hostile-mutation work. Hostile images are constructed, measured, and dropped one at a time instead of retaining all nine full surfaces together.
-- The clustered bootstrap uses a fixed SplitMix64 seed and bounded 100,000-resample loop, making repeated reductions reproducible.
+- Each of the six nine-cluster confidence intervals sorts nine values once and
+  selects ranks 2 and 8. The exact binomial method achieves 96.09375 percent
+  coverage for the requested 95 percent level without an RNG or resampling.
 
 ## Performance notes
 
@@ -76,10 +82,13 @@ cd oxide
 cargo test --locked -p oxide-feed-v1-reducer
 ```
 
-`tests/reducer_tests.rs` covers strict schemas, the frozen recipe, nondegenerate travel and inertia, thermal/power transitions, visual corruption, bootstrap determinism, travel-equivalence margin and confidence boundaries, order, callback math/admission, failure blocking, non-secret device output, the six-smoke/six-PNG attachment bijection and exact test provenance, path and hard-link alias rejection, rejection of pre-cropped screenshot input, clean-Git source manifests, authority cleanup, the six-run smoke/full split, and byte-identical repeated full reduction with four travel decisions and 54 primary per-run summaries.
+`tests/reducer_tests.rs` covers strict schemas, the frozen recipe, nondegenerate travel and inertia, thermal/power transitions, visual corruption, exact interval ranks/coverage, travel-equivalence margin and confidence boundaries, order, callback math/admission, failure blocking, non-secret device output, the six-smoke/six-PNG attachment bijection and exact test provenance, path and hard-link alias rejection, rejection of pre-cropped screenshot input, clean-Git source manifests, authority cleanup, the six-run smoke/full split, and byte-identical repeated full reduction with four travel decisions and 54 primary per-run summaries.
 
 ## Changelog
 
+- 2026-08-07: hard-cut revision-4 reports to exact nine-cluster median
+  intervals with ranks 2 and 8 and 96.09375 percent achieved coverage; removed
+  all bootstrap seeds, resample fields, and resampling loops.
 - 2026-08-07: Joined the non-default root workspace graph and removed the nested lock/profile boundary.
 - 2026-08-06: Replaced unreplicated smoke travel matching with balanced primary travel equivalence, persisted its four decisions in revision-3 reports, and bound screenshot authority to the exact controller test and distinct file identities.
 - 2026-08-06: Reduced visual evidence to one full-screen PNG for each of the six smoke treatment/direction tuples; removed capture JSON, repeat images, and the repeat gate.

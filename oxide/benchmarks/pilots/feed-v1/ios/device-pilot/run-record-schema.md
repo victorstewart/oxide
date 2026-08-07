@@ -159,7 +159,9 @@ The six unreplicated smoke flings do not assert cross-treatment travel
 equivalence. In the full population, each candidate primary run is paired with
 idiomatic UIKit by session, pair index, and direction. Each treatment/direction
 group must keep its nine-pair median relative travel delta within `5%` and its
-deterministic 95% cluster bootstrap interval within `[-10%, +10%]`.
+exact two-sided median interval within `[-10%, +10%]`. The interval uses
+one-based ranks 2 and 8 and reports `96.09375%` achieved binomial coverage for
+the requested 95 percent level.
 
 Environment transition observers are installed before readiness. Their
 monotonic counts are snapshotted immediately before the initial environment
@@ -266,13 +268,17 @@ before build and immediately before the test. It emits only marketing model,
 product type, OS version/build, and CPU; device identifiers remain raw evidence
 and are not copied into the publication summary.
 
-A complete revision-3 full report contains a deterministic
+A complete revision-4 full report contains a deterministic
 `travel_equivalence` array and matching compact Markdown table for the four
 treatment/direction comparisons. Each result persists its pair count, median
-relative delta, 95% interval, both frozen margins, and pass/fail decision. Its
-deterministic `runs` array and matching dense Markdown table contain the 54
-primary gestures. Each row preserves the run identity, duration,
-inertia/travel evidence, both environment-transition counts, callback count/cadence,
+relative delta, exact interval method, requested and achieved coverage,
+one-based rank bounds, numeric bounds, both frozen margins, and pass/fail
+decision. The two pacing comparisons persist the same interval metadata.
+Historical revision-3 bootstrap reports remain historical evidence and are not
+rewritten as revision 4. The revision-4 deterministic `runs` array and matching
+dense Markdown table contain the 54 primary gestures. Each row preserves the
+run identity, duration, inertia/travel evidence, both environment-transition
+counts, callback count/cadence,
 p50/p95/p99/peak, missed/expected counts and ratio, hitch excess, and
 target-period admission ratio. Blocked and smoke evaluations expose no timing
 rows. Exact report output paths are excluded from discovery so a second full

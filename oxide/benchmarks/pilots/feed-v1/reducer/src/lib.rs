@@ -40,8 +40,13 @@ const TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN: f64 = 0.10;
 const TRAVEL_EQUIVALENCE_EPSILON: f64 = 1e-12;
 const ATTACHMENT_COUNT: usize = 6;
 const ATTACHMENT_TEST_IDENTIFIER: &str = "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()";
-const BOOTSTRAP_RESAMPLES: usize = 100_000;
-const BOOTSTRAP_SEED: u64 = 0x6f78_6964_655f_7631;
+const CONFIDENCE_INTERVAL_METHOD: &str = "exact-binomial-median";
+const CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
+// Omitting zero or one successes from each Binomial(9, 0.5) tail leaves 492 / 512 coverage.
+const CONFIDENCE_ACHIEVED_COVERAGE: f64 = 492.0 / 512.0;
+const CONFIDENCE_PAIR_COUNT: usize = 9;
+const CONFIDENCE_LOWER_RANK: usize = 2;
+const CONFIDENCE_UPPER_RANK: usize = 8;
 const NON_INFERIOR_MARGIN: f64 = 0.05;
 const MISSED_GUARDRAIL_DELTA: f64 = 0.005;
 const MISSED_GUARDRAIL_ABSOLUTE: f64 = 0.02;
@@ -342,6 +347,18 @@ struct TreatmentSummary
    callback_hitch_ms_per_elapsed_second: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct MedianConfidenceInterval
+{
+   pub method: &'static str,
+   pub target_coverage: f64,
+   pub achieved_coverage: f64,
+   pub sample_count: usize,
+   pub lower_rank: usize,
+   pub upper_rank: usize,
+   pub bounds: [f64; 2],
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct TravelEquivalenceResult
 {
@@ -349,8 +366,7 @@ struct TravelEquivalenceResult
    direction: String,
    pair_count: usize,
    median_relative_delta: f64,
-   confidence_95_lower: f64,
-   confidence_95_upper: f64,
+   confidence_interval: MedianConfidenceInterval,
    median_margin: f64,
    confidence_margin: f64,
    passes: bool,
@@ -369,8 +385,7 @@ struct Comparison
    comparator: String,
    classification: String,
    median_pair_relative_p95_delta: f64,
-   confidence_95_lower: f64,
-   confidence_95_upper: f64,
+   confidence_interval: MedianConfidenceInterval,
    oxide_interval_p50_ms: f64,
    comparator_interval_p50_ms: f64,
    oxide_interval_p95_ms: f64,
@@ -379,8 +394,6 @@ struct Comparison
    comparator_missed_deadline_ratio: f64,
    oxide_hitch_ms_per_second: f64,
    comparator_hitch_ms_per_second: f64,
-   bootstrap_resamples: usize,
-   bootstrap_seed_hex: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -486,9 +499,33 @@ pub fn frozen_components(start_state: &str) -> Result<Vec<Component>, String>
    frozen_visible_components(start_state)
 }
 
-pub fn deterministic_bootstrap_interval(pair_deltas: &[f64]) -> Result<(f64, f64), String>
+pub fn exact_median_confidence_interval(pair_deltas: &[f64]) -> Result<MedianConfidenceInterval, String>
 {
-   clustered_bootstrap_interval(pair_deltas)
+   exact_median_analysis(pair_deltas).map(|(_, interval)| interval)
+}
+
+fn exact_median_analysis(pair_deltas: &[f64]) -> Result<(f64, MedianConfidenceInterval), String>
+{
+   if pair_deltas.len() != CONFIDENCE_PAIR_COUNT
+   {
+      return Err(format!(
+         "exact median confidence interval has {} gesture pairs, expected {CONFIDENCE_PAIR_COUNT}",
+         pair_deltas.len()
+      ));
+   }
+   finite(pair_deltas, "pair deltas")?;
+   let mut sorted = pair_deltas.to_vec();
+   sorted.sort_by(f64::total_cmp);
+   let median = sorted[CONFIDENCE_PAIR_COUNT / 2];
+   Ok((median, MedianConfidenceInterval {
+      method: CONFIDENCE_INTERVAL_METHOD,
+      target_coverage: CONFIDENCE_TARGET_COVERAGE,
+      achieved_coverage: CONFIDENCE_ACHIEVED_COVERAGE,
+      sample_count: CONFIDENCE_PAIR_COUNT,
+      lower_rank: CONFIDENCE_LOWER_RANK,
+      upper_rank: CONFIDENCE_UPPER_RANK,
+      bounds: [sorted[CONFIDENCE_LOWER_RANK - 1], sorted[CONFIDENCE_UPPER_RANK - 1]],
+   }))
 }
 
 pub fn frozen_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -> Result<u32, String>
@@ -1261,32 +1298,26 @@ fn validate_travel(runs: &[MeasuredRun], population: Population) -> TravelValida
             ));
             continue;
          }
-         let median = match percentile(&deltas, 0.50)
+         let (median, confidence_interval) = match exact_median_analysis(&deltas)
          {
-            Ok(median) => median,
+            Ok(analysis) => analysis,
             Err(error) =>
             {
-               validation.blockers.push(format!("primary travel equivalence median failed for {treatment} {direction}: {error}"));
+               validation.blockers.push(format!("primary travel equivalence confidence interval failed for {treatment} {direction}: {error}"));
                continue;
             }
          };
-         let (lower, upper) = match clustered_bootstrap_interval(&deltas)
-         {
-            Ok(interval) => interval,
-            Err(error) =>
-            {
-               validation.blockers.push(format!("primary travel equivalence bootstrap failed for {treatment} {direction}: {error}"));
-               continue;
-            }
-         };
-         let passes = travel_equivalence_passes(median, lower, upper);
+         let passes = travel_equivalence_passes(
+            median,
+            confidence_interval.bounds[0],
+            confidence_interval.bounds[1],
+         );
          validation.results.push(TravelEquivalenceResult {
             treatment: treatment.to_string(),
             direction: direction.to_string(),
             pair_count: deltas.len(),
             median_relative_delta: median,
-            confidence_95_lower: lower,
-            confidence_95_upper: upper,
+            confidence_interval,
             median_margin: TRAVEL_MEDIAN_EQUIVALENCE_MARGIN,
             confidence_margin: TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN,
             passes,
@@ -1296,8 +1327,8 @@ fn validate_travel(runs: &[MeasuredRun], population: Population) -> TravelValida
             validation.blockers.push(format!(
                "primary travel equivalence {treatment} {direction}: median {:+.2}% and 95% interval [{:+.2}%, {:+.2}%] violate the frozen 5%/10% margins",
                median * 100.0,
-               lower * 100.0,
-               upper * 100.0
+               confidence_interval.bounds[0] * 100.0,
+               confidence_interval.bounds[1] * 100.0
             ));
          }
       }
@@ -1579,25 +1610,28 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
          deltas.push((oxide_p95 / comparator_p95) - 1.0);
       }
    }
-   let median_delta = percentile(&deltas, 0.50)?;
-   let (lower, upper) = clustered_bootstrap_interval(&deltas)?;
+   let (median_delta, confidence_interval) = exact_median_analysis(&deltas)?;
    let missed_guardrail = oxide.missed_callback_deadline_ratio
       <= native.missed_callback_deadline_ratio + MISSED_GUARDRAIL_DELTA
       && oxide.missed_callback_deadline_ratio <= MISSED_GUARDRAIL_ABSOLUTE;
    let hitch_guardrail = oxide.callback_hitch_ms_per_elapsed_second
       <= native.callback_hitch_ms_per_elapsed_second + HITCH_GUARDRAIL_DELTA_MS_S
       && oxide.callback_hitch_ms_per_elapsed_second <= HITCH_GUARDRAIL_ABSOLUTE_MS_S;
-   let classification = if lower > NON_INFERIOR_MARGIN || !missed_guardrail || !hitch_guardrail
+   let classification = if confidence_interval.bounds[0] > NON_INFERIOR_MARGIN
+      || !missed_guardrail
+      || !hitch_guardrail
    {
       "slower"
    }
    else if oxide.interval_p50_ms < native.interval_p50_ms
       && oxide.interval_p95_ms < native.interval_p95_ms
-      && upper < 0.0
+      && confidence_interval.bounds[1] < 0.0
    {
       "faster"
    }
-   else if upper <= NON_INFERIOR_MARGIN && missed_guardrail && hitch_guardrail
+   else if confidence_interval.bounds[1] <= NON_INFERIOR_MARGIN
+      && missed_guardrail
+      && hitch_guardrail
    {
       "non-inferior"
    }
@@ -1609,8 +1643,7 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
       comparator: comparator.to_string(),
       classification: classification.to_string(),
       median_pair_relative_p95_delta: median_delta,
-      confidence_95_lower: lower,
-      confidence_95_upper: upper,
+      confidence_interval,
       oxide_interval_p50_ms: oxide.interval_p50_ms,
       comparator_interval_p50_ms: native.interval_p50_ms,
       oxide_interval_p95_ms: oxide.interval_p95_ms,
@@ -1619,65 +1652,7 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
       comparator_missed_deadline_ratio: native.missed_callback_deadline_ratio,
       oxide_hitch_ms_per_second: oxide.callback_hitch_ms_per_elapsed_second,
       comparator_hitch_ms_per_second: native.callback_hitch_ms_per_elapsed_second,
-      bootstrap_resamples: BOOTSTRAP_RESAMPLES,
-      bootstrap_seed_hex: format!("0x{BOOTSTRAP_SEED:016x}"),
    })
-}
-
-fn clustered_bootstrap_interval(pair_deltas: &[f64]) -> Result<(f64, f64), String>
-{
-   if pair_deltas.is_empty()
-   {
-      return Err("cluster bootstrap has no gesture pairs".to_string());
-   }
-   finite(pair_deltas, "pair deltas")?;
-   let mut rng = SplitMix64::new(BOOTSTRAP_SEED);
-   let mut samples = Vec::with_capacity(BOOTSTRAP_RESAMPLES);
-   let mut resample = vec![0.0; pair_deltas.len()];
-   for _ in 0 .. BOOTSTRAP_RESAMPLES
-   {
-      for value in &mut resample
-      {
-         *value = pair_deltas[rng.index(pair_deltas.len())];
-      }
-      samples.push(percentile(&resample, 0.50)?);
-   }
-   Ok((percentile(&samples, 0.025)?, percentile(&samples, 0.975)?))
-}
-
-struct SplitMix64
-{
-   state: u64,
-}
-
-impl SplitMix64
-{
-   fn new(seed: u64) -> Self
-   {
-      Self { state: seed }
-   }
-
-   fn next(&mut self) -> u64
-   {
-      self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-      let mut value = self.state;
-      value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-      value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-      value ^ (value >> 31)
-   }
-
-   fn index(&mut self, len: usize) -> usize
-   {
-      let zone = u64::MAX - (u64::MAX % len as u64);
-      loop
-      {
-         let value = self.next();
-         if value < zone
-         {
-            return (value % len as u64) as usize;
-         }
-      }
-   }
 }
 
 fn validate_population(runs: &[MeasuredRun], population: Population) -> Vec<String>
@@ -2431,7 +2406,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    };
    let report = Report {
       schema: "oxide.feed-v1.report",
-      schema_revision: 3,
+      schema_revision: 4,
       fixture_sha256: FIXTURE_SHA256,
       fixture_byte_count: FIXTURE_BYTE_COUNT,
       device,
@@ -2570,8 +2545,8 @@ fn render_markdown(report: &Report) -> String
             result.direction,
             result.pair_count,
             result.median_relative_delta * 100.0,
-            result.confidence_95_lower * 100.0,
-            result.confidence_95_upper * 100.0,
+            result.confidence_interval.bounds[0] * 100.0,
+            result.confidence_interval.bounds[1] * 100.0,
             result.median_margin * 100.0,
             result.confidence_margin * 100.0,
             if result.passes { "yes" } else { "no" }
@@ -2610,8 +2585,8 @@ fn render_markdown(report: &Report) -> String
             comparison.comparator,
             comparison.classification,
             comparison.median_pair_relative_p95_delta * 100.0,
-            comparison.confidence_95_lower * 100.0,
-            comparison.confidence_95_upper * 100.0,
+            comparison.confidence_interval.bounds[0] * 100.0,
+            comparison.confidence_interval.bounds[1] * 100.0,
             comparison.oxide_interval_p50_ms,
             comparison.comparator_interval_p50_ms,
             comparison.oxide_interval_p95_ms,
@@ -2670,14 +2645,11 @@ fn render_markdown(report: &Report) -> String
       report.evidence_manifest_sha256.as_deref().unwrap_or("missing")
    ));
    output.push_str(&format!("- Retained reducer input: {} bytes\n", report.retained_input_bytes));
-   if let Some(comparison) = report.comparisons.first()
-   {
-      output.push_str(&format!(
-         "- Bootstrap: {} clustered resamples, seed `{}`\n",
-         comparison.bootstrap_resamples,
-         comparison.bootstrap_seed_hex
-      ));
-   }
+   output.push_str(&format!(
+      "- Confidence interval: `{CONFIDENCE_INTERVAL_METHOD}`, ranks {CONFIDENCE_LOWER_RANK}-{CONFIDENCE_UPPER_RANK} of {CONFIDENCE_PAIR_COUNT}, target {:.3}%, achieved {:.6}%\n",
+      CONFIDENCE_TARGET_COVERAGE * 100.0,
+      CONFIDENCE_ACHIEVED_COVERAGE * 100.0
+   ));
    output.push_str(&format!("- Missing metrics: {}\n", report.missing_metrics.join(", ")));
    output.push_str("\nThese figures are display-link callback pacing only. They make no presented-frame, visible-frame, or photon-latency claim.\n");
    output
