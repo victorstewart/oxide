@@ -1,43 +1,50 @@
-# oxide-host-ios tests `drawable_tests.rs`
+# oxide-host-ios `tests/drawable_tests.rs`
 
 ## Intention and purpose
 
-These source-contract tests keep iOS drawable acquisition, frame preparation, injected-app retry ownership, retained scratch, damage handoff, and memory-pressure behavior aligned with the Rust-owned rendering lifecycle.
+Protect late drawable acquisition and prepared-frame ownership in the iOS product and benchmark hosts.
 
 ## Relation to the rest of the code
 
-The tests inspect `oxide-host-ios/src/lib.rs` and the Objective-C app shell without launching UIKit. Runtime Metal behavior is covered separately by renderer and device tests.
+- Reads production `src/ios/product_app.m`, legacy `src/ios/app.m`, the Swift benchmark runtime, and Rust `src/lib.rs` as static host contracts.
+- Complements fresh external A/B measurement of the real native host preparation path without adding a benchmark dependency or toggle to the product host.
 
 ## Entry points list
 
-- `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before marking the frame dirty.
-- Other tests freeze late drawable acquisition, prepared-frame cancellation, native coalescing scratch, and reusable damage storage.
-- `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection before a backpressure-skipped frame can emit successful renderer feedback.
-- `injected_lifecycle_resets_display_timing_after_suspension()` prevents a background interval from becoming the next frame's delta.
+- `frame_with_drawable_stub()` verifies the uninitialized status code.
+- `ios_tick_prepares_frame_before_acquiring_drawable()` and `ios_perf_runtime_prepares_frame_before_acquiring_drawable()` verify prepare/acquire/submit ordering and cancellation.
+- `ios_metal_layer_uses_timeout_capable_drawable_acquisition()` verifies timeout support.
+- `native_frame_preparation_reuses_app_owned_storage()` verifies command and damage storage ownership.
+- `prepared_frame_failures_keep_ios_clear_instead_of_retry_policy()` freezes the established iOS submit-error and cancellation policy, distinct from macOS retry retention.
+- `injected_shell_is_full_screen_and_bypasses_test_chrome()` protects the pure production shell and permits only explicit negative accessibility assignments.
+- `raw_touch_and_display_link_timestamps_preserve_os_samples()` protects exact OS timing.
+- `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection and drawable cancellation before a backpressure-skipped frame can emit observational submit feedback.
+- `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before requesting a rebuild.
+- The remaining tests protect parked benchmark launch routing and foreground execution.
 
 ## Logic narrative
 
-Each test isolates the relevant source section and requires the exact host-to-renderer call sequence. The memory-warning gate keeps cache release in Rust and guarantees the next ordinary frame reconstructs visible resources instead of adding UIKit-owned recovery state.
+Static checks are used for Objective-C/Swift ordering because drawable timeout pressure is nondeterministic in libtest. Rust-source checks ensure the frame loop calls the caller-storage variants, recovers the damage vector after `begin_frame`, and keeps renderer-cache recovery in Rust.
 
 ## Preconditions and postconditions
 
-The source markers used to isolate handlers must remain present. Passing proves required calls are wired; it does not substitute for runtime Metal validation.
+The native entry-point names and source locations must remain stable. Passing preserves late acquisition, cancellation, and reusable frame storage.
 
 ## Edge cases and failure modes
 
-A renamed or removed purge call fails explicitly. Missing handler boundaries fail before substring assertions can pass accidentally against unrelated code. The suite rejects injected paths that acknowledge a wake before submit or clear a prepared frame instead of retrying it.
+The suite rejects early drawable acquisition, blocking timeout policy, allocating convenience helpers, test chrome in the production branch, clearing injected-app damage/demand before a successful submit, or acknowledging a renderer backpressure skip as presentation. The separate legacy test-host clear-on-cancel policy remains frozen.
 
 ## Concurrency and memory behavior
 
-Tests only read compile-time source strings. The production handler runs while holding the app-state mutex and releases renderer cache ownership synchronously before scheduling another frame.
+These tests inspect immutable source text and do not start UIKit or share mutable native host state.
 
 ## Performance notes
 
-Prepared and ID-mask field-cache purges are memory-pressure-only and add no ordinary frame work.
+Source gates prove ownership; allocation and latency evidence comes from the external device harness so no measurement allocator enters the host package graph. Memory-pressure purges add no ordinary frame work.
 
 ## Feature flags and cfgs
 
-The tests run on the macOS development host and do not require an iOS simulator.
+No feature flag is required.
 
 ## Testing and benchmarks
 
@@ -45,11 +52,14 @@ Run `cargo test --locked -p oxide-host-ios --test drawable_tests`.
 
 ## Examples
 
-The required pressure sequence contains `renderer.purge_effect_targets();`, `renderer.purge_layer_cache_for_memory_warning();`, `renderer.purge_prepared_chunks();`, `renderer.purge_id_mask_field_cache();`, then `mark_frame_dirty(app);`.
+```rust
+let source = include_str!("../../src/lib.rs");
+assert!(source.contains("coalesce_adjacent_draws_reuse"));
+```
 
 ## Changelog
 
-- 2026-08-06: added injected-app wake acknowledgement, retry/backpressure, renderer-feedback, and lifecycle timing gates.
-- 2026-07-14: required critical memory warnings to purge immutable ID-mask raster/JFA fields.
-- 2026-07-14: required the iOS memory-warning handler to purge retained layer storage alongside effect and prepared caches.
-- 2026-07-13: required critical memory warnings to purge persistent prepared chunks.
+- 2026-08-06: preserved production renderer-cache purging across the injected/legacy host split.
+- 2026-08-06: Rejected backpressure-skipped frames before encode/submit and froze exact prepared-frame retry plus no-feedback semantics.
+- 2026-08-06: Added injected-shell, OS timestamp, wake acknowledgement, and deployment-target gates.
+- 2026-08-02: Added command/damage reuse and clear-on-cancel ownership gates.

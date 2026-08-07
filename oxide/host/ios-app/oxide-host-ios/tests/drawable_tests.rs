@@ -103,9 +103,14 @@ fn ios_display_link_observes_missed_wakes_and_preserves_lifecycle_pauses() {
 
 #[test]
 fn ios_tick_prepares_frame_before_acquiring_drawable() {
-    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ios/app.m"));
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/ios/product_app.m"
+    ));
     let tick = source.split("- (void)onTick:").nth(1).expect("MetalView onTick implementation");
-    let prepare = tick.find("oxide_host_app_prepare_frame").expect("prepare frame call");
+    let prepare = tick
+        .find("oxide_host_app_prepare_frame_timed")
+        .expect("timed prepare frame call");
     let acquire = tick.find("nextDrawable").expect("drawable acquisition");
     let submit = tick
         .find("oxide_host_app_submit_prepared_frame_with_drawable")
@@ -114,16 +119,47 @@ fn ios_tick_prepares_frame_before_acquiring_drawable() {
     assert!(prepare < acquire, "iOS app host must prepare CPU frame work before nextDrawable");
     assert!(acquire < submit, "iOS app host must acquire the drawable immediately before submit");
     assert!(tick.contains("oxide_host_app_cancel_prepared_frame"));
+    assert!(tick.contains("seconds_to_ns(link.timestamp)"));
+    assert!(tick.contains("seconds_to_ns(link.targetTimestamp)"));
 }
 
 #[test]
-fn ios_metal_layer_uses_timeout_capable_drawable_acquisition() {
-    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ios/app.m"));
+fn injected_shell_is_full_screen_and_bypasses_test_chrome()
+{
+   let source = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/src/ios/product_app.m"
+   ));
+   let connect = source
+      .splitn(2, "willConnectToSession:(UISceneSession *)session")
+      .nth(1)
+      .expect("scene connection implementation");
 
-    assert!(
-        source.contains("layer.allowsNextDrawableTimeout = YES;"),
-        "iOS host must allow nextDrawable timeout so a prepared frame can be canceled instead of blocking indefinitely"
-    );
+   assert!(connect.contains("controller.view = metal_view;"));
+   assert!(connect.contains("window.rootViewController = controller;"));
+   assert!(connect.contains("CADisplayLink displayLinkWithTarget:self"));
+   assert!(!source.contains("UISegmentedControl"));
+   assert!(!source.contains("UIStackView"));
+   assert_eq!(source.matches("self.isAccessibilityElement = NO;").count(), 2);
+   assert_eq!(source.matches("self.accessibilityElementsHidden = YES;").count(), 2);
+   assert!(!source.contains("accessibilityIdentifier"));
+   assert!(!source.contains("accessibilityLabel"));
+   assert!(!source.contains("accessibilityTraits"));
+   assert!(!source.contains("oxide_host_is_injected_app"));
+}
+
+#[test]
+fn raw_touch_and_display_link_timestamps_preserve_os_samples()
+{
+   let source = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/src/ios/product_app.m"
+   ));
+
+   assert!(source.contains("device, seconds_to_ns(touch.timestamp)"));
+   assert!(source.contains("seconds_to_ns(link.timestamp)"));
+   assert!(source.contains("seconds_to_ns(link.targetTimestamp)"));
+   assert!(!source.contains("device, ts_now_ns());"));
 }
 
 #[test]
@@ -196,6 +232,35 @@ fn injected_lifecycle_resets_display_timing_after_suspension()
 
    assert!(background.contains("injected.last_target_timestamp_ns = 0"));
    assert!(foreground.contains("injected.last_target_timestamp_ns = 0"));
+}
+
+#[test]
+fn xcode_rust_build_preserves_the_ios_deployment_target()
+{
+   let project = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../App/project.yml"));
+
+   assert!(project.contains(
+      "RUST_IOS_DEPLOYMENT_TARGET=\"${IPHONEOS_DEPLOYMENT_TARGET:-18.0}\""
+   ));
+   assert!(project.contains(
+      "export IPHONEOS_DEPLOYMENT_TARGET=\"${RUST_IOS_DEPLOYMENT_TARGET}\""
+   ));
+   assert!(project.contains("unset SDKROOT SDK_DIR SDK_NAME"));
+   assert!(!project.contains("unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET"));
+   assert!(project.contains("--features perf-host-stubs,test-scenes-entrypoint"));
+}
+
+#[test]
+fn ios_metal_layer_uses_timeout_capable_drawable_acquisition() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/ios/product_app.m"
+    ));
+
+    assert!(
+        source.contains("layer.allowsNextDrawableTimeout = YES;"),
+        "iOS host must allow nextDrawable timeout so a prepared frame can be canceled instead of blocking indefinitely"
+    );
 }
 
 #[test]
