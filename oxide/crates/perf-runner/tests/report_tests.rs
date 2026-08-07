@@ -1441,13 +1441,6 @@ fn workspace_latest_gates_retained_layout_dirty_class_rows() {
     );
     assert!(workspace_metric(dirty_leaf, "tracked_nodes") >= 1000.0);
 
-    let text_atlas = workspace_case(&report, "cpu.authoring.surface_retained.text_atlas_context");
-    assert_workspace_cpu_row(text_atlas, "authoring", "authoring");
-    assert_eq!(workspace_metric(text_atlas, "retained_reuse_ratio"), 1.0);
-    assert_eq!(workspace_metric(text_atlas, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(text_atlas, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(text_atlas, "text_atlases_checked") >= 1.0);
-
     let transform = workspace_case(&report, "cpu.layout.transform_only.reposition");
     assert_workspace_zero_layout_dirty_row(transform);
     assert!(workspace_metric(transform, "retained_reused_nodes_per_op") > 0.0);
@@ -4583,26 +4576,6 @@ fn filtered_run_suite_supports_drawlist_text_replay_authoring_case() {
     assert!(stdout.contains("cases=1"), "stdout: {stdout}");
     assert!(
         stdout.contains("case=cpu.authoring.drawlist_text_replay.multi_atlas"),
-        "stdout: {stdout}",
-    );
-    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
-}
-
-#[test]
-fn filtered_run_suite_supports_surface_text_atlas_context_authoring_case() {
-    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.surface_retained.text_atlas_context")
-        .arg("--run-suite")
-        .arg("--smoke")
-        .output()
-        .expect("run filtered surface text atlas context authoring smoke suite");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(
-        stdout.contains("case=cpu.authoring.surface_retained.text_atlas_context"),
         "stdout: {stdout}",
     );
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");

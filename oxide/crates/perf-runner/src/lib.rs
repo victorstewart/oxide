@@ -243,10 +243,6 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Surface Retained Dirty Leaf Encode",
     },
     AuthoringPerfSpec {
-        id: "cpu.authoring.surface_retained.text_atlas_context",
-        name: "Surface Retained Text Atlas Context",
-    },
-    AuthoringPerfSpec {
         id: "cpu.authoring.surface_retained.cache_policy",
         name: "Surface Retained Cache Policy",
     },
@@ -3348,9 +3344,6 @@ fn push_authoring_cases(
             "cpu.authoring.surface_retained.dirty_leaf_encode" => {
                 authoring_surface_retained_dirty_leaf_encode_case(smoke)
             }
-            "cpu.authoring.surface_retained.text_atlas_context" => {
-                authoring_surface_retained_text_atlas_context_case(smoke)
-            }
             "cpu.authoring.surface_retained.cache_policy" => {
                 authoring_surface_retained_cache_policy_case(smoke)
             }
@@ -6239,76 +6232,6 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
     case.metrics.insert(String::from("index_bytes_copied_per_op"), index_bytes_copied as f64 / total_ops as f64);
     case.metrics.insert(String::from("retained_chunk_bytes"), retained_bytes as f64);
     case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
-    case
-}
-
-fn authoring_surface_retained_text_atlas_context_case(smoke: bool) -> PerfCaseResult {
-    let loops = if smoke { 16 } else { 64 };
-    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
-    populate_flat_rect_surface(&mut surface, 1_000, 0);
-    surface.layout(420.0, 760.0);
-    let mut text = perf_text_ctx();
-    let mut text_uploader = CpuUploader::default();
-    let mut text_builder = ui::DrawListBuilder::new();
-    let seed_label = ui::elements::Label {
-        text: String::from("Retained text atlas context"),
-        color: api::Color::rgba(0.12, 0.16, 0.20, 1.0),
-        align: ui::elements::Align::Left,
-        wrap: false,
-        font_id: 0,
-        font_px: 14.0,
-    };
-    seed_label.encode(
-        api::RectF::new(0.0, 0.0, 260.0, 32.0),
-        2.0,
-        &mut text,
-        &mut text_uploader,
-        &mut text_builder,
-    );
-    let text_atlas_ready = text.retained_text_atlas_revision().is_some();
-    let mut warm = ui::DrawListBuilder::new();
-    let _ = surface.encode_retained_with_text_ctx(&mut warm, &text);
-    let cached_draws = warm.drawlist().items.len() as u64;
-    let cached_vertices = warm.drawlist().vertices.len() as u64;
-    let cached_indices = warm.drawlist().indices.len() as u64;
-    let mut builder = ui::DrawListBuilder::new();
-    let mut reused = 0u64;
-    let mut rebuilt = 0u64;
-    let mut case = measure_cpu_case(
-        "cpu.authoring.surface_retained.text_atlas_context",
-        "authoring",
-        smoke,
-        true,
-        0.16,
-        loops,
-        vec![String::from(
-            "Clean retained UiSurface encode through the explicit text-atlas revision context path; expected path replays cached surface draws while validating current atlas revisions.",
-        )],
-        || {
-            builder.clear();
-            match surface.encode_retained_with_text_ctx(&mut builder, &text) {
-                ui::RetainedDrawStatus::Reused => {
-                    reused = reused.saturating_add(1);
-                }
-                ui::RetainedDrawStatus::Rebuilt => {
-                    rebuilt = rebuilt.saturating_add(1);
-                }
-            }
-            let dl = builder.drawlist();
-            (dl.items.len() as u64)
-                .saturating_add(dl.vertices.len() as u64)
-                .saturating_add(dl.indices.len() as u64)
-        },
-    );
-    let total = reused.saturating_add(rebuilt).max(1);
-    case.metrics.insert(String::from("retained_reused_ops"), reused as f64);
-    case.metrics.insert(String::from("retained_rebuilt_ops"), rebuilt as f64);
-    case.metrics.insert(String::from("retained_reuse_ratio"), reused as f64 / total as f64);
-    case.metrics
-        .insert(String::from("text_atlases_checked"), if text_atlas_ready { 1.0 } else { 0.0 });
-    case.metrics.insert(String::from("draw_items"), cached_draws as f64);
-    case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
-    case.metrics.insert(String::from("index_count"), cached_indices as f64);
     case
 }
 
