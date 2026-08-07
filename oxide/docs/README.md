@@ -24,6 +24,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [renderer-metal](renderer-metal/lib.md)
 - [renderer-metal effects shader](renderer-metal/shaders/effects.md)
 - [renderer-metal ID-mask GPU path](renderer-metal/id_mask_gpu.md)
+- [renderer-metal neon-marker GPU path](renderer-metal/neon_marker_gpu.md)
 - [renderer-metal prepared chunks](renderer-metal/prepared.md)
 - [renderer-web](renderer-web/lib.md)
 - [snapshot-runner](snapshot-runner/main.md)
