@@ -3559,6 +3559,37 @@ fn markdown_out_writes_identical_latest_and_dated_reports() {
 }
 
 #[test]
+fn filtered_registry_cases_do_not_expand_siblings()
+{
+   for (filter, expected, sibling) in [
+      (
+         "cpu.component.label.encode",
+         "case=cpu.component.label.encode",
+         "case=cpu.component.button.encode",
+      ),
+      (
+         "cpu.animation.image_zoom_pan",
+         "case=cpu.animation.image_zoom_pan",
+         "case=cpu.animation.spinner_spin",
+      ),
+   ]
+   {
+      let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+         .env("OXIDE_PERF_RUNNER_FILTER", filter)
+         .arg("--smoke")
+         .output()
+         .expect("run filtered registry case");
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      let stderr = String::from_utf8_lossy(&output.stderr);
+
+      assert!(output.status.success(), "filtered registry case failed: {stderr}");
+      assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+      assert!(stdout.contains(expected), "stdout: {stdout}");
+      assert!(!stdout.contains(sibling), "stdout: {stdout}");
+   }
+}
+
+#[test]
 fn markdown_render_bench_iters_requires_report_path() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .arg("--bench-markdown-iters")

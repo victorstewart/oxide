@@ -3155,42 +3155,80 @@ fn push_component_cases(
     cases: &mut Vec<PerfCaseResult>,
     smoke: bool,
     covered: &mut BTreeSet<String>,
-) {
-    for spec in registry::components() {
-        covered.insert(spec.name.to_string());
-        let case = match spec.id {
-            registry::ComponentId::Label => component_label_case(smoke),
-            registry::ComponentId::ProgressBar => component_progress_case(smoke),
-            registry::ComponentId::Spinner => component_spinner_case(smoke),
-            registry::ComponentId::Button => component_button_case(smoke),
-            registry::ComponentId::Toggle => component_toggle_case(smoke),
-            registry::ComponentId::Slider => component_slider_case(smoke),
-            registry::ComponentId::ImageView => component_image_case(smoke),
-            registry::ComponentId::NineSliceImage => component_nine_slice_case(smoke),
-            registry::ComponentId::CollectionView => component_collection_case(smoke),
-        };
-        cases.push(case);
-    }
+)
+{
+   for spec in registry::components()
+   {
+      let (case_id, build): (&str, fn(bool) -> PerfCaseResult) = match spec.id
+      {
+         registry::ComponentId::Label => ("cpu.component.label.encode", component_label_case),
+         registry::ComponentId::ProgressBar => {
+            ("cpu.component.progress_bar.encode", component_progress_case)
+         }
+         registry::ComponentId::Spinner => {
+            ("cpu.component.spinner.encode", component_spinner_case)
+         }
+         registry::ComponentId::Button => ("cpu.component.button.encode", component_button_case),
+         registry::ComponentId::Toggle => ("cpu.component.toggle.encode", component_toggle_case),
+         registry::ComponentId::Slider => ("cpu.component.slider.encode", component_slider_case),
+         registry::ComponentId::ImageView => {
+            ("cpu.component.image_view.encode", component_image_case)
+         }
+         registry::ComponentId::NineSliceImage => {
+            ("cpu.component.nine_slice_image.encode", component_nine_slice_case)
+         }
+         registry::ComponentId::CollectionView => {
+            ("cpu.component.collection_view.encode", component_collection_case)
+         }
+      };
+      if !perf_case_allowed(case_id)
+      {
+         continue;
+      }
+      covered.insert(spec.name.to_string());
+      cases.push(build(smoke));
+   }
 }
 
 fn push_animation_cases(
     cases: &mut Vec<PerfCaseResult>,
     smoke: bool,
     covered: &mut BTreeSet<String>,
-) {
-    for spec in registry::animations() {
-        covered.insert(spec.name.to_string());
-        let case = match spec.id {
-            registry::AnimationId::SpinnerSpin => animation_spinner_case(smoke),
-            registry::AnimationId::ProgressIndeterminate => animation_progress_case(smoke),
-            registry::AnimationId::ButtonPressScale => animation_button_case(smoke),
-            registry::AnimationId::ToggleThumbSpring => animation_toggle_case(smoke),
-            registry::AnimationId::SliderThumbMove => animation_slider_case(smoke),
-            registry::AnimationId::ImageZoomPan => animation_image_zoom_case(smoke),
-            registry::AnimationId::AnimTimelineBars => animation_timeline_case(smoke),
-        };
-        cases.push(case);
-    }
+)
+{
+   for spec in registry::animations()
+   {
+      let (case_id, build): (&str, fn(bool) -> PerfCaseResult) = match spec.id
+      {
+         registry::AnimationId::SpinnerSpin => {
+            ("cpu.animation.spinner_spin", animation_spinner_case)
+         }
+         registry::AnimationId::ProgressIndeterminate => {
+            ("cpu.animation.progress_indeterminate", animation_progress_case)
+         }
+         registry::AnimationId::ButtonPressScale => {
+            ("cpu.animation.button_press_scale", animation_button_case)
+         }
+         registry::AnimationId::ToggleThumbSpring => {
+            ("cpu.animation.toggle_thumb_spring", animation_toggle_case)
+         }
+         registry::AnimationId::SliderThumbMove => {
+            ("cpu.animation.slider_thumb_move", animation_slider_case)
+         }
+         registry::AnimationId::ImageZoomPan => {
+            ("cpu.animation.image_zoom_pan", animation_image_zoom_case)
+         }
+         registry::AnimationId::AnimTimelineBars => {
+            ("cpu.animation.anim_timeline_bars", animation_timeline_case)
+         }
+      };
+      if !perf_case_allowed(case_id)
+      {
+         continue;
+      }
+      covered.insert(spec.name.to_string());
+      cases.push(build(smoke));
+   }
 }
 
 fn push_gpu_animation_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
