@@ -80,7 +80,7 @@ pub struct Databento
 - Oxide intentionally does not implement or expose OS accessibility trees, VoiceOver elements, accessibility roles/actions, dynamic-type policy, or an accessibility bridge on any platform.
 - Never add accessibility as a product requirement, authoring recommendation, comparison workload, parity criterion, admission gate, benchmark metric, or optimization constraint.
 - Do not add platform accessibility or automation identifiers in new Oxide code. Harnesses must use app/window queries, raw coordinates, and non-accessibility lifecycle signals where possible. Existing identifier-based harness controls are legacy cleanup candidates: do not expand them, and remove them when their tests can migrate atomically.
-- Existing accessibility-named public fields or dirty-state variants are compatibility artifacts, not endorsed features. They may retain only the behavior required by an existing public contract; do not expand them, make new code depend on them, or delete released API without explicit breaking-release authority.
+- Oxide retains no accessibility-named public API, dirty-state variant, or compatibility slot. Do not introduce or restore one.
 
 ## Performance Requirements
 - GPU graphics work must start from the highest-performance discipline before code changes:

@@ -83,7 +83,7 @@ Use sources in this order:
 
 1. Oxide source, `AGENTS.md`, `spec.xml`, persisted benchmark reports, snapshot goldens, device captures, CI, and current PR diff.
 2. Apple primary sources: Metal documentation, Metal Best Practices, WWDC sessions, Xcode Metal Frame Capture, Metal System Trace, Metal Performance HUD, shader profiler, GPU counters.
-3. Production UI/2D renderer projects: Skia/Graphite, Vello, Flutter Impeller, Rive Renderer, Iced, egui, Xilem/Masonry, Taffy, AccessKit, Dear ImGui, Nuklear.
+3. Production UI/2D renderer projects: Skia/Graphite, Vello, Flutter Impeller, Rive Renderer, Iced, egui, Xilem/Masonry, Taffy, Dear ImGui, Nuklear.
 4. Production renderer/game-engine codebases: Filament, bgfx, The Forge, IGL, wgpu, Godot, Unity docs, Unreal docs, Cocos2d-x, MetalPetal, GPUImage3, BBMetalImage.
 5. General GPU/API wisdom: Arm tile-based rendering guidance, NVIDIA Vulkan guidance, AMD GPUOpen, Vulkan synchronization examples, Zeux production renderer writing.
 6. Tweets/social posts: leads only. Convert them into rules only after verifying against source code, docs, or captures.
@@ -171,7 +171,7 @@ Accepted regressions require an explicit reviewed baseline update and a written 
 ### State, tree, diff, and invalidation
 
 - Keep stable node IDs across layout, hit testing, animation, input routing, text cache, and retained render data.
-- Separate invalidation classes that affect supported behavior: style, layout, text, paint, transform, opacity, clip, image content, camera frame, and hit-test data. Existing accessibility-named variants are compatibility-only and must not grow new behavior.
+- Separate invalidation classes that affect supported behavior: style, layout, text, paint, transform, opacity, clip, image content, camera frame, and hit-test data. Do not add accessibility-named invalidation variants.
 - Do not relayout or repaint the whole tree for pointer movement, cursor blink, timer tick, or single-node state changes.
 - Virtualize collection/list/grid/chat workloads. Do not layout or draw thousands of offscreen nodes.
 - Prefer dirty subtrees and retained draw lists, but do not let damage tracking cost more than repainting.
@@ -261,7 +261,7 @@ Text is a performance and correctness subsystem, not a primitive draw detail.
 - Do not optimize away marked text, candidate-bar behavior, or selection geometry.
 - Do not add OS accessibility trees, VoiceOver elements, platform accessibility bridges, or accessibility-driven benchmark requirements.
 - Do not add UIKit/AppKit accessibility or automation identifiers. Migrate touched harnesses to app/window queries, raw coordinates, and non-accessibility lifecycle signals when that can be done atomically.
-- Preserve released accessibility-named API only when compatibility requires it. It may retain only behavior required by the existing public contract; never expand it or make new code depend on it.
+- Oxide retains no accessibility-named product API or compatibility slot. Do not introduce or restore one.
 
 ## Metal backend rules for Oxide
 
@@ -718,7 +718,6 @@ Regression risk:
 - Taffy: https://github.com/DioxusLabs/taffy
 - Dear ImGui: https://github.com/ocornut/imgui
 - Nuklear: https://github.com/Immediate-Mode-UI/Nuklear
-- AccessKit: https://github.com/AccessKit/accesskit
 - MetalPetal: https://github.com/MetalPetal/MetalPetal
 - GPUImage3: https://github.com/BradLarson/GPUImage3
 - BBMetalImage: https://github.com/Silence-GitHub/BBMetalImage

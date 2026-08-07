@@ -68,7 +68,7 @@ Faster is invalid if it silently renders fewer pixels, weaker effects, or lower-
 
 Accessibility is intentionally outside the Oxide product and comparison contract. Do not add OS accessibility trees, VoiceOver behavior, accessibility metadata, roles/actions, dynamic-type policy, parity workloads, admission gates, report metrics, or optimization constraints.
 
-Do not add platform accessibility or automation identifiers to new benchmark code. Use app/window queries, raw coordinates, and non-accessibility lifecycle signals instead. Existing identifier-based harness controls are cleanup candidates and must not expand. Released accessibility-named API slots may remain for compatibility, but they are not benchmark workloads and new cases must not depend on them.
+Do not add platform accessibility or automation identifiers to benchmark code. Use app/window queries, raw coordinates, and non-accessibility lifecycle signals instead. Existing identifier-based harness controls are cleanup candidates and must not expand. Oxide retains no accessibility-named product or benchmark API slot; do not introduce or restore one.
 
 ## Shared Phases
 
