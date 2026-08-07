@@ -164,9 +164,6 @@ Tests are kept outside production source and documented in
   exact binomial median interval, persisted achieved coverage and rank bounds,
   raised physical-device evidence from five to the requirement-minimal six
   pairs, and advanced the unpublished schema to version 2.
-- 2026-08-07: bounded broad reducer correctness tests to 1,024 deterministic
-  bootstrap resamples while retaining one exported CLI analysis at the fixed
-  100,000-resample publication contract.
 - 2026-08-06: closed invalidation to four mechanically evidenced reasons,
   capped invalid pairs at 10%, preserved survivor AB/BA balance, required equal
   valid-pair sample counts, and validated all invalid-pair evidence.

@@ -157,8 +157,6 @@ cargo test --locked -p oxide-perf-runner --test paired_experiment_tests \
 - 2026-08-07: replaced simulated bootstrap coverage with exact 15-pair and
   minimum six-pair rank/coverage assertions and removed the final 100,000-draw
   CLI test path.
-- 2026-08-07: reduced repeated correctness bootstrap work by 94.48% while
-  retaining one end-to-end 100,000-resample CLI publication check.
 - 2026-08-06: added exploit, closed-schema, invalidation-cap, survivor-balance,
   equal-population, invalid-evidence, and persisted-null compatibility coverage.
 - 2026-08-06: required serialized metric direction and exact baseline/candidate p05, p01, and minimum decision inputs.
