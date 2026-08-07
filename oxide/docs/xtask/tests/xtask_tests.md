@@ -23,6 +23,7 @@ Call flow:
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.
 - `oxide_device_contract_source_lists_canonical_families()` and `xtask_docs_describe_experiment_manifest_check()`: keep policy source and documentation wired.
+- `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
 - Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, promotion prerequisites, and committed-baseline status.
@@ -32,6 +33,11 @@ Call flow:
 ## Logic narrative
 
 Manifest tests parse the committed TOML through the same production checker used by `cargo xtask experiments check`. The acceptance test first requires important historical ids, then compares the returned summary with the exact committed population so a new experiment must intentionally update the contract. Negative tests isolate expiry, missing A/B policy, and missing decision proof.
+
+The `test-all` source guard isolates the command body and rejects a second
+featureless `cargo test` pass while requiring the all-target `cargo check`
+replacement. It validates orchestration without recursively launching the
+workspace suite from inside an integration test.
 
 Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
 
@@ -68,6 +74,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: Required `test-all` to compile, rather than rerun, the featureless workspace test graph.
 - 2026-07-15: froze C60's accepted image-store experiment, two rejected UIKit proof paths, and the 190-entry, 88-accepted, 102-rejected manifest totals.
 - 2026-07-14: froze the accepted C35 WebGPU ID-mask field packing and the 170-entry, 81-accepted, 89-rejected manifest totals.
 - 2026-07-14: froze the accepted C34 Metal ID-mask field packing, three rejected compositor guardrail refinements, and the 169-entry, 80-accepted, 89-rejected manifest totals.

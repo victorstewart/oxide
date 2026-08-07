@@ -79,6 +79,23 @@ fn with_env_vars(vars: &[(&str, Option<&str>)], body: impl FnOnce()) {
     }
 }
 
+#[test]
+fn test_all_checks_the_featureless_graph_without_rerunning_test_binaries()
+{
+   let source = include_str!("../src/lib.rs");
+   let body = source
+      .split_once("fn test_all()")
+      .and_then(|(_, tail)| tail.split_once("fn experiments_check"))
+      .map(|(body, _)| body)
+      .expect("test_all source body");
+   assert!(body.contains(
+      "[\"check\", \"--workspace\", \"--all-targets\", \"--no-default-features\", \"--quiet\"]",
+   ));
+   assert!(!body.contains(
+      "[\"test\", \"--workspace\", \"--no-default-features\", \"--quiet\"]",
+   ));
+}
+
 fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
     PerfReport {
         version: 1,

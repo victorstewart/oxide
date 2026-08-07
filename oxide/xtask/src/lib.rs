@@ -2194,7 +2194,7 @@ fn test_all() -> Result<()> {
     run_command(
         &root,
         "cargo",
-        &["test", "--workspace", "--no-default-features", "--quiet"],
+        &["check", "--workspace", "--all-targets", "--no-default-features", "--quiet"],
         false,
     )?;
     run_command(&root, "cargo", &["hack", "check", "--each-feature", "--no-dev-deps"], true)?;

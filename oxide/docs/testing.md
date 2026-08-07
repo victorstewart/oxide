@@ -9,6 +9,9 @@ This document captures the current state of automated testing across the Oxide w
 - `cargo test --workspace --all-targets --all-features --locked` – runs the
   full local gate, including hosts, test scenes, snapshot/performance tools,
   and allocation instrumentation.
+- `cargo check --workspace --all-targets --no-default-features --locked` –
+  compiles the featureless graph without rerunning the already-covered test
+  binaries.
 - `cargo xtask ios prepare` – prepares the iOS host project (capabilities, entitlements, shaders).
 - `scripts/ios-test.sh` – convenience wrapper that prepares the project, builds iOS staticlibs, and runs the Xcode UI test target.
 - `cargo test -p oxide-ui-core` – runs CPU layout/collection simulation property tests.
