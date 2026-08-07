@@ -996,6 +996,7 @@ extern "C" {
     ) -> i32;
     fn oxide_cam_record_stop() -> i32;
     fn oxide_cam_record_cancel() -> i32;
+    #[cfg(target_os = "macos")]
     fn oxide_host_set_camera_running(on: u8) -> i32;
 }
 
@@ -1226,6 +1227,7 @@ impl AppleCameraManager {
         if rc != 0 {
             return Err(camera_error_from_rc(rc, "camera start failed"));
         }
+        #[cfg(target_os = "macos")]
         unsafe {
             let _ = oxide_host_set_camera_running(1);
         }
@@ -1235,6 +1237,7 @@ impl AppleCameraManager {
     fn stop_capture(&self) {
         unsafe {
             oxide_cam_stop();
+            #[cfg(target_os = "macos")]
             let _ = oxide_host_set_camera_running(0);
         }
     }

@@ -60,7 +60,7 @@
 - The media-library adapter owns Rust-side paging, asset mapping, image/video result conversion, optional BGRA helper loading, host-buffer release, and host return-code mapping; native hosts own Photos authorization and data extraction.
 - The push adapter owns Rust-side token caching, notification JSON-to-user-info conversion, subscriber fanout, badge calls, and delivered-notification clearing; native hosts own APNs registration and UserNotifications delegate delivery.
 - The Bluetooth adapter owns Rust-side initialization, subscriber fanout, discovered-peripheral cache, scan option marshaling, GATT read/write/notify calls, advertising calls, and state/restoration callbacks; the shared native CoreBluetooth source owns OS manager/delegate behavior.
-- The camera adapter owns Rust-side stream subscriber lists, audio subscriber detection, capture-setting forwarding, recording/photo callback fanout, NV12/audio sample conversion, host return-code mapping, and camera format recommendation helpers; native hosts own AVFoundation sessions, sample delivery, and platform-specific hardware controls.
+- The camera adapter owns Rust-side stream subscriber lists, audio subscriber detection, capture-setting forwarding, recording/photo callback fanout, NV12/audio sample conversion, host return-code mapping, and camera format recommendation helpers; native hosts own AVFoundation sessions, sample delivery, and platform-specific hardware controls. The historical `oxide_host_set_camera_running` composition callback remains macOS-only; iOS host scheduling uses the native preview-publication callback outside this shared trampoline.
 - The WebView adapter owns Rust-side handle lifetime, callback fanout, script-result copying, close idempotence, and host return-code mapping; native hosts own WebKit view creation, navigation delegates, and JavaScript evaluation.
 - The socket networking adapter owns TCP connect/read/write/close, Apple TCP keepalive socket option setup, and UDP bind/send/read/close with background reader threads; QUIC and unsupported TCP options fail explicitly.
 - Network decoding uses shared constants for Wi-Fi, cellular, wired, and other path kinds; macOS can report a bitmask when multiple interfaces are active.
@@ -74,7 +74,7 @@
 - Apple hosts must export ABI-compatible `oxide_media_*` symbols to use `AppleMediaLibraryManager`.
 - Apple hosts must export ABI-compatible `oxide_host_push_*` and push callback-registration symbols to use `ApplePushManager`.
 - Apple hosts must compile the shared CoreBluetooth bridge or export ABI-compatible `oxide_ble_*` symbols plus `oxide_host_ble_emit_*` callback delivery to use `AppleBluetooth`.
-- Apple hosts must export ABI-compatible `oxide_cam_*` and camera callback-registration symbols to use `AppleCameraManager`.
+- Apple hosts must export ABI-compatible `oxide_cam_*` and camera callback-registration symbols to use `AppleCameraManager`. macOS additionally exports `oxide_host_set_camera_running`; iOS does not carry that legacy composition ABI.
 - Apple hosts must export ABI-compatible `oxide_web_view_*` symbols when the `web-view-macos` feature is enabled.
 - Network decoding helpers require raw values that follow the Apple bridge constants in this crate.
 - Permission helpers require raw values that follow the Apple bridge constants in this crate.
@@ -106,6 +106,7 @@
 - macOS host-backed WebView behavior is additionally exercised by `host/macos-app/oxide-host-macos/tests/web_view_harness.rs`, which verifies live hidden `WKWebView` load callbacks, concurrent view isolation, JavaScript result/error behavior, and teardown through the shared Apple wrapper. The same harness verifies macOS camera missing-session and unauthorized-start error mapping by default, validates authorized media-thumbnail extraction when available, and has opt-in live location/camera/media paths for pre-authorized Location Services, frame/photo/recording, and image/video extraction validation.
 
 ## Changelog
+- 2026-08-06: kept the camera running-state callback only for macOS and left iOS host scheduling outside the shared frame trampoline.
 - 2026-07-11: made the asynchronous HTTP native bridge self-contained in this crate and removed duplicate host compilation.
 - 2026-07-12: added symmetric 64-header, 32 KiB metadata, and 16 KiB URL limits at the Rust and native HTTP trust boundaries.
 - 2026-06-22: added shared Apple ABI layout freeze coverage for HTTP, Bluetooth, camera, location, motion, media, and camera-format structs.

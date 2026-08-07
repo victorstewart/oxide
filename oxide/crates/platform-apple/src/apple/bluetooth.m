@@ -8,7 +8,7 @@
 #import <stdint.h>
 #import <stdlib.h>
 
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE && !defined(OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE)
 extern void nametag_host_update_permission(int32_t domain, int32_t status)
    __attribute__((weak_import));
 #endif
@@ -32,7 +32,7 @@ extern void oxide_host_ble_emit_notified(const uint8_t *id,
    __attribute__((weak_import));
 
 static const uint32_t kOxidePermissionDomainBluetooth = 4;
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE && !defined(OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE)
 static const int32_t kNametagPermissionDomainBluetooth = 4;
 #endif
 static const int64_t kNametagBleRequestTimeoutNs = 5LL * NSEC_PER_SEC;
@@ -287,7 +287,7 @@ static void publish_bluetooth_permission(CBCentralManager *central)
    (void)central;
    CBManagerAuthorization authorization = CBManager.authorization;
    int32_t nametag_status = nametag_bluetooth_status_code(authorization);
-#if TARGET_OS_IPHONE
+#if TARGET_OS_IPHONE && !defined(OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE)
    if (nametag_host_update_permission != NULL)
    {
       nametag_host_update_permission(kNametagPermissionDomainBluetooth,

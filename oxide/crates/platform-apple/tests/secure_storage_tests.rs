@@ -125,6 +125,9 @@ static CAMERA_START_DEFAULT_CALLS: std::sync::atomic::AtomicUsize =
 static CAMERA_START_PREVIEW_ONLY_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 static CAMERA_STOP_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static CAMERA_RUNNING_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static CAMERA_RUNNING_STATE: AtomicI32 = AtomicI32::new(-1);
 static CAMERA_RECORD_START_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 static CAMERA_PHOTO_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -571,7 +574,9 @@ pub extern "C" fn oxide_cam_record_cancel() -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_set_camera_running(_on: u8) -> i32 {
+pub extern "C" fn oxide_host_set_camera_running(on: u8) -> i32 {
+    CAMERA_RUNNING_CALLS.fetch_add(1, Ordering::SeqCst);
+    CAMERA_RUNNING_STATE.store(i32::from(on), Ordering::SeqCst);
     0
 }
 
@@ -1576,6 +1581,8 @@ fn apple_camera_manager_forwards_stream_controls_and_trampolines() {
     CAMERA_START_DEFAULT_CALLS.store(0, Ordering::SeqCst);
     CAMERA_START_PREVIEW_ONLY_CALLS.store(0, Ordering::SeqCst);
     CAMERA_STOP_CALLS.store(0, Ordering::SeqCst);
+    CAMERA_RUNNING_CALLS.store(0, Ordering::SeqCst);
+    CAMERA_RUNNING_STATE.store(-1, Ordering::SeqCst);
     reset_camera_return_codes();
 
     let camera = AppleCameraManager;
@@ -1597,6 +1604,11 @@ fn apple_camera_manager_forwards_stream_controls_and_trampolines() {
 
     assert_eq!(CAMERA_START_DEFAULT_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(CAMERA_START_PREVIEW_ONLY_CALLS.load(Ordering::SeqCst), 0);
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(CAMERA_RUNNING_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(CAMERA_RUNNING_STATE.load(Ordering::SeqCst), 1);
+    }
     assert!(camera_frame_callback_cell().lock().expect("camera frame callback").is_some());
     assert!(camera_audio_callback_cell().lock().expect("camera audio callback").is_some());
 
@@ -1654,6 +1666,11 @@ fn apple_camera_manager_forwards_stream_controls_and_trampolines() {
 
     stream.stop();
     assert_eq!(CAMERA_STOP_CALLS.load(Ordering::SeqCst), 1);
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(CAMERA_RUNNING_CALLS.load(Ordering::SeqCst), 2);
+        assert_eq!(CAMERA_RUNNING_STATE.load(Ordering::SeqCst), 0);
+    }
 }
 
 #[test]

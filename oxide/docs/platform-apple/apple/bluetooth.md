@@ -46,10 +46,11 @@
 - Future Bluetooth bridge cleanups still need same-workload A/B proof before deleting or retaining behavior changes.
 
 ## Feature flags and cfgs
-- iOS builds can also call the legacy weak permission symbol; non-iOS Apple builds skip that path with `TARGET_OS_IPHONE`.
+- iOS builds can also call the legacy weak permission symbol unless `OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE` selects the standalone Oxide owner; non-iOS Apple builds skip that path with `TARGET_OS_IPHONE`.
 
 ## Testing and benchmarks
 - ABI layout and static-assert retention are covered by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-platform-apple --test abi_layout_tests`.
 
 ## Changelog
+- 2026-08-06: made the legacy Nametag permission callback an explicit compile-time bridge instead of an unconditional optional product reference.
 - 2026-06-22: documented and froze the native Bluetooth scan config/result ABI layout with `_Static_assert` guards.
