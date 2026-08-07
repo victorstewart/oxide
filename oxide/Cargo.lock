@@ -1148,6 +1148,7 @@ dependencies = [
  "font8x8",
  "fontdue",
  "once_cell",
+ "oxide-input",
  "oxide-permissions",
  "oxide-platform-api",
  "oxide-renderer-api",

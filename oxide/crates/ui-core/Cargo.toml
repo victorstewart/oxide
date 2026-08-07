@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 description = "UI core (layout, drawlist, routing) for Oxide"
 
 [dependencies]
+oxide-input = { path = "../input" }
 oxide-platform-api = { path = "../platform-api" }
 oxide-renderer-api = { path = "../renderer-api" }
 oxide-utils = { path = "../utils" }

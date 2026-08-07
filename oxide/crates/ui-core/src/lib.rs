@@ -31,6 +31,7 @@ pub mod sensors;
 pub mod surface;
 pub mod telemetry;
 mod text_boundary;
+pub mod vertical_scroll;
 pub mod visual_tree;
 
 pub use camera::{
@@ -64,6 +65,7 @@ pub use surface::{
     UiSurface,
 };
 pub use telemetry::TelemetryView;
+pub use vertical_scroll::VerticalScrollSurface;
 pub use visual_tree::{
     build_visual_tree_action_graph, build_visual_tree_action_graph_manifest,
     compare_visual_tree_action_graphs, compare_visual_tree_sequences,
