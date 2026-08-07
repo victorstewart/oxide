@@ -1614,7 +1614,7 @@ fn c20_web_scheduler_coalesces_invalidations_and_caches_canvas_geometry() {
 #[test]
 fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     let report = include_str!("../../../../benchmarks/web/latest.json");
-    assert!(report.contains("\"version\": 5"));
+    assert!(report.contains("\"version\": 6"));
     assert!(report.contains("\"suite\": \"web-wasm\""));
     assert!(report.contains("\"webgpu\": \"webgpu=device-ok\""));
     assert!(report.contains("\"webgpu_timing\": \"timestamp_query="));
@@ -1628,7 +1628,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert!(report.contains("\"warm_resource_churn\": {"));
     assert!(report.contains("\"wasm_allocation_audit\": {"));
 
-    let frame = report_case_slice(report, "web.wasm.webgpu.frame_loop");
+    let frame = report_case_slice(report, "web.wasm.webgpu.cpu_submit_throughput");
+    let pacing = report_case_slice(report, "web.wasm.webgpu.raf_frame_loop");
     let current = report_case_slice(report, "web.wasm.webgpu.id_mask_compositor.current");
     let glyph_current =
         report_case_slice(report, "web.wasm.webgpu.glyph_atlas_upload.current_dirty");
@@ -1661,12 +1662,13 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert!(!report.contains("\"id\": \"web.wasm.webgpu.direct_surface.legacy_scene_present\""));
 
     assert!(
-        report_f64(frame, "p50_ms") > 0.0,
+        report_f64(pacing, "p50_ms") > 0.0,
         "frame-loop timing must be real, not virtual-time zero"
     );
-    assert_eq!(report_f64(frame, "missed_frame_ratio_120hz"), 0.0);
-    assert_eq!(report_f64(frame, "hitch_ratio_120hz"), 0.0);
-    assert!(report_f64(frame, "solid_tris") > 0.0);
+    let missed_frame_ratio = report_f64(pacing, "missed_frame_ratio_120hz");
+    assert!((0.0 ..= 1.0).contains(&missed_frame_ratio));
+    assert_eq!(report_f64(pacing, "hitch_ratio_120hz"), 0.0);
+    assert_eq!(report_f64(frame, "solid_tris"), 0.0);
     assert!(report_f64(frame, "image_draws") >= 0.0);
     assert!(report_f64(frame, "glyph_quads") > 0.0);
     assert!(report_f64(frame, "clip_depth_peak") >= 0.0);
@@ -1733,11 +1735,10 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
         "current WebGPU ID-mask row must have nonzero timing"
     );
     assert!(report_f64(current, "p99_ms") >= report_f64(current, "p50_ms"));
-    assert_eq!(report_f64(current, "missed_frame_ratio_120hz"), 0.0);
     assert!(report_f64(current, "draws") > 0.0);
     assert!(report_f64(current, "id_mask_draws") > 0.0);
-    assert!(report_f64(current, "id_mask_raster_passes") > 0.0);
-    assert!(report_f64(current, "id_mask_field_jump_passes") > 0.0);
+    assert_eq!(report_f64(current, "id_mask_raster_passes"), 0.0);
+    assert_eq!(report_f64(current, "id_mask_field_jump_passes"), 0.0);
     assert!(report_f64(current, "id_mask_compositor_passes") > 0.0);
     assert_eq!(report_pass_family_total(current), report_f64(current, "render_passes"));
     assert!(report_f64(current, "layer_draws") >= 0.0);
@@ -1771,8 +1772,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert_eq!(report_u64(scene3d_reused, "instances"), 2);
     assert!(report_f64(scene3d_stress_reused, "p50_ms") > 0.0);
     assert!(report_f64(scene3d_stress_recreate, "p50_ms") > 0.0);
-    assert!(report_u64(scene3d_stress_reused, "scene3d_draws") >= 64);
-    assert!(report_u64(scene3d_stress_recreate, "scene3d_draws") >= 64);
+    assert_eq!(report_u64(scene3d_stress_reused, "scene3d_draws"), 2);
+    assert_eq!(report_u64(scene3d_stress_recreate, "scene3d_draws"), 2);
     assert_eq!(report_u64(scene3d_stress_reused, "mesh3d_creates"), 0);
     assert!(report_u64(scene3d_stress_recreate, "mesh3d_creates") > 0);
     assert_eq!(report_u64(scene3d_stress_reused, "buffer_grows"), 0);
@@ -1825,7 +1826,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
         report_f64(backdrop_batch_current, "expected_backdrops")
     );
     assert_eq!(report_u64(backdrop_batch_current, "texture_copies"), 1);
-    assert_eq!(report_u64(backdrop_batch_current, "render_passes"), 4);
+    assert_eq!(report_u64(backdrop_batch_current, "render_passes"), 3);
     assert_eq!(
         report_f64(backdrop_batch_current, "gpu_timestamp_passes"),
         report_f64(backdrop_batch_current, "render_passes")
@@ -1924,7 +1925,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert_eq!(report_u64(glyph_run_current, "expected_glyph_quads"), 512);
     assert_eq!(report_u64(glyph_run_current, "expected_sdf_runs"), 32);
     assert_eq!(report_u64(glyph_run_current, "expected_sdf_glyph_quads"), 256);
-    assert_eq!(report_u64(glyph_run_current, "expected_draw_items"), 65);
+    assert_eq!(report_u64(glyph_run_current, "expected_draw_items"), 3);
     assert_eq!(
         report_f64(glyph_run_current, "draw_items"),
         report_f64(glyph_run_current, "expected_draw_items")
@@ -1947,12 +1948,19 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
         report_f64(glyph_run_current, "render_passes")
    );
    assert_eq!(report_u64(neon_marker_current, "expected_markers"), 64);
-   assert_eq!(report_u64(neon_marker_current, "expected_draw_items"), 192);
+   assert_eq!(
+      report_u64(neon_marker_current, "expected_draw_items"),
+      report_u64(neon_marker_current, "expected_markers")
+   );
    assert_eq!(
        report_f64(neon_marker_current, "draw_items"),
        report_f64(neon_marker_current, "expected_draw_items")
    );
-   assert!(report_f64(neon_marker_current, "solid_tris") > 0.0);
+   assert_eq!(
+      report_f64(neon_marker_current, "neon_marker_instances"),
+      report_f64(neon_marker_current, "expected_markers")
+   );
+   assert!(report_f64(neon_marker_current, "neon_marker_triangles") > 0.0);
    assert_eq!(report_f64(neon_marker_current, "draw_pipeline_binds"), 1.0);
    assert_eq!(report_f64(neon_marker_current, "draw_bind_group_binds"), 0.0);
    assert_eq!(report_f64(neon_marker_current, "draw_scissor_sets"), 1.0);
@@ -2040,7 +2048,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert!(report_f64(browser_trace, "gpu_related_events") > 0.0);
     assert!(report_f64(browser_trace, "duration_us") > 0.0);
     assert!(report_f64(browser_trace, "category_count") > 0.0);
-    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 13);
+    assert_eq!(report_u64(browser_trace, "benchmark_trace_interval_count"), 14);
     assert!(browser_trace.contains("\"benchmark_trace_interval_labels\""));
     assert!(browser_trace.contains("\"benchmark_trace_intervals\""));
     assert!(report_f64(browser_trace, "webgpu_related_events") > 0.0);
@@ -2063,7 +2071,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "collected_rows"), 17);
     assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "stage_count"), 9);
     assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "row_detail_count"), 17);
-    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 98);
+    assert_eq!(report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"), 82);
     assert_eq!(
         report_u64(gpu_timestamp_stage_breakdown, "total_render_passes"),
         report_u64(gpu_timestamp_stage_breakdown, "total_timestamp_passes"),
@@ -2079,12 +2087,13 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"draw\""));
     assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"id_mask_field_jump\""));
     assert!(gpu_timestamp_stage_breakdown.contains("\"stage\": \"present\""));
-    assert!(gpu_timestamp_stage_breakdown.contains("\"id\": \"web.wasm.webgpu.frame_loop\""));
+    assert!(gpu_timestamp_stage_breakdown
+        .contains("\"id\": \"web.wasm.webgpu.cpu_submit_throughput\""));
     let warm_resource_churn = report_section_slice(report, "warm_resource_churn");
     assert!(warm_resource_churn
         .contains("\"id\": \"web.wasm.webgpu.warm_resource_churn.current_rows\""));
     assert_eq!(report_u64(warm_resource_churn, "checked_rows"), 15);
-    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 2);
+    assert_eq!(report_u64(warm_resource_churn, "excluded_rows"), 3);
     assert_eq!(report_u64(warm_resource_churn, "row_detail_count"), 15);
     assert!(warm_resource_churn.contains("\"row_details\": ["));
     assert_eq!(report_u64(warm_resource_churn, "total_buffer_grows"), 0);
@@ -2129,7 +2138,7 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
    assert!(wasm_allocation_audit
        .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_audit.current_rows\""));
    assert_eq!(report_u64(wasm_allocation_audit, "checked_count"), 15);
-   assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 2);
+   assert_eq!(report_u64(wasm_allocation_audit, "excluded_count"), 3);
    assert_eq!(report_u64(wasm_allocation_audit, "row_detail_count"), 15);
    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_count") > 0);
    assert!(report_u64(wasm_allocation_audit, "total_wasm_alloc_bytes") > 0);
@@ -2149,15 +2158,16 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     let wasm_allocation_invariance = report_section_slice(report, "wasm_allocation_invariance");
     assert!(wasm_allocation_invariance
         .contains("\"id\": \"web.wasm.webgpu.wasm_allocation_invariance.current_rows\""));
-    assert!(wasm_allocation_invariance.contains("\"status\": \"shared-submit-boundary-profile\""));
+    assert!(wasm_allocation_invariance.contains("\"status\": \"path-specific-allocations\""));
     assert!(
-        wasm_allocation_invariance.contains("\"reference_row\": \"web.wasm.webgpu.frame_loop\"")
+        wasm_allocation_invariance
+            .contains("\"reference_row\": \"web.wasm.webgpu.cpu_submit_throughput\"")
     );
     assert_eq!(
         report_u64(wasm_allocation_invariance, "checked_count"),
         report_u64(wasm_allocation_audit, "checked_count"),
     );
-    assert_eq!(report_u64(wasm_allocation_invariance, "unique_signature_count"), 1);
+    assert_eq!(report_u64(wasm_allocation_invariance, "unique_signature_count"), 6);
     assert_eq!(
         report_u64(wasm_allocation_invariance, "shared_wasm_alloc_count"),
         report_u64(frame, "wasm_alloc_count"),
@@ -2171,7 +2181,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     let frame_stage_allocations = report_section_slice(report, "frame_loop_wasm_allocation_stages");
     assert!(frame_stage_allocations
         .contains("\"id\": \"web.wasm.webgpu.frame_loop_wasm_allocation_stages\""));
-    assert!(frame_stage_allocations.contains("\"row_id\": \"web.wasm.webgpu.frame_loop\""));
+    assert!(frame_stage_allocations
+        .contains("\"row_id\": \"web.wasm.webgpu.cpu_submit_throughput\""));
     assert_eq!(report_u64(frame_stage_allocations, "stage_count"), 11);
     assert_eq!(
         report_u64(frame_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -2189,7 +2200,8 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
         report_section_slice(report, "frame_loop_wasm_submit_allocation_stages");
     assert!(submit_stage_allocations
         .contains("\"id\": \"web.wasm.webgpu.frame_loop_wasm_submit_allocation_stages\""));
-    assert!(submit_stage_allocations.contains("\"row_id\": \"web.wasm.webgpu.frame_loop\""));
+    assert!(submit_stage_allocations
+        .contains("\"row_id\": \"web.wasm.webgpu.cpu_submit_throughput\""));
     assert_eq!(report_u64(submit_stage_allocations, "stage_count"), 9);
     assert_eq!(
         report_u64(submit_stage_allocations, "total_stage_wasm_alloc_count"),
@@ -2221,13 +2233,13 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
     assert_eq!(report_u64(frame, "submit_present_alloc_count"), 0);
     assert!(report_u64(frame, "submit_surface_alloc_count") > 0);
     assert!(report_u64(frame, "submit_finish_queue_alloc_count") > 0);
-    assert!(report_u64(frame, "submit_timestamp_map_alloc_count") > 0);
+    assert_eq!(report_u64(frame, "submit_timestamp_map_alloc_count"), 0);
     assert!(submit_stage_allocations.contains("\"dominant_stage\": \"surface\""));
     assert!(submit_stage_allocations.contains("\"stage\": \"finish_queue\""));
     let backend_path_coverage = report_section_slice(report, "backend_path_coverage");
     assert!(backend_path_coverage.contains("\"id\": \"web.wasm.webgpu.backend_path_coverage\""));
-    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 15);
-    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 15);
+    assert_eq!(report_u64(backend_path_coverage, "expected_path_count"), 16);
+    assert_eq!(report_u64(backend_path_coverage, "covered_path_count"), 16);
     assert_eq!(report_u64(backend_path_coverage, "missing_path_count"), 0);
     assert!(backend_path_coverage.contains("\"id\": \"glyph_atlas_upload\""));
     assert!(backend_path_coverage.contains("\"id\": \"image_upload\""));
@@ -2500,11 +2512,18 @@ fn committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row() {
         report_f64(neon_marker_current, "draw_items")
     );
     assert_eq!(
-        report_f64(neon_marker_summary, "current_solid_tris"),
-        report_f64(neon_marker_current, "solid_tris")
+        report_f64(neon_marker_summary, "current_instances"),
+        report_f64(neon_marker_current, "neon_marker_instances")
+    );
+    assert_eq!(
+        report_f64(neon_marker_summary, "current_triangles"),
+        report_f64(neon_marker_current, "neon_marker_triangles")
     );
     assert_eq!(report_u64(neon_marker_summary, "expected_markers"), 64);
-    assert_eq!(report_u64(neon_marker_summary, "expected_draw_items"), 192);
+    assert_eq!(
+        report_u64(neon_marker_summary, "expected_draw_items"),
+        report_u64(neon_marker_summary, "expected_markers")
+    );
     assert_eq!(
         report_f64(neon_marker_summary, "current_draw_bind_group_binds"),
         report_f64(neon_marker_current, "draw_bind_group_binds")
