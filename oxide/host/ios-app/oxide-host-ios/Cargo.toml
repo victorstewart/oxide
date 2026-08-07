@@ -34,3 +34,4 @@ mach2 = "0.4"
 ios-edr = []
 tokio-runtime = []
 perf-host-stubs = []
+test-scenes-entrypoint = []

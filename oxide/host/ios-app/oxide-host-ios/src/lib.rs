@@ -15,6 +15,11 @@ use oxide_networking::{
 };
 use oxide_perf_runner as perf_runner;
 use oxide_permissions::{PermissionManager, PermissionState, PermissionSubscription, SensorBridge};
+use oxide_platform_api::{
+   App, AppEvent, FrameContext, FrameDemand, InputEvent, KeyCode, KeyEvent, Lifecycle,
+   Modifiers, MouseButtons, PointerEvent, PreparedFrame, RendererStats, TextEvent, UpdateContext,
+   WindowEvent,
+};
 #[cfg(target_os = "ios")]
 use oxide_platform_api::{
     Bluetooth, BluetoothEvent, CameraManager, LocationOptions, LocationService, MotionService,
@@ -32,10 +37,11 @@ use oxide_text as text;
 use oxide_timing as timing;
 use oxide_ui_core as ui;
 use std::{
+    collections::VecDeque,
     fs::File,
     io::Write,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -751,6 +757,88 @@ impl Drop for NetworkRuntime {
     }
 }
 
+/// Why a production application could not be installed into the process host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallAppError
+{
+   /// Another application already owns the process-global host slot.
+   AlreadyInstalled,
+   /// The native host started before an application was installed.
+   HostAlreadyStarted,
+   /// The crate was built with the mutually exclusive legacy test host.
+   LegacyTestHostSelected,
+}
+
+/// Installs the sole application that the production iOS host will run.
+///
+/// Installation must happen before the native host initializes. The process
+/// owns exactly one application slot and never replaces an installed app.
+pub fn install_app(app: Box<dyn App>) -> Result<(), InstallAppError>
+{
+   #[cfg(feature = "test-scenes-entrypoint")]
+   {
+      let _ = app;
+      return Err(InstallAppError::LegacyTestHostSelected);
+   }
+   #[cfg(not(feature = "test-scenes-entrypoint"))]
+   {
+      let state = lock_or_recover(app_state());
+      if state.inited
+      {
+         return Err(InstallAppError::HostAlreadyStarted);
+      }
+      if INJECTED_APP_INSTALLED.load(Ordering::Acquire)
+      {
+         return Err(InstallAppError::AlreadyInstalled);
+      }
+      let mut slot = lock_or_recover(injected_app_slot());
+      *slot = Some(app);
+      INJECTED_APP_INSTALLED.store(true, Ordering::Release);
+      drop(slot);
+      drop(state);
+      request_frame_wake();
+      Ok(())
+   }
+}
+
+/// Installs `app` and enters the production iOS application event loop.
+///
+/// Returns `-2` when installation fails and `-1` on non-iOS targets without
+/// claiming the process app slot. On iOS, all other return values come from
+/// the native application entry point.
+///
+/// # Safety
+///
+/// `argc` and `argv` must satisfy the C `main` argument contract for the
+/// duration of the call. In particular, a positive `argc` requires a non-null
+/// `argv` containing at least that many valid pointers to null-terminated
+/// strings.
+pub unsafe fn run_app(
+   argc: ::libc::c_int,
+   argv: *mut *mut ::core::ffi::c_char,
+   app: Box<dyn App>,
+) -> ::libc::c_int
+{
+   #[cfg(not(target_os = "ios"))]
+   {
+      let _ = (argc, argv, app);
+      return -1;
+   }
+   #[cfg(target_os = "ios")]
+   {
+      if install_app(app).is_err()
+      {
+         return -2;
+      }
+      #[cfg(feature = "tokio-runtime")]
+      oxide_platform_ios::init_tokio_spawn();
+      unsafe
+      {
+         oxide_host_start(argc, argv) as ::libc::c_int
+      }
+   }
+}
+
 #[no_mangle]
 pub extern "C" fn rust_entry(
     _argc: ::libc::c_int,
@@ -771,6 +859,13 @@ pub extern "C" fn rust_entry(
     {
         -1 as ::libc::c_int
     }
+}
+
+#[no_mangle]
+/// Reports whether the process-global production app slot has been claimed.
+pub extern "C" fn oxide_host_is_injected_app() -> u8
+{
+   u8::from(INJECTED_APP_INSTALLED.load(Ordering::Acquire))
 }
 
 fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -1605,20 +1700,55 @@ struct StatsSnapshot {
     renderer_preview_submission_frame_age_ms: f32,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Default)]
-struct WindowMetrics {
-    width_dp: f32,
-    height_dp: f32,
-    scale: f32,
-    safe_left: f32,
-    safe_top: f32,
-    safe_right: f32,
-    safe_bottom: f32,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InjectedFrameSource
+{
+   App,
+   Legacy,
+}
+
+struct InjectedApp
+{
+   app: Box<dyn App>,
+   update: UpdateContext,
+   legacy: LegacyDrawEncoder,
+   demand: FrameDemand,
+   frame_source: InjectedFrameSource,
+   frame_id: u64,
+   last_target_timestamp_ns: u64,
+}
+
+impl InjectedApp
+{
+   fn new(app: Box<dyn App>, update: UpdateContext) -> Self
+   {
+      Self {
+         app,
+         update,
+         legacy: LegacyDrawEncoder::new(),
+         demand: FrameDemand::Idle,
+         frame_source: InjectedFrameSource::Legacy,
+         frame_id: 0,
+         last_target_timestamp_ns: 0,
+      }
+   }
+
+   fn prepared_frame(&self) -> Option<PreparedFrame<'_>>
+   {
+      match self.frame_source
+      {
+         InjectedFrameSource::App => self.app.prepared_frame(),
+         InjectedFrameSource::Legacy => Some(PreparedFrame {
+            draw_list: self.legacy.draw_list(),
+            damage: &[],
+         }),
+      }
+   }
 }
 
 struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
+    injected: Option<InjectedApp>,
     router: Option<test_scenes::Router<MtlUploader>>,
     builder: ui::DrawListBuilder,
     coalesce_items: Vec<gfx_api::DrawCmd>,
@@ -1628,12 +1758,13 @@ struct AppState {
     pending_frame_h: u32,
     pending_frame_scale: f32,
     prepared_frame: bool,
+    prepared_surface: Option<PreparedSurface>,
+    prepared_retry_generation: Option<u64>,
     benchmark_scene_index: u32,
     last_ms: u64,
     inited: bool,
     benchmark_mode: bool,
     last_stats: StatsSnapshot,
-    window: WindowMetrics,
     space_down: bool,
     touch: PrimaryTouchTracker,
     memory_warnings: u32,
@@ -1667,6 +1798,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             renderer: None,
+            injected: None,
             router: None,
             builder: ui::DrawListBuilder::new(),
             coalesce_items: Vec::new(),
@@ -1676,12 +1808,13 @@ impl Default for AppState {
             pending_frame_h: 0,
             pending_frame_scale: 1.0,
             prepared_frame: false,
+            prepared_surface: None,
+            prepared_retry_generation: None,
             benchmark_scene_index: benchmark_camera_scene_index(),
             last_ms: 0,
             inited: false,
             benchmark_mode: false,
             last_stats: StatsSnapshot::default(),
-            window: WindowMetrics::default(),
             space_down: false,
             touch: PrimaryTouchTracker::default(),
             memory_warnings: 0,
@@ -1714,6 +1847,12 @@ impl Default for AppState {
 }
 
 static APP_STATE: std::sync::OnceLock<std::sync::Mutex<AppState>> = std::sync::OnceLock::new();
+static INJECTED_APP_SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Box<dyn App>>>> =
+   std::sync::OnceLock::new();
+static POSTED_TASKS: std::sync::OnceLock<
+   std::sync::Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+> = std::sync::OnceLock::new();
+static INJECTED_APP_INSTALLED: AtomicBool = AtomicBool::new(false);
 static FRAME_WAKE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static PERF_REPORT_JSON: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
     std::sync::OnceLock::new();
@@ -1722,6 +1861,16 @@ static PERF_REPORT_ERROR: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>>
 
 fn app_state() -> &'static std::sync::Mutex<AppState> {
     APP_STATE.get_or_init(|| std::sync::Mutex::new(AppState::default()))
+}
+
+fn injected_app_slot() -> &'static std::sync::Mutex<Option<Box<dyn App>>>
+{
+   INJECTED_APP_SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn posted_tasks() -> &'static std::sync::Mutex<VecDeque<Box<dyn FnOnce() + Send>>>
+{
+   POSTED_TASKS.get_or_init(|| std::sync::Mutex::new(VecDeque::new()))
 }
 
 fn perf_report_json() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
@@ -1738,20 +1887,89 @@ fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
 
 const IDLE_SETTLE_FRAMES: u8 = 2;
 
-fn request_frame_wake() {
-    let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-    #[cfg(not(target_os = "ios"))]
-    let _ = generation;
-    #[cfg(target_os = "ios")]
-    unsafe {
-        oxide_host_request_display_link_wake(generation);
-    }
+fn request_frame_wake() -> u64
+{
+   let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+   #[cfg(target_os = "ios")]
+   unsafe
+   {
+      oxide_host_request_display_link_wake(generation);
+   }
+   generation
+}
+
+fn enqueue_posted_task(task: Box<dyn FnOnce() + Send>)
+{
+   lock_or_recover(posted_tasks()).push_back(task);
+   request_frame_wake();
+}
+
+fn drain_posted_tasks()
+{
+   let task_count = lock_or_recover(posted_tasks()).len();
+   for _ in 0..task_count
+   {
+      let task = lock_or_recover(posted_tasks()).pop_front();
+      let Some(task) = task else {
+         break;
+      };
+      task();
+   }
 }
 
 fn mark_frame_dirty(app: &mut AppState) {
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
     request_frame_wake();
+}
+
+fn injected_frame_should_render(
+   presented_wake_generation: u64,
+   demand: FrameDemand,
+) -> bool
+{
+   FRAME_WAKE_GENERATION.load(Ordering::Acquire) != presented_wake_generation
+      || demand == FrameDemand::NextVsync
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedSurface
+{
+   width_px: u32,
+   height_px: u32,
+   scale_bits: u32,
+}
+
+impl PreparedSurface
+{
+   fn new(width_px: u32, height_px: u32, scale: f32) -> Self
+   {
+      Self { width_px, height_px, scale_bits: scale.to_bits() }
+   }
+}
+
+fn reuse_injected_prepared_frame(app: &mut AppState, surface: PreparedSurface, wake_generation: u64) -> bool
+{
+   if !app.prepared_frame
+   {
+      return false;
+   }
+   if app.prepared_surface == Some(surface)
+      && app.prepared_retry_generation == Some(wake_generation)
+   {
+      app.pending_wake_generation = wake_generation;
+      app.prepared_retry_generation = None;
+      return true;
+   }
+   app.prepared_frame = false;
+   app.prepared_surface = None;
+   app.prepared_retry_generation = None;
+   false
+}
+
+fn request_injected_frame_retry(app: &mut AppState)
+{
+   app.prepared_retry_generation = Some(request_frame_wake());
 }
 
 fn process_telemetry_commands_locked(app: &mut AppState) {
@@ -1957,15 +2175,90 @@ fn bluetooth_runtime_enabled() -> bool {
     false
 }
 
+#[cfg(target_os = "ios")]
+fn init_injected_app(app_state: &mut AppState, w: u32, h: u32, scale: f32) -> ::libc::c_int
+{
+   let renderer_cfg = metal::MetalRendererConfig {
+      wants_hdr: false,
+      sample_count: 1,
+      camera_render_mode: metal::CameraRenderMode::Nv12Optimized,
+      camera_texture_source: metal::CameraTextureSource::Live,
+      direct_preview_only: false,
+      ..metal::MetalRendererConfig::visible_host()
+   };
+   let mut renderer = match metal::MetalRenderer::new_with_config(renderer_cfg)
+   {
+      Ok(renderer) => Box::new(renderer),
+      Err(err) =>
+      {
+         eprintln!("[Oxide] injected MetalRenderer initialization failed: {err}");
+         return -1;
+      }
+   };
+   if renderer.resize(w, h, scale).is_err()
+   {
+      return -2;
+   }
+
+   let Some(mut app) = lock_or_recover(injected_app_slot()).take() else {
+      return -3;
+   };
+   let platform: Arc<dyn oxide_platform_api::Platform + Send + Sync> =
+      oxide_platform_ios::install_current_platform();
+   let mut init = oxide_platform_api::InitContext {
+      fonts: oxide_platform_api::FontLoader::default(),
+      device: platform.device_caps(),
+      platform: Box::new(oxide_platform_api::SharedPlatform::new(Arc::clone(&platform))),
+   };
+   let update = UpdateContext {
+      post_task: Box::new(enqueue_posted_task),
+      timers: oxide_platform_api::Timers::default(),
+      haptics: Box::new(oxide_platform_ios::IosHaptics),
+   };
+   app.init(&mut init);
+
+   app_state.renderer = Some(renderer);
+   app_state.injected = Some(InjectedApp::new(app, update));
+   app_state.router = None;
+   app_state.last_stats = StatsSnapshot::default();
+   app_state.prepared_frame = false;
+   app_state.prepared_surface = None;
+   app_state.prepared_retry_generation = None;
+   app_state.pending_wake_generation = 0;
+   app_state.presented_wake_generation = 0;
+   app_state.inited = true;
+
+   oxide_host_set_window_resized_callback(Some(window_resized_cb));
+   oxide_host_set_touch_callback(Some(touch_cb));
+   oxide_host_set_pointer_callback(Some(pointer_cb));
+   oxide_host_set_key_callback(Some(key_cb));
+   oxide_host_set_text_commit_callback(Some(text_commit_cb));
+   oxide_host_set_text_composition_callback(Some(text_composition_cb));
+   oxide_host_set_text_selection_callback(Some(text_selection_cb));
+   oxide_host_set_ime_callbacks(Some(ime_shown_cb), Some(ime_hidden_cb));
+   request_frame_wake();
+   0
+}
+
+#[cfg(not(target_os = "ios"))]
+fn init_injected_app(_app_state: &mut AppState, _w: u32, _h: u32, _scale: f32) -> ::libc::c_int
+{
+   -1
+}
+
 #[no_mangle]
 pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     #[cfg(target_os = "ios")]
     let mut perm_manager_for_subs: Option<Arc<PermissionManager>> = None;
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
     if app.inited {
         return 0;
     }
+    if INJECTED_APP_INSTALLED.load(Ordering::Acquire) {
+        return init_injected_app(&mut app, w, h, scale);
+    }
     app.sensors = None;
+    app.injected = None;
     app.networking = None;
     app.network_metrics = None;
     app.telemetry = None;
@@ -2096,15 +2389,6 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     }
     app.last_ms = timing::now_ms();
     app.last_stats = StatsSnapshot::default();
-    app.window = WindowMetrics {
-        width_dp: (w as f32) / scale.max(1.0),
-        height_dp: (h as f32) / scale.max(1.0),
-        scale,
-        safe_left: 0.0,
-        safe_top: 0.0,
-        safe_right: 0.0,
-        safe_bottom: 0.0,
-    };
     app.touch = PrimaryTouchTracker::default();
     app.space_down = false;
     app.memory_warnings = 0;
@@ -2159,9 +2443,16 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_should_render() -> u8 {
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return 1;
+    }
+    if let Some(injected) = app.injected.as_ref() {
+        if injected_frame_should_render(app.presented_wake_generation, injected.demand) {
+            return 1;
+        }
+        app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
+        return 0;
     }
     if app.benchmark_mode || benchmark_camera_fast_path_active(&app) || app.camera_running {
         return 1;
@@ -2183,8 +2474,16 @@ pub extern "C" fn oxide_host_app_wake_generation() -> u64 {
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_app_request_redraw() {
-    let _ = with_app_mut(mark_frame_dirty);
+/// Requests a production frame from a platform service or external host caller.
+pub extern "C" fn oxide_host_request_redraw()
+{
+   request_frame_wake();
+}
+
+#[no_mangle]
+pub extern "C" fn oxide_host_app_request_redraw()
+{
+   oxide_host_request_redraw();
 }
 
 #[no_mangle]
@@ -2237,9 +2536,102 @@ pub extern "C" fn oxide_host_app_frame_with_drawable(
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app_state mutex");
+    oxide_host_app_prepare_frame_timed(w, h, scale, 0, 0)
+}
+
+#[no_mangle]
+/// Advances the installed app and prepares one frame using display-link timing.
+///
+/// The native shell calls this before acquiring a drawable. A zero timestamp
+/// asks the host to use its monotonic fallback clock.
+pub extern "C" fn oxide_host_app_prepare_frame_timed(
+    w: u32,
+    h: u32,
+    scale: f32,
+    timestamp_ns: u64,
+    target_timestamp_ns: u64,
+) -> ::libc::c_int {
+    if INJECTED_APP_INSTALLED.load(Ordering::Acquire) {
+        drain_posted_tasks();
+    }
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
+    }
+    if app.injected.is_some() {
+        let wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
+        let prepared_surface = PreparedSurface::new(w, h, scale);
+        if reuse_injected_prepared_frame(&mut app, prepared_surface, wake_generation) {
+            return 0;
+        }
+        app.pending_wake_generation = wake_generation;
+        let renderer_ptr = match app.renderer.as_mut().map(|renderer| renderer.as_mut()) {
+            Some(renderer) => {
+                if renderer.resize(w, h, scale).is_err() {
+                    return -2;
+                }
+                renderer as *mut metal::MetalRenderer
+            }
+            None => return -2,
+        };
+        let Some(injected) = app.injected.as_mut() else {
+            return -3;
+        };
+        injected.frame_id = injected.frame_id.wrapping_add(1);
+        let fallback_timestamp_ns = timing::now_ms().saturating_mul(1_000_000);
+        let timestamp_ns = if timestamp_ns == 0 { fallback_timestamp_ns } else { timestamp_ns };
+        let target_timestamp_ns = if target_timestamp_ns == 0 {
+            timestamp_ns
+        } else {
+            target_timestamp_ns
+        };
+        let dt_ns = if injected.last_target_timestamp_ns == 0 {
+            0
+        } else {
+            target_timestamp_ns.saturating_sub(injected.last_target_timestamp_ns)
+        };
+        injected.last_target_timestamp_ns = target_timestamp_ns;
+        let frame_context = FrameContext {
+            frame_id: injected.frame_id,
+            timestamp_ns,
+            target_timestamp_ns,
+            dt_ns,
+            viewport: gfx_api::RectF::new(
+                0.0,
+                0.0,
+                (w as f32) / scale.max(1.0),
+                (h as f32) / scale.max(1.0),
+            ),
+            scale,
+        };
+        let mut uploader = MtlUploader { renderer: renderer_ptr };
+        injected.demand = injected.app.prepare_frame(frame_context, &mut uploader);
+        if injected.app.prepared_frame().is_some() {
+            injected.frame_source = InjectedFrameSource::App;
+        } else {
+            injected.frame_source = InjectedFrameSource::Legacy;
+            let injected_app = &mut injected.app;
+            let encoder = &mut injected.legacy;
+            encoder.begin_frame();
+            {
+                let mut render_context = gfx_api::RenderContext {
+                    frame_id: injected.frame_id,
+                    encoder,
+                };
+                injected_app.draw(&mut render_context);
+            }
+            encoder.finish_frame();
+            injected_app.upload_runtime_images(&mut uploader);
+        }
+        let mut damage_rects = core::mem::take(&mut app.pending_damage_rects);
+        damage_rects.clear();
+        if let Some(frame) = app.injected.as_ref().and_then(InjectedApp::prepared_frame) {
+            damage_rects.extend_from_slice(frame.damage);
+        }
+        app.pending_damage_rects = damage_rects;
+        app.prepared_frame = true;
+        app.prepared_surface = Some(prepared_surface);
+        return 0;
     }
     app.pending_wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
     if benchmark_camera_fast_path_active(&app) {
@@ -2330,12 +2722,93 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
 pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
     drawable_ptr: *mut ::libc::c_void,
 ) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
     }
     if !app.prepared_frame {
         return -6;
+    }
+    if app.injected.is_some() {
+        let damage_rects = core::mem::take(&mut app.pending_damage_rects);
+        let damage = gfx_api::Damage { rects: damage_rects };
+        let render_result = {
+            let AppState { renderer, injected, .. } = &mut *app;
+            let Some(renderer) = renderer.as_mut().map(|renderer| renderer.as_mut()) else {
+                app.prepared_frame = false;
+                app.pending_damage_rects = damage.rects;
+                return -2;
+            };
+            let Some(frame) = injected.as_ref().and_then(InjectedApp::prepared_frame) else {
+                app.prepared_frame = false;
+                app.pending_damage_rects = damage.rects;
+                return -3;
+            };
+            if !drawable_ptr.is_null() {
+                let prepared = unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
+                if prepared.is_err() {
+                    Err(-5)
+                } else {
+                    let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage));
+                    if renderer.last_stats().frame_backpressure_skipped != 0 {
+                        let _ = renderer.cancel_present_drawable();
+                        Err(-9)
+                    } else {
+                        renderer.encode_pass(frame.draw_list);
+                        if renderer.submit(token).is_err() {
+                            let _ = renderer.cancel_present_drawable();
+                            Err(-4)
+                        } else {
+                            Ok(renderer.last_stats())
+                        }
+                    }
+                }
+            } else {
+                let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage));
+                if renderer.last_stats().frame_backpressure_skipped != 0 {
+                    Err(-9)
+                } else {
+                    renderer.encode_pass(frame.draw_list);
+                    if renderer.submit(token).is_err() {
+                        Err(-4)
+                    } else {
+                        Ok(renderer.last_stats())
+                    }
+                }
+            }
+        };
+        app.pending_damage_rects = damage.rects;
+        match render_result {
+            Ok(stats) => {
+                app.prepared_frame = false;
+                app.prepared_surface = None;
+                app.prepared_retry_generation = None;
+                app.pending_damage_rects.clear();
+                let frame_id = app.injected.as_ref().map_or(0, |injected| injected.frame_id);
+                let renderer_stats = RendererStats {
+                    frame_id,
+                    encode_ms: stats.encode_ms as f32,
+                    damage_pct: stats.damage_pct,
+                    damage_rects: stats.damage_rects,
+                    draws: stats.draws,
+                    sample_count: 1,
+                    hdr: false,
+                };
+                app.last_stats = StatsSnapshot {
+                    damage_pct: stats.damage_pct,
+                    damage_rects: stats.damage_rects,
+                    ..StatsSnapshot::default()
+                };
+                app.submitted_frames = app.submitted_frames.saturating_add(1);
+                app.presented_wake_generation = app.pending_wake_generation;
+                let _ = observe_injected_renderer_stats(&mut app, renderer_stats);
+                return 0;
+            }
+            Err(code) => {
+                request_injected_frame_retry(&mut app);
+                return code;
+            }
+        }
     }
     if benchmark_camera_fast_path_active(&app) {
         let Some(mut renderer) = app.renderer.take() else {
@@ -2503,7 +2976,11 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_cancel_prepared_frame() {
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
+    if app.injected.is_some() {
+        request_injected_frame_retry(&mut app);
+        return;
+    }
     app.prepared_frame = false;
     app.pending_damage_rects.clear();
 }
@@ -2524,6 +3001,15 @@ fn oxide_host_app_frame_inner(
 #[no_mangle]
 pub extern "C" fn oxide_host_app_did_enter_background() {
     with_app_mut(|app| {
+        if let Some(injected) = app.injected.as_mut() {
+            injected.last_target_timestamp_ns = 0;
+        }
+        if dispatch_injected_event_without_wake(
+            app,
+            AppEvent::Lifecycle(Lifecycle::DidEnterBackground),
+        ) {
+            return;
+        }
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_background(timing::now_ms());
         }
@@ -2534,6 +3020,12 @@ pub extern "C" fn oxide_host_app_did_enter_background() {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_will_enter_foreground() {
     with_app_mut(|app| {
+        if let Some(injected) = app.injected.as_mut() {
+            injected.last_target_timestamp_ns = 0;
+        }
+        if dispatch_injected_event(app, AppEvent::Lifecycle(Lifecycle::WillEnterForeground)) {
+            return;
+        }
         mark_frame_dirty(app);
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_foreground(timing::now_ms());
@@ -2545,6 +3037,12 @@ pub extern "C" fn oxide_host_app_will_enter_foreground() {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_will_terminate() {
     with_app_mut(|app| {
+        if dispatch_injected_event_without_wake(
+            app,
+            AppEvent::Lifecycle(Lifecycle::WillTerminate),
+        ) {
+            return;
+        }
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_shutdown(timing::now_ms());
         }
@@ -2884,7 +3382,7 @@ pub extern "C" fn oxide_host_input_log(ptr: *const u8, len: usize) {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_shutdown() {
     if let Some(state) = APP_STATE.get() {
-        let mut app = state.lock().expect("app_state mutex");
+        let mut app = lock_or_recover(state);
         oxide_host_set_window_resized_callback(None);
         oxide_host_set_touch_callback(None);
         oxide_host_set_pointer_callback(None);
@@ -2897,6 +3395,7 @@ pub extern "C" fn oxide_host_app_shutdown() {
             router.camera_detach_manager();
         }
         app.renderer = None;
+        app.injected = None;
         app.router = None;
         app.benchmark_scene_index = benchmark_camera_scene_index();
         app.snapshot_status.clear();
@@ -2921,12 +3420,19 @@ pub extern "C" fn oxide_host_app_shutdown() {
         app.permission_subs.clear();
         app.permission_states.clear();
         app.builder.clear();
+        app.pending_damage_rects.clear();
+        app.prepared_frame = false;
+        app.prepared_surface = None;
+        app.prepared_retry_generation = None;
         app.frame_dirty = true;
         app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
         app.idle_skipped_frames = 0;
         app.submitted_frames = 0;
         app.pending_wake_generation = 0;
         app.presented_wake_generation = 0;
+    }
+    if let Some(tasks) = POSTED_TASKS.get() {
+        lock_or_recover(tasks).clear();
     }
 }
 
@@ -2940,6 +3446,85 @@ pub extern "C" fn oxide_host_set_benchmark_mode(on: u8) -> ::libc::c_int {
     0
 }
 
+fn observe_injected_renderer_stats(app: &mut AppState, stats: RendererStats) -> bool
+{
+   let Some(injected) = app.injected.as_mut() else
+   {
+      return false;
+   };
+   injected.app.event(AppEvent::RendererStats(stats), &mut injected.update);
+   true
+}
+
+fn dispatch_injected_event_without_wake(app: &mut AppState, event: AppEvent) -> bool
+{
+   let Some(injected) = app.injected.as_mut() else
+   {
+      return false;
+   };
+   app.prepared_frame = false;
+   app.prepared_surface = None;
+   app.prepared_retry_generation = None;
+   app.pending_damage_rects.clear();
+   injected.app.event(event, &mut injected.update);
+   true
+}
+
+fn dispatch_injected_event(app: &mut AppState, event: AppEvent) -> bool
+{
+   if !dispatch_injected_event_without_wake(app, event)
+   {
+      return false;
+   }
+   request_frame_wake();
+   true
+}
+
+fn modifiers_from_raw(raw: u32) -> Modifiers
+{
+   Modifiers::from_bits_truncate(raw)
+}
+
+fn mouse_buttons_from_raw(raw: u32) -> MouseButtons
+{
+   MouseButtons {
+      left: raw & 1 != 0,
+      right: raw & 2 != 0,
+      middle: raw & 4 != 0,
+      back: raw & 8 != 0,
+      forward: raw & 16 != 0,
+   }
+}
+
+fn key_code_from_raw(code: u32, character: Option<char>) -> KeyCode
+{
+   match code
+   {
+      0x29 => KeyCode::Escape,
+      0x28 => KeyCode::Enter,
+      0x2b => KeyCode::Tab,
+      0x2a => KeyCode::Backspace,
+      0x2c => KeyCode::Space,
+      0x52 | 126 => KeyCode::ArrowUp,
+      0x51 | 125 => KeyCode::ArrowDown,
+      0x50 | 123 => KeyCode::ArrowLeft,
+      0x4f | 124 => KeyCode::ArrowRight,
+      0x4a => KeyCode::Home,
+      0x4d => KeyCode::End,
+      0x4b => KeyCode::PageUp,
+      0x4e => KeyCode::PageDown,
+      0x49 => KeyCode::Insert,
+      0x4c => KeyCode::Delete,
+      _ => match character
+      {
+         Some(character @ '0'..='9') => KeyCode::Digit(character as u8 - b'0'),
+         Some(character) if character.is_ascii_alphabetic() =>
+            KeyCode::Letter(character.to_ascii_uppercase()),
+         _ => KeyCode::Unknown,
+      },
+   }
+}
+
 extern "C" fn window_resized_cb(
     w: f32,
     h: f32,
@@ -2950,26 +3535,43 @@ extern "C" fn window_resized_cb(
     safe_b: f32,
 ) {
     let _ = with_app_mut(|app| {
-        app.window = WindowMetrics {
-            width_dp: w,
-            height_dp: h,
-            scale,
-            safe_left: safe_l,
-            safe_top: safe_t,
-            safe_right: safe_r,
-            safe_bottom: safe_b,
-        };
+        if dispatch_injected_event(
+            app,
+            AppEvent::Window(WindowEvent::Resized {
+                w: w.round().max(0.0) as u32,
+                h: h.round().max(0.0) as u32,
+                scale,
+                safe: gfx_api::Insets::new(safe_l, safe_t, safe_r, safe_b),
+            }),
+        ) {
+            return;
+        }
         mark_frame_dirty(app);
     });
 }
 
-extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: u32, _ts: u64) {
+extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, mods: u32, _ts: u64) {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Input(InputEvent::Pointer(PointerEvent {
+                x,
+                y,
+                dx,
+                dy,
+                buttons: mouse_buttons_from_raw(buttons),
+                modifiers: modifiers_from_raw(mods),
+            })),
+        ) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
-            touch_log(&format!(
-                "rust callback pointer scene={:?} x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} buttons={buttons}",
-                router.current
-            ));
+            if touch_log_enabled() {
+                touch_log(&format!(
+                    "rust callback pointer scene={:?} x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} buttons={buttons}",
+                    router.current
+                ));
+            }
             router.input_pointer(x, y, dx, dy, buttons);
         } else {
             touch_log("rust callback pointer dropped no router");
@@ -2993,7 +3595,9 @@ extern "C" fn touch_cb(
 ) {
     let _ = with_app_mut(|app| {
         let Some(touch_phase) = touch_phase_from_raw(phase) else {
-            touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
+            if touch_log_enabled() {
+                touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
+            }
             return;
         };
         let pressure =
@@ -3013,15 +3617,22 @@ extern "C" fn touch_cb(
             tilt,
             device: pointer_device_from_raw(device),
         };
-        touch_log(&format!(
-            "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
-        ));
+        if dispatch_injected_event(app, AppEvent::Input(InputEvent::Touch(touch_event))) {
+            return;
+        }
+        if touch_log_enabled() {
+            touch_log(&format!(
+                "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
+            ));
+        }
         let result = app.touch.on_touch(&touch_event, ts_ns);
-        touch_log(&format!(
-            "rust callback touch generic result pointer={} double_tap={}",
-            result.pointer.is_some(),
-            result.double_tap
-        ));
+        if touch_log_enabled() {
+            touch_log(&format!(
+                "rust callback touch generic result pointer={} double_tap={}",
+                result.pointer.is_some(),
+                result.double_tap
+            ));
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_touch(&touch_event);
             if let Some(ptr) = result.pointer {
@@ -3042,19 +3653,26 @@ extern "C" fn key_cb(
     chars_ptr: *const u8,
     chars_len: usize,
     repeat: u8,
-    _mods: u32,
+    mods: u32,
     _ts: u64,
 ) {
-    let chars = unsafe {
-        if chars_ptr.is_null() || chars_len == 0 {
-            ""
-        } else {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(chars_ptr, chars_len))
-        }
+    let Some(chars) = ffi_bytes(chars_ptr, chars_len).and_then(|bytes| std::str::from_utf8(bytes).ok()) else {
+        return;
     };
     let ch = chars.chars().next();
     let is_up = repeat == 2;
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Input(InputEvent::Key(KeyEvent {
+                code: key_code_from_raw(code, ch),
+                chars: (!chars.is_empty()).then(|| chars.to_owned()),
+                repeat: repeat != 0,
+                modifiers: modifiers_from_raw(mods),
+            })),
+        ) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             if let Some(ch) = ch {
                 match ch {
@@ -3111,6 +3729,12 @@ extern "C" fn text_commit_cb(ptr: *const u8, len: usize) {
     let Ok(text) = std::str::from_utf8(slice) else { return };
     let owned = text.to_owned();
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::Commit { text: owned.clone() }),
+        ) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_commit(&owned);
         }
@@ -3129,6 +3753,15 @@ extern "C" fn text_composition_cb(start: u32, end: u32, ptr: *const u8, len: usi
         }
     };
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::Composition {
+                range: start..end,
+                text: text.clone(),
+            }),
+        ) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_set_composition(start, end, &text);
         }
@@ -3138,6 +3771,12 @@ extern "C" fn text_composition_cb(start: u32, end: u32, ptr: *const u8, len: usi
 
 extern "C" fn text_selection_cb(start: u32, end: u32) {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::SelectionChanged { range: start..end }),
+        ) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_set_selection(start, end);
         }
@@ -3149,6 +3788,9 @@ extern "C" fn ime_shown_cb(x: f32, y: f32, w: f32, h: f32) {
     let rect = gfx_api::RectF::new(x, y, w, h);
     let message = format!("IME shown at ({:.0},{:.0}) {:.0}x{:.0}", rect.x, rect.y, rect.w, rect.h);
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(app, AppEvent::Text(TextEvent::IMEShown(rect))) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_set_ime_rect(rect);
             router.input_log(&message);
@@ -3159,6 +3801,9 @@ extern "C" fn ime_shown_cb(x: f32, y: f32, w: f32, h: f32) {
 
 extern "C" fn ime_hidden_cb() {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(app, AppEvent::Text(TextEvent::IMEHidden)) {
+            return;
+        }
         if let Some(router) = app.router.as_mut() {
             router.input_hide_ime();
             router.input_log("IME hidden");

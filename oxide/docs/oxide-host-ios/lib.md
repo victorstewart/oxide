@@ -1,7 +1,7 @@
 # oxide-host-ios `lib.rs`
 
 ## Intention and purpose
-- Own the Rust side of the iOS host static library: UIApplication entry, renderer setup, scene routing, input callback bridges, text/IME bridges, push/permission bridges, camera benchmarking hooks, and performance report export.
+- Own the Rust side of the iOS host static library: explicit app injection, UIApplication entry, renderer setup, scene routing, input callback bridges, text/IME bridges, push/permission bridges, camera benchmarking hooks, and performance report export.
 - Provide the iOS counterpart used to keep Apple host callback behavior aligned with the macOS host.
 
 ## Relation to the rest of the code
@@ -14,6 +14,8 @@
 ## Entry points list
 - `rust_entry(argc, argv) -> libc::c_int`
   Starts the native iOS host through the Objective-C UIApplication shim.
+- `install_app(Box<dyn App>)` and `run_app(argc, argv, Box<dyn App>)`
+  Install exactly one production app before host initialization and start the native UIApplication shell. The raw C `argc`/`argv` start call is explicitly unsafe and leaves the app slot untouched off iOS.
 - `oxide_host_set_window_resized_callback(...)` and `oxide_host_emit_window_resized(...)`
   Register and emit window-size/safe-area updates.
 - `oxide_host_set_text_commit_callback(...)`, `oxide_host_set_text_composition_callback(...)`, `oxide_host_set_text_selection_callback(...)`, and matching emitters
@@ -28,7 +30,7 @@
   Bridge raw input samples into Oxide.
 - `oxide_host_app_init(...)`, `oxide_host_app_frame(...)`, and related state/configuration exports
   Initialize and drive the renderer, scene router, camera paths, and perf harness.
-- `oxide_host_app_prepare_frame(...)`, `oxide_host_app_submit_prepared_frame_with_drawable(...)`, and `oxide_host_app_cancel_prepared_frame()`
+- `oxide_host_app_prepare_frame_timed(...)`, `oxide_host_app_submit_prepared_frame_with_drawable(...)`, and `oxide_host_app_cancel_prepared_frame()`
   Split CPU frame preparation from drawable-backed present work so UIKit acquires a `CAMetalDrawable` only after Rust has updated state, built the draw list, and decided the frame will submit.
 - `oxide_host_app_stats(out) -> libc::c_int`
   Exports the host stats ABI consumed by Objective-C and Swift benchmark harnesses.
@@ -44,6 +46,9 @@
 - The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
 - The runtime-image uploader forwards row-major RGBA bytes and immutable nearest-or-linear sampling directly into the Metal resource owner. It maps Metal's invalid zero-handle sentinel to `None` and releases successful handles through the same owner. The host performs no channel conversion, staging copy, or per-draw sampling decision.
 - Apps that use the original `App::draw` contract can render through one persistent host-owned `DrawListBuilder` adapter. `RenderContext` borrows it for the draw callback, and the host clears and reuses its storage rather than allocating an intermediate command graph each frame.
+- Apps with an owned `PreparedFrame` submit that draw list directly. The host only copies damage into reusable scratch and preserves the prepared frame across a generation-bound retry when drawable acquisition, Metal backpressure, or submission fails.
+- Frame wake generations are acknowledged only after a successful Metal submit. A newer wake or changed drawable geometry invalidates a retained retry, while `FrameDemand::NextVsync` continues scheduling without legacy settle frames.
+- Window, raw input, text, IME, and lifecycle events are delivered directly to the installed app. Posted tasks are drained before preparation and successful submits report observational `AppEvent::RendererStats` without invalidating frame state.
 - The host exposes no platform motion-preference state, control, or ABI; authored Oxide animation durations pass through unchanged.
 - Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
 
@@ -56,6 +61,7 @@
 - Poisoned callback mutexes are recovered, preserving the last registered callback state.
 - Null payload pointers with zero length are accepted by fallback log paths.
 - Null payload pointers with non-zero length are ignored by fallback log paths instead of building invalid slices.
+- Injected-app cancellation and submission failure retain the immutable prepared frame for retry; legacy test-host cancellation continues clearing pending damage.
 - App lifecycle/router `expect` calls are outside this callback-hardening slice and remain separate cleanup candidates.
 
 ## Concurrency and memory behavior
@@ -64,6 +70,7 @@
 - Raw touch callbacks preserve the OS sample timestamp in `TouchEvent::timestamp_ns` before routing through `oxide-input`.
 - No heap allocation is added to the callback-installed input path; fallback logging may format strings only when no callback is registered.
 - The compatibility draw adapter retains its draw-list capacities across frames.
+- App-owned prepared draw lists are not copied, and posted tasks are drained outside the app-state lock.
 
 ## Performance notes
 - Renderer construction selects the normal three-slot visible-host resource mode; actual Metal command-buffer completion still protects reuse and saturated frames coalesce without blocking.
@@ -73,6 +80,7 @@
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
 - Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
+- `test-scenes-entrypoint` rejects production app installation so the legacy test host and injected app cannot claim the same process.
 - Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, persistent prepared chunks, and ID-mask raster/JFA fields, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
 
 ## Testing and benchmarks
@@ -81,6 +89,7 @@
 - Host camera typedef, stats, tick/debug perf, and camera snapshot ABI guard retention is covered by [abi_layout_tests.md](tests/abi_layout_tests.md).
 - Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
 - [injected_app_tests.md](tests/injected_app_tests.md) freezes direct sampled-RGBA uploader wiring, invalid-handle mapping, and renderer-owned release.
+- `tests/drawable_tests.rs` freezes injected wake acknowledgement, retry retention, and lifecycle timing reset behavior.
 
 ## Examples
 ```rust
@@ -89,6 +98,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-06: added explicit production app injection, app-owned prepared frames with a persistent legacy fallback encoder, display-link timing, wake-generation retry scheduling, direct event delivery, and renderer feedback.
 - 2026-08-06: adapted app draw commands to reusable host draw-list storage and wired sampled runtime images directly into Metal-owned resources.
 - 2026-08-06: removed the product motion toggle and the obsolete motion-preference host state and ABI.
 - 2026-07-14: purged immutable ID-mask raster/JFA fields on critical memory pressure.
