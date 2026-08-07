@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use base64::Engine;
 use oxide_perf_runner::{
     compare_reports, render_report_markdown, AuditFinding, ContractCoverageEntry,
-    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfComparison, PerfReport,
+    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
 };
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
@@ -31,8 +31,6 @@ const DEFAULT_REACT_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/react-native-de
 const DEFAULT_REACT_DEVICE_RESULT_ROOT: &str = "/tmp/react-native-device-perf";
 const DEFAULT_EXPERIMENT_MANIFEST: &str = "perf-experiments.toml";
 const EXPERIMENT_PERF_AB_GATE_PREFIX: &str = "perf-ab";
-const COMPARE_DEVICE_PROOF_STATUS_FILE: &str = "proof-status.json";
-const COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE: &str = "proof-status.md";
 const DEFAULT_UIKIT_SCHEME: &str = "OxideUIKitPerf";
 const DEFAULT_UIKIT_TEST_TARGET: &str = "OxideHostPerfTests";
 const DEFAULT_UIKIT_TEST_CLASS: &str = "OxideHostPerfTests";
@@ -1754,7 +1752,7 @@ struct IosCompareDevicePerfCli {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompareDeviceRunStage {
     WatchableSmoke,
-    FamilyProof,
+    FamilyDiagnostic,
     Promotion,
 }
 
@@ -2239,7 +2237,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    workflow: use `--watchable-smoke` for optional visual QA, `--family ...` for explicit diagnostics, and one canonical `--write-baseline` run as the publication proof.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -2624,19 +2622,6 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         &build_context.expected_stamp,
         "combined device",
     )?;
-    if cli.write_baseline {
-        let missing = compare_device_missing_promotion_families(
-            load_compare_device_proof_status(&result_root)?.as_ref(),
-            &build_context.expected_stamp,
-        );
-        if !missing.is_empty() {
-            bail!(
-                "compare-device-perf baseline promotion requires green family proofs first. Missing families: {}. Run `cargo xtask ios compare-device-perf --family <family> --result-root {}` for each missing family.",
-                missing.join(", "),
-                result_root.display()
-            );
-        }
-    }
     fs::create_dir_all(&uikit_result_root)
         .with_context(|| format!("creating {}", uikit_result_root.display()))?;
     fs::create_dir_all(&oxide_result_root)
@@ -2714,19 +2699,6 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         &uikit_report,
         uikit_comparison.as_ref(),
     )?;
-    if cli.write_baseline {
-        write_uikit_report_json(Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), &uikit_report)?;
-        write_uikit_markdown(
-            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
-            &uikit_report,
-            uikit_comparison.as_ref(),
-        )?;
-        write_uikit_dated_markdown(
-            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
-            &uikit_report,
-            uikit_comparison.as_ref(),
-        )?;
-    }
     print_uikit_summary(&uikit_report, uikit_comparison.as_ref());
 
     let oxide_current_json = oxide_result_root.join("current.json");
@@ -2782,22 +2754,6 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         &oxide_report,
         oxide_comparison.as_ref(),
     )?;
-    if cli.write_baseline {
-        write_oxide_device_report_json(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_JSON),
-            &oxide_report,
-        )?;
-        write_oxide_device_report_markdown(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
-            &oxide_report,
-            oxide_comparison.as_ref(),
-        )?;
-        write_oxide_device_dated_markdown(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
-            &oxide_report,
-            oxide_comparison.as_ref(),
-        )?;
-    }
     print_oxide_device_summary(&oxide_report, oxide_comparison.as_ref());
 
     if let Some(comp) = uikit_comparison.as_ref() {
@@ -2815,20 +2771,31 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         }
     }
 
-    if stage != CompareDeviceRunStage::Promotion
-        && compare_device_comparisons_pass(uikit_comparison.as_ref(), oxide_comparison.as_ref())
-    {
-        let completed_families = selected_specs
-            .iter()
-            .map(|spec| String::from(compare_device_family_for_uikit_spec(spec).unwrap()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        update_compare_device_proof_status(
-            &result_root,
-            &build_context.expected_stamp,
-            stage,
-            &completed_families,
+    if cli.write_baseline {
+        write_uikit_report_json(Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), &uikit_report)?;
+        write_uikit_markdown(
+            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
+            &uikit_report,
+            uikit_comparison.as_ref(),
+        )?;
+        write_uikit_dated_markdown(
+            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
+            &uikit_report,
+            uikit_comparison.as_ref(),
+        )?;
+        write_oxide_device_report_json(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_JSON),
+            &oxide_report,
+        )?;
+        write_oxide_device_report_markdown(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
+            &oxide_report,
+            oxide_comparison.as_ref(),
+        )?;
+        write_oxide_device_dated_markdown(
+            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
+            &oxide_report,
+            oxide_comparison.as_ref(),
         )?;
     }
 
@@ -3322,18 +3289,6 @@ struct ParsedDeviceTrace {
     energy_tables: Vec<XctraceTable>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CompareDeviceProofFamilyStatus {
-    pub watchable_smoke_passed: bool,
-    pub family_proof_passed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CompareDeviceProofStatus {
-    pub build_stamp: UIKitHostBuildStamp,
-    pub families: BTreeMap<String, CompareDeviceProofFamilyStatus>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UIKitHostBuildStamp {
     pub destination: String,
@@ -3803,19 +3758,15 @@ fn compare_device_family_for_uikit_spec(spec: &UIKitCaseSpec) -> Result<&'static
 
 fn uikit_case_in_compare_device_watchable_smoke_spec(spec: &UIKitCaseSpec) -> bool
 {
-   uikit_case_in_official_device_battery_spec(spec)
-}
-
-pub fn compare_device_official_families() -> Vec<String> {
-    let mut families = BTreeSet::new();
-    for spec in UIKIT_CASE_SPECS {
-        if uikit_case_in_official_device_battery_spec(spec) {
-            if let Ok(family) = compare_device_family_for_uikit_spec(spec) {
-                families.insert(String::from(family));
-            }
-        }
-    }
-    families.into_iter().collect()
+   matches!(
+      spec.test_name,
+      "testCollectionViewEncode"
+         | "testSpinnerSpin"
+         | "testButtonPressResponse"
+         | "testCollectionNavigationJourney"
+         | "testCameraNV12LegacyLivePreview"
+         | "testCameraAVFoundationPreviewLayerLivePreview"
+   )
 }
 
 pub fn uikit_case_in_compare_device_watchable_smoke(test_name: &str) -> Result<bool> {
@@ -5340,22 +5291,9 @@ pub fn prepare_resumable_uikit_device_result_root(result_root: &Path, preserved_
 {
    let has_resumable_artifacts = result_root_has_resumable_device_artifacts(result_root)?;
    let saved_stamp = load_uikit_result_root_build_stamp(result_root)?;
-   let proof_stamp = if saved_stamp.is_none()
-   {
-      load_compare_device_proof_status(result_root)?.map(|status| status.build_stamp)
-   }
-   else
-   {
-      None
-   };
    if has_resumable_artifacts
-      && (saved_stamp.as_ref() == Some(expected_stamp)
-         || proof_stamp.as_ref() == Some(expected_stamp))
+      && saved_stamp.as_ref() == Some(expected_stamp)
    {
-      if saved_stamp.is_none()
-      {
-         write_uikit_result_root_build_stamp(result_root, expected_stamp)?;
-      }
       println!("Resuming existing {} result root at {}.", label, result_root.display());
       return Ok(());
    }
@@ -5477,116 +5415,6 @@ fn write_oxide_progress_state(result_root: &Path, state: &UIKitProgressState) ->
     write_device_progress_state(result_root, "Oxide Device Progress", state)
 }
 
-fn compare_device_proof_status_json_path(result_root: &Path) -> PathBuf {
-    result_root.join(COMPARE_DEVICE_PROOF_STATUS_FILE)
-}
-
-fn compare_device_proof_status_markdown_path(result_root: &Path) -> PathBuf {
-    result_root.join(COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE)
-}
-
-pub fn load_compare_device_proof_status(
-    result_root: &Path,
-) -> Result<Option<CompareDeviceProofStatus>> {
-    let path = compare_device_proof_status_json_path(result_root);
-    match fs::read_to_string(&path) {
-        Ok(text) => {
-            let status = serde_json::from_str(&text)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            Ok(Some(status))
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
-    }
-}
-
-fn write_compare_device_proof_status(
-    result_root: &Path,
-    status: &CompareDeviceProofStatus,
-) -> Result<()> {
-    fs::create_dir_all(result_root)
-        .with_context(|| format!("creating {}", result_root.display()))?;
-    let json_path = compare_device_proof_status_json_path(result_root);
-    let json = serde_json::to_string_pretty(status)
-        .with_context(|| format!("serializing {}", json_path.display()))?;
-    fs::write(&json_path, json).with_context(|| format!("writing {}", json_path.display()))?;
-
-    let markdown_path = compare_device_proof_status_markdown_path(result_root);
-    let mut markdown = String::new();
-    markdown.push_str("# Compare Device Proof Status\n\n");
-    markdown.push_str(&format!(
-        "- Families: `{}`\n",
-        status.families.keys().cloned().collect::<Vec<_>>().join(", ")
-    ));
-    markdown.push_str("\n| Family | Watchable smoke | Family proof |\n");
-    markdown.push_str("| --- | --- | --- |\n");
-    for (family, state) in &status.families {
-        markdown.push_str(&format!(
-            "| `{}` | `{}` | `{}` |\n",
-            family, state.watchable_smoke_passed, state.family_proof_passed
-        ));
-    }
-    fs::write(&markdown_path, markdown)
-        .with_context(|| format!("writing {}", markdown_path.display()))
-}
-
-pub fn compare_device_missing_promotion_families(
-    status: Option<&CompareDeviceProofStatus>,
-    expected_stamp: &UIKitHostBuildStamp,
-) -> Vec<String> {
-    let Some(status) = status else {
-        return compare_device_official_families();
-    };
-    if &status.build_stamp != expected_stamp {
-        return compare_device_official_families();
-    }
-    compare_device_official_families()
-        .into_iter()
-        .filter(|family| {
-            !status.families.get(family).map(|state| state.family_proof_passed).unwrap_or(false)
-        })
-        .collect()
-}
-
-pub fn compare_device_comparisons_pass(
-    uikit_comparison: Option<&UIKitPerfComparison>,
-    oxide_comparison: Option<&PerfComparison>,
-) -> bool {
-    uikit_comparison.is_none_or(|comparison| {
-        comparison.missing_baseline.is_empty() && comparison.regressions.is_empty()
-    }) && oxide_comparison.is_none_or(|comparison| {
-        comparison.missing_baseline.is_empty() && comparison.regressions.is_empty()
-    })
-}
-
-fn update_compare_device_proof_status(
-    result_root: &Path,
-    expected_stamp: &UIKitHostBuildStamp,
-    stage: CompareDeviceRunStage,
-    families: &[String],
-) -> Result<()> {
-    let mut status = match load_compare_device_proof_status(result_root)? {
-        Some(existing) if existing.build_stamp == *expected_stamp => existing,
-        _ => CompareDeviceProofStatus {
-            build_stamp: expected_stamp.clone(),
-            families: BTreeMap::new(),
-        },
-    };
-    for family in families {
-        let entry = status.families.entry(family.clone()).or_default();
-        match stage {
-            CompareDeviceRunStage::WatchableSmoke => {
-                entry.watchable_smoke_passed = true;
-            }
-            CompareDeviceRunStage::FamilyProof => {
-                entry.family_proof_passed = true;
-            }
-            CompareDeviceRunStage::Promotion => {}
-        }
-    }
-    write_compare_device_proof_status(result_root, &status)
-}
-
 fn compare_device_stage_result_root(
     result_root: &Path,
     stage: CompareDeviceRunStage,
@@ -5597,9 +5425,9 @@ fn compare_device_stage_result_root(
         CompareDeviceRunStage::WatchableSmoke => {
             result_root.join("watchable").join(family.unwrap_or("all"))
         }
-        CompareDeviceRunStage::FamilyProof => result_root
+        CompareDeviceRunStage::FamilyDiagnostic => result_root
             .join("family")
-            .join(family.expect("family proof stage must provide a family name")),
+            .join(family.expect("family diagnostic stage must provide a family name")),
     }
 }
 
@@ -9521,14 +9349,14 @@ fn resolve_compare_device_run_stage(
     if !cli.cases.is_empty() && (cli.smoke || cli.family.is_some()) {
         bail!("--case cannot be combined with --watchable-smoke/--smoke or --family");
     }
-    if cli.write_baseline && (cli.smoke || cli.family.is_some()) {
-        bail!("--write-baseline requires canonical promotion mode without --watchable-smoke or --family");
+    if cli.write_baseline && (!cli.cases.is_empty() || cli.smoke || cli.family.is_some()) {
+        bail!("--write-baseline requires canonical promotion mode without --case, --watchable-smoke, --smoke, or --family");
     }
     let family = cli.family.as_deref();
     let stage = if cli.smoke {
         CompareDeviceRunStage::WatchableSmoke
     } else if family.is_some() {
-        CompareDeviceRunStage::FamilyProof
+        CompareDeviceRunStage::FamilyDiagnostic
     } else {
         CompareDeviceRunStage::Promotion
     };

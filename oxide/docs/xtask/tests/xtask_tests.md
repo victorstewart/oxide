@@ -27,12 +27,15 @@ Call flow:
 - `contract_coverage_status_distinguishes_absence_from_partial_coverage()`: prevents an unselected workload family from being reported as partial evidence.
 - `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check.
 - `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
-- `canonical_device_battery_is_exactly_five_matched_proof_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, staged proof buckets, required workload-family mappings, and matching Oxide ids.
+- `canonical_device_battery_is_exactly_five_matched_comparison_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, comparison families, required workload-family mappings, and matching Oxide ids.
 - `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.
 - `standalone_oxide_default_matches_the_five_unique_compare_rows()`: prevents the no-`--case` Oxide command from silently running a broader on-screen battery than matched promotion.
+- `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
+- `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
+- `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
-- Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, promotion prerequisites, and committed-baseline status.
+- Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, pre-write promotion gates, and committed-baseline status.
 - Trace tests exercise table/schema discovery, duration windows, signpost regions, CPU hotspots, GPU summaries, energy conversion, and unit normalization.
 - Private fixture helpers such as `sample_perf_report`, `sample_uikit_report`, and `sample_oxide_device_report` build deterministic inputs and are reached only by tests in this unit.
 
@@ -45,7 +48,7 @@ featureless `cargo test` pass while requiring the all-target `cargo check`
 replacement. It validates orchestration without recursively launching the
 workspace suite from inside an integration test.
 
-Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. The canonical-selector tests treat row count as a consequence of five matched proof obligations: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
+Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. The canonical-selector tests treat row count as a consequence of five matched comparisons: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 

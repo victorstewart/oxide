@@ -33,11 +33,13 @@ If a selected run contains no evidence for a family, the report must say `missin
 
 The committed device baselines are canonical signal batteries, not every registered row. They preserve distinct workload families, idiomatic-versus-optimized style comparisons where they matter, and the highest-signal scaling points. Dense near-duplicate count/style permutations remain exact touched-case runs; there is no run-everything device mode.
 
-The official device workflow is staged:
+The official publication proof is one canonical promotion run. Two narrower modes remain available without becoming prerequisites:
 
-- `watchable smoke`: fast representative runs that a human can watch on-device to confirm the right scene is visibly rendering
-- `family proof`: a complete proof pass for one compact workload family
-- `promotion`: the canonical baseline refresh, allowed only after the required family proofs are green for the current build
+- `watchable smoke`: optional visual QA for a visibly changed build, using one idiomatic row from component, animation, navigation, and journey plus both camera surfaces (six UIKit rows and five deduplicated Oxide rows)
+- `family diagnostic`: an explicit two-row UIKit and one-row Oxide investigation for one comparison family
+- `promotion`: the sole publication proof, using all ten canonical UIKit rows and five deduplicated Oxide rows; partial `--case` selection is rejected
+
+A routine baseline refresh runs promotion once. A visibly changed build may run watchable smoke first, then the same single promotion. Family diagnostics are investigative tools, not promotion gates.
 
 ## UIKit Baselines
 

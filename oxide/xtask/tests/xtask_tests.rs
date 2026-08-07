@@ -1,6 +1,6 @@
 use base64::Engine;
 use oxide_perf_runner::{
-    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfComparison, PerfReport,
+    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
 };
 use plist::{Dictionary, Value as PlValue};
 use std::collections::BTreeMap;
@@ -11,8 +11,7 @@ use tempfile::tempdir;
 use xtask::{
     apply_xctestrun_environment_overrides, build_entitlements_dict,
     check_experiment_manifest_text,
-    compare_device_comparisons_pass, compare_device_missing_promotion_families,
-    compare_device_official_families, compare_uikit_reports, console_output_contains_marker,
+    compare_uikit_reports, console_output_contains_marker,
     contract_coverage_status,
     device_console_failure_line, device_process_name, device_support_dir_matches,
     devicectl_notification_observed, display_value_to_base, extract_oxide_device_report_json,
@@ -37,7 +36,7 @@ use xtask::{
     perf_frame_capture_relative_source_for_test_name, perf_report_matches_case_ids,
     preferred_xctrace_toc_tables, prepare_resumable_uikit_device_result_root,
     prepare_uikit_device_perf_xctestrun, render_oxide_app_host_debug_summary_note,
-    render_oxide_tick_ring_note, resolve_existing_uikit_power_trace,
+    render_oxide_tick_ring_note, resolve_existing_uikit_power_trace, run_cli,
     start_console_marker_or_completion_observed, summarize_device_gpu_metrics_from_tables,
     summarize_energy_table, summarize_time_profile_from_xml,
     summarize_trace_signpost_metrics_from_tables, uikit_canonical_device_cases,
@@ -51,10 +50,9 @@ use xtask::{
     uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
     validate_normalized_camera_contract, validate_oxide_device_report_metric_contract,
     validate_uikit_device_report_metric_contract, xctrace_export_input_path_for_args,
-    CompareDeviceProofFamilyStatus, CompareDeviceProofStatus, Entitlements, LocationMode,
-    ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
+    Entitlements, LocationMode, ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
     UIKitContractCoverageReport, UIKitHostBuildStamp, UIKitMetricFallbackMode, UIKitMetricSource,
-    UIKitMetricSummary, UIKitPerfCase, UIKitPerfComparison, UIKitPerfReport, XctraceCell,
+    UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport, XctraceCell,
     XctraceTocTable,
 };
 
@@ -1368,7 +1366,7 @@ fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
 }
 
 #[test]
-fn prepare_resumable_uikit_device_result_root_promotes_matching_staged_proof()
+fn prepare_resumable_uikit_device_result_root_clears_unstamped_staged_checkpoints()
 {
    let dir = tempdir().expect("tempdir");
    let result_root = dir.path().join("result-root");
@@ -1383,16 +1381,6 @@ fn prepare_resumable_uikit_device_result_root_promotes_matching_staged_proof()
       development_team: String::from("TEAM123456"),
       source_fingerprint: 1,
    };
-   let proof = CompareDeviceProofStatus
-   {
-      build_stamp: stamp.clone(),
-      families: BTreeMap::new(),
-   };
-   fs::write(
-      result_root.join("proof-status.json"),
-      serde_json::to_string_pretty(&proof).expect("serialize proof status"),
-   )
-   .expect("write proof status");
 
    prepare_resumable_uikit_device_result_root(
       &result_root,
@@ -1400,9 +1388,10 @@ fn prepare_resumable_uikit_device_result_root_promotes_matching_staged_proof()
       &stamp,
       "combined device",
    )
-   .expect("reuse matching staged proof root");
+   .expect("clear unstamped staged result root");
 
-   assert!(case_dir.join("case.json").is_file());
+   assert!(!case_dir.join("case.json").is_file());
+   assert!(derived_data.exists());
    assert!(result_root.join(".oxide-device-result-root-stamp.json").is_file());
 }
 
@@ -2653,7 +2642,7 @@ fn official_device_battery_keeps_only_the_official_camera_pair() {
 }
 
 #[test]
-fn canonical_device_battery_is_exactly_five_matched_proof_pairs()
+fn canonical_device_battery_is_exactly_five_matched_comparison_pairs()
 {
    let cases = uikit_canonical_device_cases();
    assert_eq!(cases.len(), 10);
@@ -2737,34 +2726,64 @@ fn standalone_oxide_default_matches_the_five_unique_compare_rows()
 }
 
 #[test]
-fn compare_device_watchable_smoke_is_the_canonical_pair_set()
+fn compare_device_watchable_smoke_is_the_six_row_visual_subset()
 {
-   assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionViewEncode")
-      .expect("component smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedCollectionViewEncode")
-      .expect("optimized component smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke("testSpinnerSpin")
-      .expect("animation smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke("testOptimizedButtonPressResponse")
-      .expect("navigation smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke("testCollectionNavigationJourney")
-      .expect("journey smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke("testCameraNV12LegacyLivePreview")
-      .expect("camera smoke case"));
-   assert!(uikit_case_in_compare_device_watchable_smoke(
-      "testCameraAVFoundationPreviewLayerLivePreview"
-   )
-   .expect("camera baseline smoke case"));
-   assert!(!uikit_case_in_compare_device_watchable_smoke("testButtonEncode")
-      .expect("unpaired component case"));
-   assert!(!uikit_case_in_compare_device_watchable_smoke("testImageZoomPan")
-      .expect("non-smoke animation case"));
-   assert!(!uikit_case_in_compare_device_watchable_smoke("testTextFocusResponse")
-      .expect("non-smoke navigation case"));
+   let selected = uikit_canonical_device_cases()
+      .iter()
+      .filter(|case| {
+         uikit_case_in_compare_device_watchable_smoke(case.test_name)
+            .expect("canonical smoke membership")
+      })
+      .map(|case| case.test_name)
+      .collect::<Vec<_>>();
+   let mut oxide = Vec::new();
+   for test_name in &selected
+   {
+      let oxide_case_id = uikit_canonical_device_cases()
+         .iter()
+         .find(|case| case.test_name == *test_name)
+         .map(|case| case.oxide_case_id)
+         .expect("canonical smoke Oxide mapping");
+      if !oxide.contains(&oxide_case_id)
+      {
+         oxide.push(oxide_case_id);
+      }
+   }
+   assert_eq!(
+      selected,
+      vec![
+         "testCollectionViewEncode",
+         "testSpinnerSpin",
+         "testButtonPressResponse",
+         "testCollectionNavigationJourney",
+         "testCameraNV12LegacyLivePreview",
+         "testCameraAVFoundationPreviewLayerLivePreview",
+      ]
+   );
+   assert_eq!(
+      oxide,
+      vec![
+         "cpu.component.collection_view.encode",
+         "cpu.animation.spinner_spin",
+         "cpu.navigation.button_press.response",
+         "cpu.journey.collection_navigation",
+         "gpu.scene.camera.frame",
+      ]
+   );
+   for test_name in [
+      "testOptimizedCollectionViewEncode",
+      "testOptimizedSpinnerSpin",
+      "testOptimizedButtonPressResponse",
+      "testOptimizedCollectionNavigationJourney",
+   ]
+   {
+      assert!(!uikit_case_in_compare_device_watchable_smoke(test_name)
+         .expect("optimized case is publication-only"));
+   }
 }
 
 #[test]
-fn compare_device_family_classification_matches_staged_proof_buckets() {
+fn compare_device_family_classification_matches_diagnostic_buckets() {
     assert!(uikit_case_in_compare_device_family("testButtonEncode", "component")
         .expect("component family"));
     assert!(uikit_case_in_compare_device_family("testSpinnerSpin", "animation")
@@ -2788,34 +2807,60 @@ fn compare_device_family_classification_matches_staged_proof_buckets() {
 }
 
 #[test]
-fn compare_device_promotion_missing_families_requires_green_proofs_for_current_build() {
-    let expected_stamp = UIKitHostBuildStamp {
-        destination: String::from("platform=iOS,id=device"),
-        development_team: String::from("TEAM"),
-        source_fingerprint: 42,
-    };
-    let mut families = BTreeMap::new();
-    families.insert(
-        String::from("animation"),
-        CompareDeviceProofFamilyStatus { watchable_smoke_passed: true, family_proof_passed: true },
-    );
-    families.insert(
-        String::from("navigation"),
-        CompareDeviceProofFamilyStatus { watchable_smoke_passed: true, family_proof_passed: true },
-    );
-    let status = CompareDeviceProofStatus { build_stamp: expected_stamp.clone(), families };
+fn compare_device_promotion_validates_before_committed_baseline_writes()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let body = source
+      .split_once("fn ios_compare_device_perf(")
+      .and_then(|(_, tail)| tail.split_once("fn ios_device_perf("))
+      .map(|(body, _)| body)
+      .expect("compare-device-perf source body");
+   let uikit_contract = body
+      .find("validate_uikit_device_report_metric_contract(&uikit_report)")
+      .expect("UIKit current-report contract gate");
+   let oxide_contract = body
+      .find("validate_oxide_device_report_metric_contract(&oxide_report)")
+      .expect("Oxide current-report contract gate");
+   let uikit_failure = body
+      .find("UIKit device performance comparison failed")
+      .expect("UIKit comparison failure gate");
+   let oxide_failure = body
+      .find("Oxide device performance comparison failed")
+      .expect("Oxide comparison failure gate");
+   let uikit_write = body
+      .find("DEFAULT_UIKIT_DEVICE_BASELINE_JSON")
+      .expect("UIKit committed baseline write");
+   let oxide_write = body
+      .find("DEFAULT_OXIDE_DEVICE_BASELINE_JSON")
+      .expect("Oxide committed baseline write");
 
-    let missing = compare_device_missing_promotion_families(Some(&status), &expected_stamp);
-    assert_eq!(
-        missing,
-        vec![String::from("camera"), String::from("component"), String::from("journey"),]
-    );
+   for gate in [uikit_contract, oxide_contract, uikit_failure, oxide_failure]
+   {
+      assert!(gate < uikit_write);
+      assert!(gate < oxide_write);
+   }
+   assert!(!body.contains("proof-status"));
+   assert!(!body.contains("family_proof_passed"));
+}
 
-    let stale_stamp = UIKitHostBuildStamp { source_fingerprint: 99, ..expected_stamp };
-    assert_eq!(
-        compare_device_missing_promotion_families(Some(&status), &stale_stamp),
-        compare_device_official_families()
-    );
+#[test]
+fn compare_device_promotion_rejects_partial_case_selection()
+{
+   let args = [
+      "ios",
+      "compare-device-perf",
+      "--write-baseline",
+      "--case",
+      "testSpinnerSpin",
+   ]
+   .into_iter()
+   .map(String::from)
+   .collect::<Vec<_>>();
+   let error = run_cli(&args).expect_err("partial promotion must fail");
+
+   assert!(error.to_string().contains(
+      "--write-baseline requires canonical promotion mode without --case"
+   ));
 }
 
 #[test]
@@ -2847,21 +2892,6 @@ fn uikit_report_case_set_must_match_selected_cases_before_reuse() {
         &sample_uikit_report(&["uikit.animation.spinner_spin", "uikit.animation.spinner_spin"]),
         &["uikit.animation.spinner_spin", "uikit.animation.spinner_spin"]
     ));
-}
-
-#[test]
-fn compare_device_comparisons_must_pass_before_proof_status_updates() {
-    assert!(compare_device_comparisons_pass(None, None));
-
-    let uikit_failed = UIKitPerfComparison {
-        missing_baseline: vec![String::from("uikit.case")],
-        ..Default::default()
-    };
-    assert!(!compare_device_comparisons_pass(Some(&uikit_failed), None));
-
-    let oxide_failed =
-        PerfComparison { missing_baseline: vec![String::from("oxide.case")], ..Default::default() };
-    assert!(!compare_device_comparisons_pass(None, Some(&oxide_failed)));
 }
 
 #[test]

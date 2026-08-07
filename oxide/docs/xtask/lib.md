@@ -72,9 +72,9 @@ The active device harness now trims a large amount of orchestration dead weight 
 
 Before any `xcodebuild test-without-building` device batch, the harness now also preflights the phone's interactive state through `devicectl device info lockState` and `devicectl device info displays`. If the phone is locked or the main display backlight is off, the run fails fast and keeps its checkpoints instead of burning time in Xcode destination-preflight limbo.
 
-The canonical UIKit device battery is exactly ten rows: one two-row proof for each currently supported staged comparison family. This is the smallest set that preserves the existing five proof buckets without publishing an unpaired UIKit style. The previous default contained 38 rows: eight unpaired component rows, one collection pair, seven animation pairs, two navigation pairs, four journey pairs, and the two mandatory camera rows. The canonical selector keeps the collection component pair, spinner pair, button-response pair, collection-navigation pair, and camera microscope pair. The other 28 rows lose only default membership; all 177 registered UIKit cases remain callable by exact test name or case id through `--case`. There is no run-everything device mode.
+The canonical UIKit device battery is exactly ten rows: one two-row comparison for each currently supported family. This is the smallest set that preserves the existing five comparison families without publishing an unpaired UIKit style. The previous default contained 38 rows: eight unpaired component rows, one collection pair, seven animation pairs, two navigation pairs, four journey pairs, and the two mandatory camera rows. The canonical selector keeps the collection component pair, spinner pair, button-response pair, collection-navigation pair, and camera microscope pair. The other 28 rows lose only default membership; all 177 registered UIKit cases remain callable by exact test name or case id through `--case`. There is no run-everything device mode.
 
-| Compare proof | Required workload family | Idiomatic row | Optimized/comparator row | Oxide row |
+| Compare family | Required workload family | Idiomatic row | Optimized/comparator row | Oxide row |
 |---|---|---|---|---|
 | `component` | `lists-grids-chat` encode signal | `testCollectionViewEncode` | `testOptimizedCollectionViewEncode` | `cpu.component.collection_view.encode` |
 | `animation` | `animation-effects` | `testSpinnerSpin` | `testOptimizedSpinnerSpin` | `cpu.animation.spinner_spin` |
@@ -101,9 +101,11 @@ The required-family coverage matrix is deliberately explicit:
 
 Generated device reports use `missing` when none of the selected rows represent a group, `partial` when a selected signal exists without complete required coverage, and `implemented` only when the defined complete set is present. Exact UIKit and Oxide cases remain available for touched-surface evidence without changing the canonical default.
 
-The official compare flow is staged without introducing a broader promotion set. `cargo xtask ios compare-device-perf --watchable-smoke` runs the ten visibly watchable canonical rows and writes checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` runs the corresponding two-row proof under `family/<family>/`. Canonical `--write-baseline` promotion keeps using `uikit/` and `oxide/`, but it refuses to write official baselines until those family proofs for the current build stamp are green in `proof-status.json`.
+The official publication proof is one canonical `cargo xtask ios compare-device-perf --write-baseline` run: ten UIKit rows and five deduplicated Oxide rows under `uikit/` and `oxide/`. Promotion rejects `--case`, `--watchable-smoke`, `--smoke`, and `--family`, so a partial selection cannot replace the committed canonical battery. The command validates both current reports and both requested baseline comparisons before it writes either committed `latest.*` baseline. Routine publication needs no earlier stage.
 
-Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow the family-proof or promotion baseline paths.
+For a visibly changed build, `cargo xtask ios compare-device-perf --watchable-smoke` may run first. It captures exactly six UIKit rows—idiomatic collection component, spinner animation, button-response navigation, collection-navigation journey, and both camera surfaces—and their five deduplicated Oxide rows under `watchable/all/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` remains an explicit family diagnostic under `family/<family>/`; it neither records promotion status nor gates publication.
+
+Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow family diagnostics or promotion.
 
 Resumable UIKit and Oxide device flows only reuse a completed `current.json` when the report case IDs exactly match the selected case set. This keeps a prior smoke, family, or explicit `--case` run from satisfying a different requested run through a stale checkpoint.
 
@@ -142,7 +144,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
   - Repeated unchanged local runs should skip the expensive iOS rebuild path and reuse the previously fingerprinted derived data plus hashed `.xctestrun` variants.
 - Invariants maintained:
   - The UIKit case mapping is the single source of truth for report IDs and parity notes.
-  - No-case UIKit, matched compare-device, and standalone Oxide on-screen runs select the same five proof groups: ten UIKit style rows and five unique Oxide rows.
+  - No-case UIKit, matched compare-device, and standalone Oxide on-screen runs select the same five comparison families: ten UIKit style rows and five unique Oxide rows.
   - Local debug and device reports use the same case identity and metadata surface.
   - Device report validation fails required metric omissions before regression gating; optional metric regressions are gated only when those metrics are present in both current and baseline reports.
 
