@@ -24,12 +24,93 @@ type PostTaskFn = dyn Fn(alloc::boxed::Box<dyn FnOnce() + Send>) + Send + Sync;
 
 // ===== Public app interface =====
 
-pub trait App: Send + Sync {
-    fn init(&mut self, ctx: &mut InitContext);
-    fn event(&mut self, e: AppEvent, ctx: &mut UpdateContext);
-    fn draw(&mut self, r: &mut rend::RenderContext);
+/// Timing and viewport inputs for one app-owned frame preparation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameContext
+{
+   /// Monotonic host-assigned frame identifier.
+   pub frame_id: u64,
+   /// Display callback timestamp in monotonic nanoseconds.
+   pub timestamp_ns: u64,
+   /// Target presentation timestamp in monotonic nanoseconds.
+   pub target_timestamp_ns: u64,
+   /// Elapsed target-to-target time since the prior frame.
+   pub dt_ns: u64,
+   /// Logical viewport available to the app.
+   pub viewport: rend::RectF,
+   /// Physical pixels per logical point.
+   pub scale: f32,
+}
 
-    fn upload_runtime_images(&mut self, _uploader: &mut dyn rend::RuntimeImageUploader) {}
+/// Whether an app needs another display callback after the prepared frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameDemand
+{
+   /// Pause callbacks once all externally requested work is presented.
+   Idle,
+   /// Keep the display link active for the next vertical refresh.
+   NextVsync,
+}
+
+/// App-owned immutable render inputs borrowed by the host until submission.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedFrame<'a>
+{
+   /// Draw commands and backing geometry for the frame.
+   pub draw_list: &'a rend::DrawList,
+   /// Logical damage rectangles; an empty slice means full-frame damage.
+   pub damage: &'a [rend::RectI],
+}
+
+/// Process-owned application lifecycle, input, and frame interface.
+pub trait App: Send + Sync
+{
+   /// Initializes the application once with device and platform services.
+   fn init(&mut self, ctx: &mut InitContext);
+   /// Applies one lifecycle, input, text, window, or renderer event.
+   ///
+   /// `AppEvent::RendererStats` is a post-submit observation: handling it must
+   /// not mutate state that affects `prepare_frame`, `prepared_frame`, or
+   /// `draw`. Hosts intentionally deliver that observation without scheduling
+   /// another frame. Output changes must enter through a separately scheduled
+   /// app event or redraw request.
+   fn event(&mut self, e: AppEvent, ctx: &mut UpdateContext);
+
+   /// Compatibility drawing path for hosts that expose an immediate encoder.
+   fn draw(&mut self, _r: &mut rend::RenderContext<'_>)
+   {
+   }
+
+   /// Builds the next frame into app-owned reusable storage.
+   ///
+   /// iOS calls this before acquiring a drawable. The frame returned later by
+   /// `prepared_frame` must remain unchanged until the next `prepare_frame` or
+   /// `event` call.
+   fn prepare_frame(
+      &mut self,
+      _ctx: FrameContext,
+      _uploader: &mut dyn rend::RuntimeImageUploader,
+   ) -> FrameDemand
+   {
+      FrameDemand::Idle
+   }
+
+   /// Returns the frame most recently built by `prepare_frame`.
+   ///
+   /// Returning `None` selects the compatibility encoder path. Hosts still
+   /// acquire drawables after CPU composition without copying the draw list.
+   fn prepared_frame(&self) -> Option<PreparedFrame<'_>>
+   {
+      None
+   }
+
+   /// Compatibility upload hook used only with the immediate encoder path.
+   ///
+   /// Apps that return a prepared frame upload its resources from
+   /// `prepare_frame`; the host does not call this hook for that path.
+   fn upload_runtime_images(&mut self, _uploader: &mut dyn rend::RuntimeImageUploader)
+   {
+   }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,6 +333,8 @@ pub enum AppEvent {
     Input(InputEvent),
     Text(TextEvent),
     Keyboard(KeyboardEvent),
+    /// Observes one successful renderer submission without invalidating output
+    /// or requesting another frame.
     RendererStats(RendererStats),
     UrlScheme(alloc::string::String),
 }
@@ -316,6 +399,7 @@ pub struct KeyboardTransition {
     pub animation_ms: u32,
 }
 
+/// Read-only post-submit counters for diagnostics and protocol acknowledgement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RendererStats {
     pub frame_id: u64,

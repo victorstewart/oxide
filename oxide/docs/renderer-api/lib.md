@@ -26,6 +26,8 @@
   Enumerates renderer-neutral commands for layers, solids, images, glyphs, rounded rectangles, effects, camera backgrounds, custom embeds, spinners, and clips.
 - `RenderEncoder`
   Backend-facing immediate encoder trait used by replay and test encoders.
+  `RenderContext` borrows the active encoder for one draw callback, so backend
+  encoders retain ownership without type erasure or a `'static` constraint.
 - `ImageSampling`
   Declares immutable `Linear` or `Nearest` filtering for a runtime image resource.
 - `RuntimeImageUploader`

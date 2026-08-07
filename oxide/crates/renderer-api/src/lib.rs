@@ -431,9 +431,9 @@ pub trait Renderer {
 }
 
 // Exposed here to avoid circular deps (platform-api needs it for App::draw).
-pub struct RenderContext {
+pub struct RenderContext<'a> {
     pub frame_id: u64,
-    pub encoder: alloc::boxed::Box<dyn RenderEncoder>,
+    pub encoder: &'a mut dyn RenderEncoder,
 }
 
 // Minimal device caps subset duplicated here for renderer consumption.
