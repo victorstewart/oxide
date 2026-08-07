@@ -321,7 +321,6 @@ pub struct DeviceCaps {
     pub supports_msaa4x: bool,
     pub native_scale: f32,
     pub color_space: ColorSpace,
-    pub a11y_reduce_motion: bool,
 }
 
 // ===== Events =====

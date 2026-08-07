@@ -43,7 +43,6 @@
 - `MacPlatform::run_app` parks the caller because the AppKit host owns the process run loop before Rust platform services are installed.
 - `MacPlatform` forwards redraw, refresh-rate, idle-timer, clipboard, haptic, URL, settings, HTTP, secure-storage, Bluetooth, push, and network-status calls to Objective-C/FFI shims.
 - Clipboard reads distinguish missing native string data from a successful empty string, because author code can intentionally set an empty clipboard payload.
-- `DeviceCaps::a11y_reduce_motion` remains in the released structure but is hard-disabled to `false`; the macOS platform no longer queries an OS accessibility preference.
 - Capabilities advertise hover pointer plus the real Bluetooth and push services. Camera and recording bits are gated by AVFoundation device discovery, while location and motion bits remain gated by host availability.
 - Network status starts one persistent `nw_path_monitor_t`, stores the latest status atomically in the host shim, and fans out Oxide `NetworkStatus` snapshots to Rust subscribers.
 - Permissions forward through AppKit-hosted FFI to UserNotifications, CoreLocation, AVFoundation, Contacts, CoreBluetooth, and Photos where macOS exposes an API. Motion is reported denied because there is no macOS motion permission service behind the current Oxide motion API. UserNotifications access is guarded so non-bundled host-test processes report notifications as not-determined instead of aborting inside the framework.

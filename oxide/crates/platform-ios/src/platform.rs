@@ -190,7 +190,6 @@ impl api::Platform for IosPlatform
             1.0
          },
          color_space: api::ColorSpace::Srgb,
-         a11y_reduce_motion: false,
       }
    }
 

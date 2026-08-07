@@ -159,7 +159,6 @@ impl api::Platform for MacPlatform {
             supports_msaa4x: true,
             native_scale,
             color_space: api::ColorSpace::Srgb,
-            a11y_reduce_motion: false,
         }
     }
     fn haptics(&self) -> std::sync::Arc<dyn api::Haptics + Send + Sync> {

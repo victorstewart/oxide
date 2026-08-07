@@ -188,7 +188,6 @@ impl api::Platform for WebPlatform {
             supports_msaa4x: false,
             native_scale: browser_device_scale(),
             color_space: api::ColorSpace::Srgb,
-            a11y_reduce_motion: false,
         }
     }
 

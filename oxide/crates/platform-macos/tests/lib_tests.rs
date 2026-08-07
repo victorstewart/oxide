@@ -160,7 +160,6 @@ fn mac_platform_device_caps_sanitize_host_values() {
 
     assert_eq!(caps.max_framerate_hz, 60);
     assert_eq!(caps.native_scale, 1.0);
-    assert!(!caps.a11y_reduce_motion);
 }
 
 #[test]

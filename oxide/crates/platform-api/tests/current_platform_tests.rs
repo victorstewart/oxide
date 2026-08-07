@@ -215,7 +215,6 @@ impl Platform for RecordingPlatform {
             supports_msaa4x: true,
             native_scale: 2.0,
             color_space: ColorSpace::Srgb,
-            a11y_reduce_motion: false,
         }
     }
 

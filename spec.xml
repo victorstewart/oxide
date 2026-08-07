@@ -205,7 +205,6 @@ pub struct DeviceCaps
    pub supports_msaa4x: bool,
    pub native_scale: f32,
    pub color_space: ColorSpace, // see ColorSpace
-   pub a11y_reduce_motion: bool, // compatibility-reserved; do not use in new code
 }
 pub enum ColorSpace
 {
@@ -696,7 +695,7 @@ pub trait RenderEncoder
       <item>Oxide does not build or export an OS accessibility tree, VoiceOver elements, accessibility roles/actions, or a platform accessibility bridge.</item>
       <item>Accessibility must not be added to product requirements, authoring guidance, native parity workloads, visual admission, or performance gates.</item>
       <item>New Oxide code must not add host accessibility or automation identifiers. Harnesses use app/window queries, raw coordinates, and non-accessibility lifecycle signals; existing identifier-based controls are legacy cleanup candidates and must not expand.</item>
-      <compatibility>Released accessibility-named fields and dirty-state variants may remain solely for public-contract compatibility until an explicitly authorized breaking release. They may retain only behavior required by that contract; new code must not depend on or expand them.</compatibility>
+      <compatibility>Released accessibility-named dirty-state variants may remain solely for public-contract compatibility until an explicitly authorized breaking release. They may retain only behavior required by that contract; new code must not depend on or expand them.</compatibility>
     </accessibility>
   </section>
 
@@ -1002,7 +1001,7 @@ fn main()
     </lifecycle>
     <defaults>
       <item>Default ease: CubicOut, duration=150 ms, delay=0, repeat=Once.</item>
-      <item>Animations use the authored duration unchanged. The released DeviceCaps compatibility slot does not define a requirement for new code.</item>
+      <item>Animations use the authored duration unchanged.</item>
     </defaults>
     <mapping>
       <item>ui-core applies animated values to node styles before building DrawList.</item>

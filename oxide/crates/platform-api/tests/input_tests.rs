@@ -109,7 +109,6 @@ fn device_caps_copy() {
         supports_msaa4x: false,
         native_scale: 2.0,
         color_space: ColorSpace::DisplayP3Linear,
-        a11y_reduce_motion: false,
     };
     let copy = caps;
     assert_eq!(copy.max_framerate_hz, 120);

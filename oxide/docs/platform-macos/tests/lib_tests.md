@@ -24,7 +24,6 @@
 - Clipboard stubs store bytes in a process-local mutex and allocate returned non-empty buffers with `libc::malloc`, matching the ownership contract of `macos_free`.
 - The empty clipboard path returns success with a zero length and null pointer, which proves Rust distinguishes a valid empty string from a missing pasteboard string.
 - Device-cap stubs intentionally return unusable refresh-rate and scale values so the Rust wrapper must apply defaults.
-- The compatibility-reserved motion field is asserted `false`; no test-local accessibility-preference ABI exists.
 
 ## Preconditions and postconditions
 - Tests require no AppKit run loop and no real pasteboard.
