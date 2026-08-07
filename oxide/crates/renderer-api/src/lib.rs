@@ -200,8 +200,57 @@ pub struct IndexSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageHandle(pub u32);
 
+/// Immutable texture-filtering behavior owned by a runtime image resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageSampling
+{
+   /// Interpolates neighboring texels when image geometry does not map one-to-one to the source.
+   Linear,
+   /// Selects the nearest texel without interpolation.
+   Nearest,
+}
+
+impl Default for ImageSampling
+{
+   fn default() -> Self
+   {
+      Self::Linear
+   }
+}
+
 pub trait RuntimeImageUploader {
     fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
+
+    /// Attempts to create an sRGB texture from row-major RGBA8 bytes.
+    ///
+    /// Renderers without RGBA runtime uploads return `None`.
+   fn try_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Option<ImageHandle>
+   {
+      let _ = (width, height, data, row_bytes);
+      None
+   }
+
+   /// Attempts to create an sRGB texture with an explicit sampling contract.
+   ///
+   /// Existing uploaders retain linear behavior. Backends must explicitly
+   /// implement non-linear modes rather than silently rendering different
+   /// pixels. The selected mode belongs to the returned resource for the
+   /// lifetime of its handle.
+   fn try_create_rgba8_sampled(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize, sampling: ImageSampling) -> Option<ImageHandle>
+   {
+      match sampling
+      {
+         ImageSampling::Linear => self.try_create_rgba8(width, height, data, row_bytes),
+         ImageSampling::Nearest => None,
+      }
+   }
+
+   /// Releases a runtime RGBA8 resource previously returned by this uploader.
+   ///
+   /// Uploaders without RGBA runtime resources retain a no-op implementation.
+   fn release_rgba8(&mut self, _handle: ImageHandle)
+   {
+   }
 
     fn update_a8(
         &mut self,

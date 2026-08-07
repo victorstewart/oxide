@@ -1,6 +1,6 @@
 use oxide_renderer_api::{
-    Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, IndexSpan, Insets, RectF, RectI,
-    RenderEncoder, Vertex, VertexSpan, VisualEffect,
+    Color, Damage, DrawCmd, DrawList, GlyphRun, ImageHandle, ImageSampling, IndexSpan, Insets, RectF,
+    RectI, RenderEncoder, RuntimeImageUploader, Vertex, VertexSpan, VisualEffect,
 };
 
 const EXPECTED_DRAW_CMD_TAXONOMY: &[&str] = &[
@@ -756,4 +756,131 @@ fn vertex_storage_is_mutable() {
     list.indices.extend([0, 1, 2]);
     assert_eq!(list.vertices.len(), 1);
     assert_eq!(list.indices, vec![0, 1, 2]);
+}
+
+struct A8OnlyUploader;
+
+impl RuntimeImageUploader for A8OnlyUploader
+{
+   fn create_a8(
+      &mut self,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   ) -> ImageHandle
+   {
+      ImageHandle(1)
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: ImageHandle,
+      _x: u32,
+      _y: u32,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+   }
+}
+
+#[derive(Default)]
+struct LegacyRgbaUploader
+{
+   calls: u32,
+   released: Option<ImageHandle>,
+   row_bytes: usize,
+   uploaded: Vec<u8>,
+}
+
+impl RuntimeImageUploader for LegacyRgbaUploader
+{
+   fn create_a8(
+      &mut self,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   ) -> ImageHandle
+   {
+      ImageHandle(1)
+   }
+
+   fn try_create_rgba8(
+      &mut self,
+      _width: u32,
+      _height: u32,
+      data: &[u8],
+      row_bytes: usize,
+   ) -> Option<ImageHandle>
+   {
+      self.calls = self.calls.saturating_add(1);
+      self.row_bytes = row_bytes;
+      self.uploaded.clear();
+      self.uploaded.extend_from_slice(data);
+      Some(ImageHandle(2))
+   }
+
+   fn release_rgba8(&mut self, handle: ImageHandle)
+   {
+      self.released = Some(handle);
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: ImageHandle,
+      _x: u32,
+      _y: u32,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+   }
+}
+
+#[test]
+fn optional_rgba_runtime_upload_reports_unsupported_without_panicking()
+{
+   let mut uploader = A8OnlyUploader;
+   assert_eq!(uploader.try_create_rgba8(1, 1, &[255, 0, 0, 255], 4), None);
+   assert_eq!(
+      uploader.try_create_rgba8_sampled(1, 1, &[255, 0, 0, 255], 4, ImageSampling::Linear),
+      None,
+   );
+   assert_eq!(
+      uploader.try_create_rgba8_sampled(1, 1, &[255, 0, 0, 255], 4, ImageSampling::Nearest),
+      None,
+   );
+   uploader.release_rgba8(ImageHandle(7));
+}
+
+#[test]
+fn sampled_rgba_runtime_upload_preserves_legacy_linear_default_and_input_bytes()
+{
+   let pixels = [255, 1, 2, 255, 3, 4, 254, 128];
+   let mut uploader = LegacyRgbaUploader::default();
+
+   assert_eq!(ImageSampling::default(), ImageSampling::Linear);
+   assert_eq!(
+      uploader.try_create_rgba8_sampled(2, 1, &pixels, 8, ImageSampling::Linear),
+      Some(ImageHandle(2)),
+   );
+   assert_eq!(uploader.calls, 1);
+   assert_eq!(uploader.row_bytes, 8);
+   assert_eq!(uploader.uploaded, pixels);
+
+   assert_eq!(
+      uploader.try_create_rgba8_sampled(2, 1, &pixels, 8, ImageSampling::Nearest),
+      None,
+   );
+   assert_eq!(uploader.calls, 1, "nearest must not silently fall back to linear");
+   assert_eq!(uploader.uploaded, pixels);
+
+   uploader.release_rgba8(ImageHandle(2));
+   assert_eq!(uploader.released, Some(ImageHandle(2)));
 }
