@@ -14,8 +14,8 @@ Protect late drawable acquisition and prepared-frame ownership in the iOS produc
 - `frame_with_drawable_stub()` verifies the uninitialized status code.
 - `ios_tick_prepares_frame_before_acquiring_drawable()` and `ios_perf_runtime_prepares_frame_before_acquiring_drawable()` verify prepare/acquire/submit ordering and cancellation.
 - `ios_metal_layer_uses_timeout_capable_drawable_acquisition()` verifies timeout support.
-- `native_frame_preparation_reuses_app_owned_storage()` verifies command and damage storage ownership.
-- `prepared_frame_failures_keep_ios_clear_instead_of_retry_policy()` freezes the established iOS submit-error and cancellation policy, distinct from macOS retry retention.
+- `native_frame_coalescing_reuses_app_storage()` verifies app-owned command storage survives host coalescing without a duplicate frame allocation.
+- `native_damage_handoff_reuses_router_and_submit_storage()` verifies router damage and submit scratch remain reusable across native frames.
 - `injected_shell_is_full_screen_and_bypasses_test_chrome()` protects the pure production shell and permits only explicit negative accessibility assignments.
 - `raw_touch_and_display_link_timestamps_preserve_os_samples()` protects exact OS timing.
 - `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection and drawable cancellation before a backpressure-skipped frame can emit observational submit feedback.
@@ -32,7 +32,7 @@ The native entry-point names and source locations must remain stable. Passing pr
 
 ## Edge cases and failure modes
 
-The suite rejects early drawable acquisition, blocking timeout policy, allocating convenience helpers, test chrome in the production branch, clearing injected-app damage/demand before a successful submit, or acknowledging a renderer backpressure skip as presentation. The separate legacy test-host clear-on-cancel policy remains frozen.
+The suite rejects early drawable acquisition, blocking timeout policy, allocating convenience helpers, test chrome in the production branch, or acknowledging a renderer backpressure skip as presentation. Injected submit-failure and cancellation retry ownership is covered by `production_shell_tests.rs` and `tests/unit/internal_injected_app.rs`.
 
 ## Concurrency and memory behavior
 
@@ -59,6 +59,7 @@ assert!(source.contains("coalesce_adjacent_draws_reuse"));
 
 ## Changelog
 
+- 2026-08-07: aligned the entry list with the current coalescing/damage tests and moved retry-policy ownership to its actual production-shell and injected-app regressions.
 - 2026-08-06: preserved production renderer-cache purging across the injected/legacy host split.
 - 2026-08-06: Rejected backpressure-skipped frames before encode/submit and froze exact prepared-frame retry plus no-feedback semantics.
 - 2026-08-06: Added injected-shell, OS timestamp, wake acknowledgement, and deployment-target gates.
