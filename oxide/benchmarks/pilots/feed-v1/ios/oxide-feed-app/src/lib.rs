@@ -6,3 +6,5 @@
 
 /// Frozen workload identity and deterministic row recipe.
 pub mod contract;
+/// Strict run-record schema and nonce-scoped observation transport.
+pub mod observation;
