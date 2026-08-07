@@ -27,7 +27,7 @@ Each row constructs inputs outside its measured loop, unless creation/first-visi
 ## Workload contract
 
 - Retained UI: 1,000 label-shaped nodes, 500 image-shaped nodes, depths 16/32, clean replay, one dirty leaf, a 1,500-node hot working set under a 1 MiB hard cache budget, and a complete one-use invalidation workload under a zero-byte direct policy.
-- Animation/text: a real 300-node `UiSurface` driven by `Animator`, retained glyph/image replay, nested opacity/clips/transforms, and hit testing; warm/new/script/fallback/atlas/scale/SDF text cases, a 200-new-label production Metal publication row, and the atlas-backed text-option popover path.
+- Animation/text: a real 300-node `UiSurface` driven by `Animator`, retained glyph/image replay, nested opacity/clips/transforms, and hit testing; warm/new/script/fallback/atlas/scale/SDF text cases, a 200-new-label production Metal publication row, and the atlas-backed text-option popover path. `cpu.architecture.text.paged_atlas_locality.single_scale` holds device scale at 1x while varying glyph and font-size keys deterministically to create page pressure.
 - Dynamic properties: the CPU surface row requires zero chunk/sequence/geometry rebuild after warmup; a 300-instance Metal text/image row alternates full affine and opacity records through the completion-safe property ring.
 - Spatial metadata: CPU architecture/authoring rows query 10,000 alternating glyph/image-mesh instances; Metal small damage selects one instance/command with zero vertex scans, copies, or uploads, while full damage replays all 10,000 draws through one validated static plan.
 - Layers/effects/damage: CPU command-construction rows plus production Metal submissions for 100 × 100 layer caching, invalidation/resize/navigation/nesting/backdrop/memory-pressure rebuilds, effect layouts, direct/prepass/quarter/eighth target plans, an exact/paired sigma 2/8/16/32/64 local/full-screen blur sweep, and exact 5/25/100 percent damage sequences over up to 10,000 items.
@@ -124,6 +124,7 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.images.immutable_minified_shared_
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.images.icons_` for the C60 scaling matrix; add `OXIDE_C60_STANDALONE_IMAGES=1` for the same-pixel standalone control.
 
 ## Changelog
+- 2026-08-07: constrained the paged-atlas locality row to one device scale while retaining deterministic glyph/font-size pressure, and renamed its ID so old mixed-scale samples cannot be compared as the corrected workload.
 - 2026-07-15: added C60 100/1,000/10,000 unique-icon architecture rows, public atlas-grid authoring journey, decode/upload/residency/invalidation counters, and standalone evidence control.
 - 2026-07-15: added C59 immutable-image Shared/Private/mip policy controls, large/minified/one-use/public-authoring rows, direct GPU and startup distributions, residency/upload counters, indexed samples, and output-quality evidence.
 - 2026-07-15: added C58 Scene3D bloom graph integration, single-source extraction, aliased intermediates, conservative viewport/overlay rows, and graph/pass/bandwidth telemetry.
