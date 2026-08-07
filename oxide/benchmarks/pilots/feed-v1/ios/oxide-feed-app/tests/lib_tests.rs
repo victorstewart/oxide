@@ -49,6 +49,8 @@ struct RgbaUpload
 struct UploadProbe
 {
    next_handle: u32,
+   a8_creates: usize,
+   a8_updates: usize,
    rgba_uploads: Vec<RgbaUpload>,
 }
 
@@ -56,6 +58,7 @@ impl RuntimeImageUploader for UploadProbe
 {
    fn create_a8(&mut self, _width: u32, _height: u32, _data: &[u8], _row_bytes: usize) -> ImageHandle
    {
+      self.a8_creates = self.a8_creates.saturating_add(1);
       self.handle()
    }
 
@@ -73,6 +76,7 @@ impl RuntimeImageUploader for UploadProbe
 
    fn update_a8(&mut self, _handle: ImageHandle, _x: u32, _y: u32, _width: u32, _height: u32, _data: &[u8], _row_bytes: usize)
    {
+      self.a8_updates = self.a8_updates.saturating_add(1);
    }
 }
 
@@ -253,6 +257,38 @@ fn checker_uploads_use_only_frozen_nearest_sampled_source_bytes()
       assert_eq!(upload.bytes.len(), contract::CHECKER_RGBA_BYTE_COUNT);
       assert!(frozen_checker_payload(&upload.bytes));
    }
+}
+
+#[test]
+fn text_atlas_publication_is_coalesced_once_per_frame()
+{
+   let _lock = lock_environment();
+   let _environment = EnvironmentScope::new(StartState::Top, "test-text-frame-publication", None);
+   let mut app = FeedV1App::from_environment();
+   let mut uploader = UploadProbe::default();
+
+   assert_eq!(App::prepare_frame(&mut app, frame(1, 1_000_000_000), &mut uploader), FrameDemand::NextVsync);
+   assert_eq!(uploader.a8_creates, 1);
+   assert_eq!(uploader.a8_updates, 0, "cold glyphs must publish with the single atlas creation");
+
+   assert_eq!(App::prepare_frame(&mut app, frame(2, 1_008_333_333), &mut uploader), FrameDemand::Idle);
+   assert_eq!(uploader.a8_creates, 1);
+   assert_eq!(uploader.a8_updates, 0, "an unchanged warm frame must not republish glyph pixels");
+}
+
+#[test]
+fn runtime_text_adapter_preserves_append_and_release_operations()
+{
+   let source = include_str!("../src/lib.rs");
+   let start = source
+      .find("impl ImageUploader for RuntimeTextUploader<'_>")
+      .expect("runtime text adapter implementation");
+   let tail = &source[start..];
+   let end = tail.find("\n}\n\nstruct FeedRenderer").expect("runtime text adapter boundary");
+   let implementation = &tail[..end];
+
+   assert!(implementation.contains("self.uploader.append_a8("));
+   assert!(implementation.contains("self.uploader.release_a8(handle);"));
 }
 
 #[test]

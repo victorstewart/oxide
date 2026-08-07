@@ -468,6 +468,7 @@ impl FeedV1App
    fn render_frame(&mut self, frame: FrameContext, uploader: &mut dyn gfx::RuntimeImageUploader)
    {
       self.builder.clear();
+      self.text.begin_frame_at_scale(frame.scale);
       let viewport = gfx::RectF::new(
          contract::SURFACE_ORIGIN_X_POINTS as f32,
          contract::SURFACE_ORIGIN_Y_POINTS as f32,
@@ -511,6 +512,8 @@ impl FeedV1App
       let renderer_failure = renderer.failure;
       drop(renderer);
       self.builder.clip_pop();
+      let mut text_uploader = RuntimeTextUploader { uploader };
+      let _ = self.text.finish_frame(&mut text_uploader, &mut self.builder);
       let render_failure_stage = self.render_failure_stage();
       if self.app_phase == AppPhase::MountCold
       {
@@ -942,6 +945,16 @@ impl ImageUploader for RuntimeTextUploader<'_>
    fn update_a8(&mut self, handle: gfx::ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize)
    {
       self.uploader.update_a8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   fn append_a8(&mut self, handle: gfx::ImageHandle, x: u32, y: u32, width: u32, height: u32, data: &[u8], row_bytes: usize)
+   {
+      self.uploader.append_a8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   fn release_a8(&mut self, handle: gfx::ImageHandle)
+   {
+      self.uploader.release_a8(handle);
    }
 }
 
