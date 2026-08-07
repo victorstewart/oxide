@@ -969,6 +969,32 @@ pub struct ImageResidencyStats
    pub upload_command_buffers: u64,
 }
 
+#[inline]
+fn checked_rgba8_layout(w: u32, h: u32, data_len: usize, row_bytes: usize) -> Option<usize>
+{
+   let width = usize::try_from(w).ok()?;
+   let height = usize::try_from(h).ok()?;
+   if width == 0 || height == 0
+   {
+      return None;
+   }
+   let tight_row = width.checked_mul(4)?;
+   let bytes_per_row = if row_bytes == 0 { tight_row } else { row_bytes };
+   if bytes_per_row < tight_row
+   {
+      return None;
+   }
+   let required = height
+      .checked_sub(1)?
+      .checked_mul(bytes_per_row)?
+      .checked_add(tight_row)?;
+   if data_len < required
+   {
+      return None;
+   }
+   Some(bytes_per_row)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct GlyphGpuInstance
@@ -3960,7 +3986,7 @@ impl MetalRenderer {
    fn update_private_rgba8_image(&mut self, texture: &Texture, mipmapped: bool, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: u64)
    {
       let staging = self.shared_image_texture(
-         MTLPixelFormat::BGRA8Unorm_sRGB,
+         MTLPixelFormat::RGBA8Unorm_sRGB,
          w,
          h,
          data,
@@ -4106,32 +4132,35 @@ impl MetalRenderer {
 
    fn image_create_rgba8_with_policy(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, private: bool, mipmapped: bool) -> api::ImageHandle
    {
-      let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
+      {
+         return api::ImageHandle(0);
+      };
       let image = if private
       {
          self.private_image_texture(
-            MTLPixelFormat::BGRA8Unorm_sRGB,
+            MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
             data,
-            bpr,
+            bpr as u64,
             mipmapped,
          )
       }
       else if mipmapped
       {
          self.shared_image_texture_with_mips(
-            MTLPixelFormat::BGRA8Unorm_sRGB,
+            MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
             data,
-            bpr,
+            bpr as u64,
             true,
          )
       }
       else
       {
-         self.shared_image_texture(MTLPixelFormat::BGRA8Unorm_sRGB, w, h, data, bpr)
+         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
       };
       self.last_stats.texture_upload_bytes = self
          .last_stats
@@ -4145,21 +4174,10 @@ impl MetalRenderer {
 
    fn image_create_store_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
    {
-      let Some(tight_row) = (w as usize).checked_mul(4) else
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
       {
          return api::ImageHandle(0);
       };
-      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
-      let Some(required) = (h as usize).checked_sub(1)
-         .and_then(|rows| rows.checked_mul(bpr))
-         .and_then(|bytes| bytes.checked_add(tight_row)) else
-      {
-         return api::ImageHandle(0);
-      };
-      if w == 0 || h == 0 || bpr < tight_row || data.len() < required
-      {
-         return api::ImageHandle(0);
-      }
       let image = if mipmapped
       {
          self.shared_image_texture_with_mips(
@@ -4276,21 +4294,11 @@ impl MetalRenderer {
       {
          return;
       }
-      let Some(tight_row) = (w as usize).checked_mul(4) else
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
       {
          return;
       };
-      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
-      let Some(required) = (h as usize).checked_sub(1)
-         .and_then(|rows| rows.checked_mul(bpr))
-         .and_then(|bytes| bytes.checked_add(tight_row)) else
-      {
-         return;
-      };
-      if w == 0 || h == 0
-         || bpr < tight_row
-         || data.len() < required
-         || u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
+      if u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
          || u64::from(y).saturating_add(u64::from(h)) > image.texture.height()
       {
          return;
@@ -12145,7 +12153,8 @@ impl MetalRenderer {
         let bytes_per_pixel = match tex.pixel_format() {
             MTLPixelFormat::R8Unorm | MTLPixelFormat::R8Uint => 1,
             MTLPixelFormat::RG8Unorm => 2,
-            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA10_XR
+            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::RGBA8Unorm_sRGB
+                | MTLPixelFormat::BGRA10_XR
                 | MTLPixelFormat::Depth32Float => 4,
             MTLPixelFormat::RGBA16Float | MTLPixelFormat::RGBA16Uint => 8,
             MTLPixelFormat::RGBA32Float => 16,

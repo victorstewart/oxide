@@ -62,7 +62,9 @@ The renderer keeps long-lived GPU resources resident and reuses them across fram
 
 C59 makes image residency an explicit ownership decision. Dynamic RGBA8, glyph A8, video, and camera resources remain Shared so updates do not acquire a staging texture and copy submission. Non-minified immutable images also remain Shared because physical-iPhone large-static and small-one-use controls rejected staged Private storage. Repeatedly minified immutable images remain Shared and allocate a complete mip chain: isolated physical-iPhone Shared/Private-mip sampling tied at 0.3630/0.3636 ms GPU p50, while Private increased frame and encode p50 about 50%, first-visible time 15.0%, and creation peak 74.8%. The Mac cross-check also tied, so Shared won the simpler ownership and 42.8%-lower creation-peak tie-break. The renderer generates the chain once on its serial queue and samples with linear mip filtering plus clamp-to-edge addressing; standalone textures therefore need no atlas gutter. Partial updates regenerate an existing chain before later queue submissions can sample it. The hidden benchmark selector retains Shared/Private and mip/no-mip controls but does not alter the production policy.
 
-Image ownership remains with the caller rather than a speculative renderer-side source cache. Memory-pressure purges release derived effect, layer, ID-mask, and prepared data but preserve app-owned image textures. Replacing the Metal renderer drops every old-device handle; the owning image layer must replay its source bytes into the new renderer. C59 verifies that replay exactly. C60 implements `ImageResidencyBackend` directly on `MetalRenderer`: atlas pages are empty Shared `RGBA8Unorm_sRGB` textures, validated cell publication is an append-only region upload, standalone minified variants use the existing mip path, the renderer has a unique backend generation, and store eviction invalidates only recorded prepared chunks and retained layers built from them.
+Runtime RGBA images preserve their declared source order in `RGBA8Unorm_sRGB`; red and blue are not swapped at upload.
+
+Image ownership remains with the caller rather than a speculative renderer-side source cache. One checked RGBA layout gate serves dynamic, immutable/policy, store, and atlas-append uploads, so malformed input cannot reach Metal or mutate upload statistics, resource residency, or image IDs. Memory-pressure purges release derived effect, layer, ID-mask, and prepared data but preserve app-owned image textures. Replacing the Metal renderer drops every old-device handle; the owning image layer must replay its source bytes into the new renderer. C59 verifies that replay exactly. C60 implements `ImageResidencyBackend` directly on `MetalRenderer`: atlas pages are empty Shared `RGBA8Unorm_sRGB` textures, validated cell publication is an append-only region upload, standalone minified variants use the existing mip path, the renderer has a unique backend generation, and store eviction invalidates only recorded prepared chunks and retained layers built from them.
 
 Image call flow:
 
@@ -136,6 +138,7 @@ Cache telemetry reports hits, misses, entries, resident/budget bytes, evictions,
 - A non-minified immutable asset takes the same direct Shared path as a dynamic image, so small/one-use resources cannot accidentally acquire staging work.
 - Partial updates to a mipmapped image regenerate the full chain; callers that update frequently should use the non-mip dynamic API.
 - Unknown image handles remain no-ops under the pre-existing update/release contract.
+- Invalid RGBA dimensions, stride, source coverage, or checked layout arithmetic return the invalid zero handle without creating a Metal texture, advancing an image ID, or changing upload/residency statistics. A zero `row_bytes` value remains the documented tight-row request.
 - Device replacement invalidates every Metal handle; source replay belongs to the owning image layer rather than hidden renderer recovery state.
 
 ## Concurrency and memory behavior
@@ -152,7 +155,8 @@ The backend is available on Apple Metal targets. Raw color readback and the focu
 
 ## Testing and benchmarks
 
-- `tests/image_residency_tests.rs` freezes storage, mip updates, quality, release, cache pressure, and renderer recreation.
+- `tests/image_residency_tests.rs` freezes storage, checked invalid-create admission, handle-ID stability, mip updates, quality, release, cache pressure, and renderer recreation.
+- `tests/snapshots.rs` freezes RGBA channel order; `tests/performance_contract_tests.rs` freezes the single pre-mutation layout gate.
 - `oxide-perf-runner` C59 rows measure large static, minified-grid, small one-use, and public-`ImageView` paths on macOS and the physical iPhone.
 - C60 image-store integration tests compare atlas and standalone readback pixels and prove exact one-chunk prepared invalidation; architecture/authoring rows run on macOS and the physical iPhone.
 
@@ -162,6 +166,7 @@ Stable assets that are repeatedly sampled below source resolution call `image_cr
 
 ## Changelog
 
+- 2026-08-06: centralized checked RGBA create/append layout admission before all Metal, residency-stat, and handle-ID mutation and preserved RGBA source channel order.
 - 2026-07-15: implemented the C60 portable image-residency backend with sRGB empty atlas pages, append-only subregion publication, unique device generations, and exact prepared-chunk invalidation.
 - 2026-07-15: added C59 explicit immutable-image residency, complete mip generation and regeneration, storage/upload telemetry, memory-pressure ownership, and renderer-recreation semantics.
 - 2026-07-14: added the C52 exact/paired blur quality ladder, dedicated persistent pipeline states, lazy 1/16-sigma kernels, sample/ALU/table telemetry, and snapshot-only exact control.

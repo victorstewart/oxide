@@ -32,6 +32,8 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms command-buffer GPU timestamp support is compiled for macOS and iOS.
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
+- `rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()`
+  Requires one overflow-safe RGBA layout gate shared by policy create, store create, and atlas append before Metal calls, upload accounting, or image-ID mutation.
 - `auxiliary_encoders_use_the_selected_frame_slot()`
   Requires ID-mask and neon encoders to use the selected frame slot, rejects the former eight-entry ID-mask target array, and freezes the completion-cleared generation metadata and busy-generation reuse guard.
 - `layer_cache_uses_one_plan_and_reports_single_ownership()`
@@ -51,7 +53,7 @@ This test file protects renderer performance contracts that are easy to regress 
 
 ## Logic narrative
 
-Source-contract tests catch forbidden APIs and required guard strings before runtime. The layer source contract rejects the former independent hash/materialization path and requires child-to-parent invalidation propagation. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime tests then exercise the actual Metal path: device resolution, command queue creation, embedded shader-library loading, default pipeline-state creation, and three consecutive cache states. A placeholder metallib, a missing shader entry point, or duplicate layer-body ownership cannot satisfy these tests.
+Source-contract tests catch forbidden APIs and required guard strings before runtime. The RGBA admission contract centralizes zero-size, narrow-stride, short-data, and overflow rejection and proves that guard precedes native calls and bookkeeping in all byte-backed create paths plus append. The layer source contract rejects the former independent hash/materialization path and requires child-to-parent invalidation propagation. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime tests then exercise the actual Metal path: device resolution, command queue creation, embedded shader-library loading, default pipeline-state creation, and three consecutive cache states. A placeholder metallib, a missing shader entry point, or duplicate layer-body ownership cannot satisfy these tests.
 
 ## Preconditions and postconditions
 
@@ -110,6 +112,7 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-08-06: required one checked RGBA layout admission gate ahead of Metal/resource/stat/ID mutation in policy, store, and append paths.
 - 2026-07-14: added C52 subthreshold exact and sigma-8-plus paired blur sample, exponential-tap, and table-byte contracts; corrected first-use counts to include C51's lazily allocated offscreen final target.
 - 2026-07-14: replaced the ID-mask auxiliary-slot count assertion with C36 single-snapshot-target and completion-safe generation ownership guards.
 - 2026-07-14: added C31 Metal contracts for zero-budget exact inline fallback, allocated-byte bounds, resize pooling, navigation-ID reuse, and memory-warning purge telemetry.

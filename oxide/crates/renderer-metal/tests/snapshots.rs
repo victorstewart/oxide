@@ -2182,7 +2182,8 @@ fn snapshot_camera_nv12_optimized_tracks_bgra_benchmark() {
 
 fn solid_image(renderer: &mut MetalRenderer, bgra: [u8; 4]) -> api::ImageHandle
 {
-   let pixels = [bgra, bgra, bgra, bgra].concat();
+   let rgba = [bgra[2], bgra[1], bgra[0], bgra[3]];
+   let pixels = [rgba, rgba, rgba, rgba].concat();
    renderer.image_create_rgba8(2, 2, &pixels, 8)
 }
 
@@ -2195,6 +2196,29 @@ fn readback_pixel(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4]
 fn assert_pixel_eq(actual: [u8; 4], expected: [u8; 4], label: &str)
 {
    assert_eq!(actual, expected, "{label}");
+}
+
+#[test]
+fn snapshot_rgba_image_upload_preserves_red_and_blue_channels()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(8, 8, 1.0).expect("resize");
+   let pixels = [255, 0, 0, 255].repeat(4);
+   let texture = renderer.image_create_rgba8(2, 2, &pixels, 8);
+   let mut list = api::DrawList::default();
+   list.items.push(api::DrawCmd::Image {
+      tex: texture,
+      dst: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+      src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+      alpha: 1.0,
+   });
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   assert_eq!(readback_pixel(&pixels, 8, 4, 4), [0, 0, 255, 255]);
 }
 
 #[test]

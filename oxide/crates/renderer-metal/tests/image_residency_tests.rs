@@ -119,6 +119,54 @@ fn dynamic_rgba_images_remain_shared_at_large_sizes()
 }
 
 #[test]
+fn invalid_rgba_creates_do_not_mutate_resources_stats_or_handle_ids()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let initial_residency = renderer.image_residency_stats();
+   let initial_upload_bytes = renderer.last_stats().texture_upload_bytes;
+
+   assert_eq!(
+      renderer.image_create_rgba8(0, 1, &[255, 0, 0, 255], 4),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
+      renderer.image_create_rgba8(1, 0, &[255, 0, 0, 255], 4),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
+      renderer.image_create_rgba8(2, 1, &[0; 8], 7),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
+      renderer.image_create_rgba8(2, 2, &[0; 15], 8),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
+      renderer.image_create_rgba8(1, 2, &[], usize::MAX),
+      api::ImageHandle(0),
+   );
+   assert_eq!(
+      renderer.image_create_rgba8_immutable_for_benchmark(
+         2,
+         2,
+         &[0; 15],
+         8,
+         true,
+         true,
+      ),
+      api::ImageHandle(0),
+   );
+
+   assert_eq!(renderer.image_residency_stats(), initial_residency);
+   assert_eq!(renderer.last_stats().texture_upload_bytes, initial_upload_bytes);
+
+   let handle = renderer.image_create_rgba8(1, 1, &[255, 0, 0, 255], 0);
+   assert_eq!(handle, api::ImageHandle(1), "invalid creates must not consume an id");
+   renderer.image_release(handle);
+   assert_eq!(renderer.image_residency_stats(), initial_residency);
+}
+
+#[test]
 fn mipmapped_immutable_upload_and_partial_update_match_dynamic_pixels()
 {
    let width = 64_u32;
