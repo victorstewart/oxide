@@ -31,6 +31,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `filtered_run_suite_classifies_first_visible_images_as_cold()` runs the linear and nearest first-visible image rows, requires cold resource metadata, and freezes the render-only note boundary after texture publication and draw-list construction.
 - `canonical_smoke_suite_keeps_exact_inventory()` freezes the exact 23-row canonical count and ID digest.
 - `persisted_report_case_id_sets_are_frozen()` requires the committed workspace report to contain that same 23-row canonical ID set; device and browser report inventories keep their independent freezes.
+- The device freezes are the canonical comparison surface: five unique Oxide rows and ten UIKit rows forming five idiomatic/optimized pairs.
 - `persisted_workspace_canonical_renderer_metric_keys_are_frozen()` freezes metric keys only for canonical native renderer rows.
 - `workspace_latest_gates_canonical_retained_and_layout_rows()` requires retained dirty-leaf reuse/rebuild evidence and incremental dirty-subtree work bounded below cold layout.
 - `filtered_run_suite_runs_only_the_touched_case()` proves an explicit filter executes and validates only its requested noncanonical row.
@@ -94,6 +95,7 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-sui
 ## Changelog
 - 2026-08-07: kept one representative touched-case child route and the zero-work retired-alias guard active; marked the other 53 literal child suite contracts plus the implicit filtered-registry suite explicitly ignored for one-by-one execution.
 - 2026-08-07: froze the exact 23-row canonical smoke inventory and explicit touched-only execution after retiring the exhaustive workspace mode.
+- 2026-08-07: aligned persisted device report freezes with the five-row Oxide and ten-row UIKit canonical comparison batteries.
 - 2026-08-07: retired eight exact duplicate IDs, kept their canonical public rows, and froze the 16-row GPU scene inventory after timeline GPU work moved solely to the animation battery.
 - 2026-08-06: required linear and nearest first-visible image rows to report cold resource state and an explicit begin/encode/submit timing boundary.
 - 2026-08-06: froze the 401-row workspace case set after the SDF addition and semantic cutover to hit-test-only dynamic-animation row IDs.

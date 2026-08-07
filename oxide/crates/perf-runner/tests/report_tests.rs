@@ -531,10 +531,10 @@ fn persisted_report_case_id_sets_are_frozen() {
     assert_report_case_id_set(&workspace, "workspace latest", 23, 0x025eafdefc5ce69b);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
-    assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
+    assert_report_case_id_set(&oxide_device, "oxide device latest", 5, 0x6dd8f20cb104f3b0);
 
     let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
-    assert_report_case_id_set(&uikit_device, "uikit device latest", 38, 0x753034922b773608);
+    assert_report_case_id_set(&uikit_device, "uikit device latest", 10, 0xf0452bde8b832abc);
 
     let web = persisted_report_json("benchmarks/web/latest.json");
     assert_report_case_id_set(&web, "web latest", 18, 0x9fc864e451bf9432);
@@ -576,14 +576,14 @@ fn persisted_report_nested_key_sets_are_frozen()
    assert_json_array_entry_key_digest(&oxide_device["contract"]["battery"], "oxide device contract battery", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&oxide_device["contract"]["layers"], "oxide device contract layers", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&oxide_device["findings"], "oxide device findings", 2, 0x4c30c261b26d2ea9);
-   assert_report_metric_key_class_digest(&oxide_device, "oxide device latest", 23, 0x6c582bb7208d4962);
+   assert_report_metric_key_class_digest(&oxide_device, "oxide device latest", 5, 0xbbc4332f124976b4);
 
    let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
    assert_json_object_key_digest(&uikit_device["contract"], "uikit device contract", 4, 0x92feb47c0d2e7b8b);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["battery"], "uikit device contract battery", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["layers"], "uikit device contract layers", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&uikit_device["contract"]["styles"], "uikit device contract styles", 4, 0x0ab7b204885807d9);
-   assert_report_metric_key_class_digest(&uikit_device, "uikit device latest", 38, 0xebd1e83cc68ec4de);
+   assert_report_metric_key_class_digest(&uikit_device, "uikit device latest", 10, 0x4ae60c0fc2b7d734);
 
    let web = persisted_report_json("benchmarks/web/latest.json");
    let web_sections = [
