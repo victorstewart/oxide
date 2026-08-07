@@ -1,6 +1,7 @@
 use oxide_feed_v1_reducer::{
-   frozen_components, frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
-   visual_metrics, RgbaImage,
+   callback_deadline_counts, deterministic_bootstrap_interval, frozen_components,
+   frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
+   travel_equivalence_passes, visual_metrics, RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -16,6 +17,25 @@ fn valid_run_json() -> Result<Value, String>
       0,
    )
 }
+
+#[test]
+fn travel_equivalence_decision_honors_both_inclusive_frozen_boundaries()
+{
+   let cases = [
+      ("center", 0.0, 0.0, 0.0, true),
+      ("positive boundaries", 0.05, -0.10, 0.10, true),
+      ("negative median boundary", -0.05, -0.10, 0.10, true),
+      ("positive median violation", 0.050_000_001, -0.10, 0.10, false),
+      ("negative median violation", -0.050_000_001, -0.10, 0.10, false),
+      ("lower confidence violation", 0.0, -0.100_000_001, 0.05, false),
+      ("upper confidence violation", 0.0, -0.05, 0.100_000_001, false),
+   ];
+   for (name, median, lower, upper, expected) in cases
+   {
+      assert_eq!(travel_equivalence_passes(median, lower, upper), expected, "{name}");
+   }
+}
+
 #[test]
 fn strict_success_schema_round_trips_and_rejects_unknown_fields() -> Result<(), String>
 {
@@ -123,6 +143,18 @@ fn visual_gate_rejects_one_corrupt_48_pixel_tile() -> Result<(), String>
    assert!(mutated.worst_tile_rgb_mae > 18.0);
    Ok(())
 }
+
+#[test]
+fn clustered_bootstrap_is_seeded_and_deterministic() -> Result<(), String>
+{
+   let deltas = [-0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06];
+   let first = deterministic_bootstrap_interval(&deltas)?;
+   let second = deterministic_bootstrap_interval(&deltas)?;
+   assert_eq!(first, second);
+   assert!(first.0 <= first.1);
+   Ok(())
+}
+
 #[test]
 fn frozen_order_maps_each_treatment_and_both_directions_share_it() -> Result<(), String>
 {
@@ -133,6 +165,37 @@ fn frozen_order_maps_each_treatment_and_both_directions_share_it() -> Result<(),
    assert_eq!(frozen_order_index("primary", 0, 1, "oxide")?, 1);
    assert_eq!(frozen_order_index("primary", 0, 1, "uikit-idiomatic")?, 2);
    Ok(())
+}
+
+#[test]
+fn deadline_formula_uses_previous_callback_target_period() -> Result<(), String>
+{
+   let counts = callback_deadline_counts(&[(10.0, 10.008), (10.016, 10.032)])?;
+   assert_eq!(counts, (1, 2));
+   Ok(())
+}
+
+#[test]
+fn callback_admission_rejects_nonfinite_and_terminal_invalid_targets()
+{
+   let mut samples: Vec<(f64, f64)> = (0 .. 21).map(|index| {
+      let timestamp = 10.0 + f64::from(index) / 120.0;
+      (timestamp, timestamp + 1.0 / 120.0)
+   }).collect();
+   samples[0].1 = f64::NAN;
+   assert!(callback_deadline_counts(&samples).is_err());
+
+   samples[0].1 = samples[0].0 + 1.0 / 120.0;
+   let last = samples.len() - 1;
+   samples[last].1 = samples[last].0;
+   assert!(callback_deadline_counts(&samples).is_err());
+
+   let sixty_hz: Vec<(f64, f64)> = (0 .. 21).map(|index| {
+      let timestamp = 10.0 + f64::from(index) / 60.0;
+      (timestamp, timestamp + 1.0 / 60.0)
+   }).collect();
+   let error = callback_deadline_counts(&sixty_hz).unwrap_err();
+   assert!(error.contains("inside 7.5-9.2 ms"));
 }
 fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treatment: &str, direction: &str, order_index: u32) -> Result<Value, String>
 {
