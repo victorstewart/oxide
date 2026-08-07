@@ -1,21 +1,3 @@
-fn assert_only_accessibility_opt_outs(source: &str)
-{
-   let element_opt_out = "self.isAccessibilityElement = NO;";
-   let subtree_opt_out = "self.accessibilityElementsHidden = YES;";
-   assert_eq!(source.matches(element_opt_out).count(), 2);
-   assert_eq!(source.matches(subtree_opt_out).count(), 2);
-   for line in source
-      .lines()
-      .filter(|line| line.to_ascii_lowercase().contains("accessibility"))
-   {
-      let line = line.trim();
-      assert!(
-         line == element_opt_out || line == subtree_opt_out,
-         "unexpected production accessibility surface: {line}",
-      );
-   }
-}
-
 #[test]
 fn build_selects_exactly_one_objective_c_host_by_feature()
 {
@@ -53,7 +35,7 @@ fn product_host_is_a_bounded_injection_shell()
    {
       assert!(!source.contains(forbidden), "production host contains {forbidden}");
    }
-   assert_only_accessibility_opt_outs(source);
+   assert!(!lowercase.contains("accessibility"));
    assert!(!lowercase.contains("benchmark"));
 }
 

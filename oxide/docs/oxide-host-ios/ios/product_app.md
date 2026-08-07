@@ -24,7 +24,7 @@
 
 - `OxideTouchWindow::sendEvent:` forwards every raw touch phase, stable identity, coordinate, pressure/tilt, device kind, and OS timestamp before normal UIKit dispatch.
 - The first window scene claims the process-global surface. Any concurrent additional session is refused and destroyed before it can create a second window; disconnect releases ownership for a later replacement scene.
-- The Metal root and hidden text-input adapter explicitly opt out of UIKit accessibility exposure. They carry no labels, identifiers, traits, or platform-authored semantics.
+- The Metal root and hidden text-input adapter contain no UIKit accessibility configuration or metadata.
 - Rust app initialization installs the window callback, then the shell sends the actual view bounds and safe-area metrics once. It does not synthesize a second zero-inset resize.
 - The display link asks Rust to prepare a frame before acquiring a drawable. Missing drawables cancel the prepared frame; successful submission is the only point that acknowledges its wake generation.
 - The display link pauses when the app is idle and wakes through one monotonic generation, including redraw requests from platform services.
@@ -79,7 +79,8 @@ let result = unsafe
 
 ## Changelog
 
-- 2026-08-06: enforced single-scene ownership, explicit accessibility opt-out, actual-only startup metrics, and thread-safe display-link range observation.
+- 2026-08-07: removed the last UIKit accessibility configuration from the product shell.
+- 2026-08-06: enforced single-scene ownership, actual-only startup metrics, and thread-safe display-link range observation.
 - 2026-08-06: isolated the production shell from legacy Rust dependencies and exports behind `test-scenes-entrypoint`.
 - 2026-08-06: bound the atomic camera wake callback to foreground lifecycle and stopped duplicating key releases as repeat events.
 - 2026-08-06: added the bounded production app-injection shell and environment-transition accounting.

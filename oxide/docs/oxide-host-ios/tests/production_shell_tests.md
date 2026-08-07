@@ -13,7 +13,7 @@ Prevent the legacy iOS selector, benchmark, and camera host from entering the de
 ## Entry points list
 
 - `build_selects_exactly_one_objective_c_host_by_feature()` checks source selection and benchmark-stub ownership.
-- `product_host_is_a_bounded_injection_shell()` rejects legacy UI, benchmark code, and positive accessibility surfaces.
+- `product_host_is_a_bounded_injection_shell()` rejects legacy UI, benchmark code, and all accessibility configuration.
 - Raw-event, camera-lifecycle, environment-counter, display-link, and single-scene tests freeze the remaining native boundary contracts.
 - `display_link_observation_is_unavailable_off_ios()` checks the public Rust fallback without UIKit.
 - `tokio_spawn_api_and_runtime_installation_share_one_host_feature()` freezes explicit Tokio forwarding and spawn-hook ownership.
@@ -22,7 +22,7 @@ Prevent the legacy iOS selector, benchmark, and camera host from entering the de
 
 ## Logic narrative
 
-The tests require `build.rs` to pass exactly one selected source into `cc::Build`. They reject legacy UI, dependencies, benchmark identifiers, resource loading, exports, and state from the default product artifact while requiring the raw input, text/IME, lifecycle, frame scheduling, and shell-owned platform hooks a real injected app needs. The only permitted accessibility references are explicit negative assignments on the Metal root and hidden text adapter. The shell must claim one scene before creating its window, reject concurrent sessions, publish display-link range through an atomic snapshot, and wait for actual native startup metrics. Key end/cancel phases cannot masquerade as repeat events, and the camera publication wake must be installed and cleared with foreground lifecycle. Tokio spawn support remains one explicit additive feature shared by host and platform provider.
+The tests require `build.rs` to pass exactly one selected source into `cc::Build`. They reject legacy UI, dependencies, benchmark identifiers, resource loading, accessibility configuration, exports, and state from the default product artifact while requiring the raw input, text/IME, lifecycle, frame scheduling, and shell-owned platform hooks a real injected app needs. The shell must claim one scene before creating its window, reject concurrent sessions, publish display-link range through an atomic snapshot, and wait for actual native startup metrics. Key end/cancel phases cannot masquerade as repeat events, and the camera publication wake must be installed and cleared with foreground lifecycle. Tokio spawn support remains one explicit additive feature shared by host and platform provider.
 
 ## Preconditions and postconditions
 
@@ -54,6 +54,7 @@ The build contract contains `.file(app_source)` exactly once.
 
 ## Changelog
 
-- 2026-08-06: froze single-scene ownership, explicit accessibility opt-out, atomic frame-range observation, exact native timestamps, environment transition counters, and foreground camera callback lifecycle.
+- 2026-08-07: rejected all accessibility configuration from the production shell.
+- 2026-08-06: froze single-scene ownership, atomic frame-range observation, exact native timestamps, environment transition counters, and foreground camera callback lifecycle.
 - 2026-08-06: froze legacy Rust dependency/export/state ownership and explicit Tokio forwarding.
 - 2026-08-06: added production Objective-C artifact selection guards.

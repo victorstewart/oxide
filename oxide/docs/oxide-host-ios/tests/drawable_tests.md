@@ -16,7 +16,7 @@ Protect late drawable acquisition and prepared-frame ownership in the iOS produc
 - `ios_metal_layer_uses_timeout_capable_drawable_acquisition()` verifies timeout support.
 - `native_frame_coalescing_reuses_app_storage()` verifies app-owned command storage survives host coalescing without a duplicate frame allocation.
 - `native_damage_handoff_reuses_router_and_submit_storage()` verifies router damage and submit scratch remain reusable across native frames.
-- `injected_shell_is_full_screen_and_bypasses_test_chrome()` protects the pure production shell and permits only explicit negative accessibility assignments.
+- `injected_shell_is_full_screen_and_bypasses_test_chrome()` protects the pure production shell and rejects accessibility configuration.
 - `raw_touch_and_display_link_timestamps_preserve_os_samples()` protects exact OS timing.
 - `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection and drawable cancellation before a backpressure-skipped frame can emit observational submit feedback.
 - `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before requesting a rebuild.

@@ -140,11 +140,7 @@ fn injected_shell_is_full_screen_and_bypasses_test_chrome()
    assert!(connect.contains("CADisplayLink displayLinkWithTarget:self"));
    assert!(!source.contains("UISegmentedControl"));
    assert!(!source.contains("UIStackView"));
-   assert_eq!(source.matches("self.isAccessibilityElement = NO;").count(), 2);
-   assert_eq!(source.matches("self.accessibilityElementsHidden = YES;").count(), 2);
-   assert!(!source.contains("accessibilityIdentifier"));
-   assert!(!source.contains("accessibilityLabel"));
-   assert!(!source.contains("accessibilityTraits"));
+   assert!(!source.to_ascii_lowercase().contains("accessibility"));
    assert!(!source.contains("oxide_host_is_injected_app"));
 }
 

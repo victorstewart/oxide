@@ -181,8 +181,6 @@ static void camera_preview_did_advance(uint64_t generation,
   self = [super initWithFrame:frame];
   if (self != nil) {
     self.multipleTouchEnabled = YES;
-    self.isAccessibilityElement = NO;
-    self.accessibilityElementsHidden = YES;
     self.opaque = YES;
     self.backgroundColor = UIColor.whiteColor;
     CAMetalLayer *layer = (CAMetalLayer *)self.layer;
@@ -271,8 +269,6 @@ static void camera_preview_did_advance(uint64_t generation,
                 textContainer:nil];
   if (self != nil) {
     self.delegate = self;
-    self.isAccessibilityElement = NO;
-    self.accessibilityElementsHidden = YES;
     self.backgroundColor = UIColor.clearColor;
     self.textColor = UIColor.clearColor;
     self.tintColor = UIColor.clearColor;
