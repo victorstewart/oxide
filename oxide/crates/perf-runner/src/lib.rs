@@ -48,6 +48,9 @@ const PERF_DEVICE_SCALE: f32 = 2.0;
 const PERF_SCENE_W: u32 = 1200;
 const PERF_SCENE_H: u32 = 800;
 const PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
+const PERF_120_HZ_STEP_NS: u64 = 8_333_333;
+const PERF_SCROLL_TRACE_START_NS: u64 = 1_000_000_000;
+const FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS: u64 = 1_024;
 static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
 
 struct ScenePerfSpec {
@@ -204,6 +207,7 @@ const PERF_JOURNEY_SPECS: &[JourneyPerfSpec] = &[
         id: "cpu.journey.orchestration_transition_modal",
         name: "Orchestration Transition + Modal",
     },
+    JourneyPerfSpec { id: "cpu.journey.feed_raw_touch_fling", name: "Feed Raw Touch Fling" },
     JourneyPerfSpec { id: "cpu.journey.feed_scroll_matrix", name: "Feed Scroll Matrix" },
     JourneyPerfSpec {
         id: "cpu.journey.thumbnail_grid_scroll_matrix",
@@ -281,6 +285,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec {
         id: "cpu.authoring.collection_prefix_update.full_scan",
         name: "Collection Prefix Update Full Scan",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.vertical_scroll_surface.input_advance",
+        name: "Vertical Scroll Surface Input + Advance",
     },
     AuthoringPerfSpec {
         id: "cpu.authoring.webgpu_pipeline_profile.compose",
@@ -2665,12 +2673,13 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
             "lists-grids-chat",
             "Lists, Grids, & Chat",
             has_all(&[
+                "cpu.journey.feed_raw_touch_fling",
                 "cpu.journey.feed_scroll_matrix",
                 "cpu.journey.thumbnail_grid_scroll_matrix",
                 "cpu.journey.chat_thread_scroll_matrix",
             ]),
-            "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside the collection encode and navigation slices.",
-            "Collection encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete.",
+            "A representative 2000-row raw-touch feed fling now reaches actual settlement beside the distinct programmatic feed, thumbnail-grid, and chat-thread viewport-transition matrices.",
+            "Collection encode and navigation coverage exist, but the raw-touch settled feed journey or compact feed/grid/chat viewport-transition matrices are still incomplete.",
         ),
         contract_battery_entry(
             "navigation-input",
@@ -3282,6 +3291,7 @@ fn push_journey_cases(
             "cpu.journey.collection_navigation" => journey_collection_navigation_case(smoke),
             "cpu.journey.zoom_image_gesture_cycle" => journey_zoom_image_case(smoke),
             "cpu.journey.orchestration_transition_modal" => journey_orchestration_case(smoke),
+            "cpu.journey.feed_raw_touch_fling" => journey_feed_raw_touch_fling_case(smoke),
             "cpu.journey.feed_scroll_matrix" => journey_feed_scroll_case(smoke),
             "cpu.journey.thumbnail_grid_scroll_matrix" => journey_thumbnail_grid_scroll_case(smoke),
             "cpu.journey.chat_thread_scroll_matrix" => journey_chat_thread_scroll_case(smoke),
@@ -3361,6 +3371,9 @@ fn push_authoring_cases(
             }
             "cpu.authoring.collection_prefix_update.full_scan" => {
                 authoring_collection_prefix_update_case(smoke, false)
+            }
+            "cpu.authoring.vertical_scroll_surface.input_advance" => {
+                authoring_vertical_scroll_surface_case(smoke)
             }
             "cpu.authoring.webgpu_pipeline_profile.compose" => {
                 authoring_webgpu_pipeline_profile_case(smoke)
@@ -5818,6 +5831,58 @@ fn authoring_collection_prefix_update_case(smoke: bool, incremental: bool) -> Pe
     case
 }
 
+fn vertical_scroll_fling_trace() -> [platform::TouchEvent; 4]
+{
+   let id = platform::TouchId(41);
+   let start_ns = PERF_SCROLL_TRACE_START_NS;
+   [
+      touch_at(id, platform::TouchPhase::Start, 180.0, 520.0, start_ns),
+      touch_at(id, platform::TouchPhase::Move, 180.0, 480.0, start_ns + PERF_120_HZ_STEP_NS),
+      touch_at(id, platform::TouchPhase::Move, 180.0, 440.0, start_ns + 2 * PERF_120_HZ_STEP_NS),
+      touch_at(id, platform::TouchPhase::End, 180.0, 400.0, start_ns + 3 * PERF_120_HZ_STEP_NS),
+   ]
+}
+
+fn authoring_vertical_scroll_surface_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 64 } else { 256 };
+   let trace = vertical_scroll_fling_trace();
+   let advance_ns = trace[3].timestamp_ns.saturating_add(PERF_120_HZ_STEP_NS);
+   let mut surface = ui::VerticalScrollSurface::new(40_000.0, 800.0);
+   let mut visible_changes = 0u64;
+   let mut case = measure_cpu_case(
+      "cpu.authoring.vertical_scroll_surface.input_advance",
+      "authoring",
+      smoke,
+      true,
+      0.18,
+      loops,
+      vec![String::from(
+         "Warmed public VerticalScrollSurface input path: one retained stack trace feeds raw drag/release samples, then advances one fixed 120 Hz inertial step.",
+      )],
+      ||
+      {
+         surface.set_offset(0.0);
+         visible_changes = 0;
+         for event in &trace
+         {
+            visible_changes += surface.input_touch(event) as u64;
+         }
+         visible_changes += surface.advance_to(advance_ns) as u64;
+         u64::from(surface.offset().to_bits()).wrapping_add(visible_changes)
+      },
+   );
+   case.metrics.insert(String::from("raw_touch_events_per_op"), trace.len() as f64);
+   case.metrics.insert(String::from("inertial_steps_per_op"), 1.0);
+   case.metrics.insert(String::from("visible_changes_per_op"), visible_changes as f64);
+   case.metrics.insert(String::from("surface_offset_after_step"), surface.offset() as f64);
+   case.metrics.insert(
+      String::from("inertia_active_after_step"),
+      if surface.wants_next_frame() { 1.0 } else { 0.0 },
+   );
+   case
+}
+
 fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
     let loops = if smoke { 16 } else { 64 };
     let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
@@ -8034,6 +8099,96 @@ fn reconcile_theme_swap_case(smoke: bool) -> Result<PerfCaseResult> {
     Ok(case)
 }
 
+#[derive(Default)]
+struct FeedRawTouchFlingStats
+{
+   checksum: u64,
+   simulated_display_steps: u64,
+   encoded_ui_frames: u64,
+   draw_items: u64,
+   final_offset: f32,
+   settled: bool,
+}
+
+fn render_feed_raw_touch_frame(collection: &mut ui::collection::CollectionView, measure: &mut FeedMeasure, render: &mut FeedRender, builder: &mut ui::DrawListBuilder, surface: &mut ui::VerticalScrollSurface, viewport: api::RectF) -> u64
+{
+   builder.clear();
+   collection.set_scroll(surface.offset());
+   let metrics = collection.layout_and_render(viewport, measure, render, builder);
+   let extent_changed = surface.update_extents(metrics.content_h, viewport.h) as u64;
+   let drawlist = builder.drawlist();
+   (drawlist.items.len() as u64)
+      .wrapping_add(drawlist.vertices.len() as u64)
+      .wrapping_add(drawlist.indices.len() as u64)
+      .wrapping_add(extent_changed)
+}
+
+fn run_feed_raw_touch_fling(collection: &mut ui::collection::CollectionView, measure: &mut FeedMeasure, render: &mut FeedRender, builder: &mut ui::DrawListBuilder, surface: &mut ui::VerticalScrollSurface, trace: &[platform::TouchEvent; 4], viewport: api::RectF) -> FeedRawTouchFlingStats
+{
+   surface.set_offset(0.0);
+   let mut stats = FeedRawTouchFlingStats::default();
+   stats.checksum = render_feed_raw_touch_frame(
+      collection,
+      measure,
+      render,
+      builder,
+      surface,
+      viewport,
+   );
+   stats.encoded_ui_frames = 1;
+   stats.draw_items = builder.drawlist().items.len() as u64;
+
+   for event in trace
+   {
+      if surface.input_touch(event)
+      {
+         stats.checksum = stats.checksum.wrapping_add(render_feed_raw_touch_frame(
+            collection,
+            measure,
+            render,
+            builder,
+            surface,
+            viewport,
+         ));
+         stats.encoded_ui_frames = stats.encoded_ui_frames.saturating_add(1);
+         stats.draw_items =
+            stats.draw_items.saturating_add(builder.drawlist().items.len() as u64);
+      }
+   }
+
+   let mut timestamp_ns = trace[3].timestamp_ns;
+   while surface.wants_next_frame()
+      && stats.simulated_display_steps < FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS
+   {
+      timestamp_ns = timestamp_ns.saturating_add(PERF_120_HZ_STEP_NS);
+      stats.simulated_display_steps = stats.simulated_display_steps.saturating_add(1);
+      if surface.advance_to(timestamp_ns)
+      {
+         stats.checksum = stats.checksum.wrapping_add(render_feed_raw_touch_frame(
+            collection,
+            measure,
+            render,
+            builder,
+            surface,
+            viewport,
+         ));
+         stats.encoded_ui_frames = stats.encoded_ui_frames.saturating_add(1);
+         stats.draw_items =
+            stats.draw_items.saturating_add(builder.drawlist().items.len() as u64);
+      }
+   }
+
+   stats.final_offset = surface.offset();
+   stats.settled = surface.is_settled();
+   stats.checksum = stats
+      .checksum
+      .wrapping_add(u64::from(stats.final_offset.to_bits()))
+      .wrapping_add(stats.simulated_display_steps)
+      .wrapping_add(stats.encoded_ui_frames)
+      .wrapping_add(stats.draw_items);
+   stats
+}
+
 fn collection_flow_case<M, R>(
     id: &str,
     name: &str,
@@ -8062,7 +8217,7 @@ where
         smoke,
         0.18,
         vec![format!(
-            "{} using collection virtualization across slow scroll, medium scroll, hard fling, reverse, and focus movement.",
+            "{} using collection virtualization across six programmatic viewport transitions, including reverse movement, plus focus movement; this case does not simulate raw touch or inertia.",
             name
         )],
         move || {
@@ -8106,6 +8261,91 @@ where
         if has_collection_revision { 1.0 } else { 0.0 },
     );
     Ok(case)
+}
+
+fn journey_feed_raw_touch_fling_case(smoke: bool) -> Result<PerfCaseResult>
+{
+   let viewport = api::RectF::new(0.0, 0.0, 360.0, 640.0);
+   let mut collection =
+      ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {
+         col_width: 320.0,
+         spacing: 14.0,
+      });
+   collection.set_count(2_000);
+   let mut measure = FeedMeasure;
+   let mut render = FeedRender;
+   let mut builder = ui::DrawListBuilder::new();
+   let initial = collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+   let mut surface = ui::VerticalScrollSurface::new(initial.content_h, viewport.h);
+   let trace = vertical_scroll_fling_trace();
+   let mut run_count = 0u64;
+   let mut settled_count = 0u64;
+   let mut simulated_display_step_total = 0u64;
+   let mut encoded_ui_frame_total = 0u64;
+   let mut draw_item_total = 0u64;
+   let mut final_offset = 0.0f32;
+   let mut last_settled = false;
+   let mut case = measure_journey_case(
+      "cpu.journey.feed_raw_touch_fling",
+      smoke,
+      0.18,
+      vec![String::from(
+         "One representative 2000-row feed reuses warmed CollectionView and DrawListBuilder storage while a raw one-finger fling advances at explicit 120 Hz timestamps until the Rust-owned scroll surface settles.",
+      )],
+      ||
+      {
+         let stats = run_feed_raw_touch_fling(
+            &mut collection,
+            &mut measure,
+            &mut render,
+            &mut builder,
+            &mut surface,
+            &trace,
+            viewport,
+         );
+         run_count = run_count.saturating_add(1);
+         settled_count = settled_count.saturating_add(stats.settled as u64);
+         simulated_display_step_total = simulated_display_step_total
+            .saturating_add(stats.simulated_display_steps);
+         encoded_ui_frame_total =
+            encoded_ui_frame_total.saturating_add(stats.encoded_ui_frames);
+         draw_item_total = draw_item_total.saturating_add(stats.draw_items);
+         final_offset = stats.final_offset;
+         last_settled = stats.settled;
+         stats.checksum
+      },
+   )?;
+   if !last_settled
+   {
+      bail!(
+         "cpu.journey.feed_raw_touch_fling exceeded {} simulated display steps before settlement",
+         FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS,
+      );
+   }
+   let measured_runs = run_count.max(1) as f64;
+   case.metrics.insert(String::from("collection_count"), 2_000.0);
+   case.metrics.insert(String::from("raw_touch_events_per_journey"), trace.len() as f64);
+   case.metrics.insert(String::from("simulated_refresh_hz"), 120.0);
+   case.metrics.insert(
+      String::from("simulated_display_steps_to_settle_per_journey"),
+      simulated_display_step_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("encoded_ui_frames_per_journey"),
+      encoded_ui_frame_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("draw_items_per_journey"),
+      draw_item_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("settled_journey_ratio"),
+      settled_count as f64 / measured_runs,
+   );
+   case.metrics.insert(String::from("final_offset_points"), final_offset as f64);
+   case.metrics.insert(String::from("collection_content_extent_points"), initial.content_h as f64);
+   case.metrics.insert(String::from("collection_revision_hint"), 1.0);
+   Ok(case)
 }
 
 fn journey_feed_scroll_case(smoke: bool) -> Result<PerfCaseResult> {
@@ -10827,10 +11067,15 @@ fn touch(
     x: f32,
     y: f32,
 ) -> platform::TouchEvent {
+    touch_at(id, phase, x, y, 0)
+}
+
+fn touch_at(id: platform::TouchId, phase: platform::TouchPhase, x: f32, y: f32, timestamp_ns: u64) -> platform::TouchEvent
+{
     platform::TouchEvent {
         id,
         phase,
-        timestamp_ns: 0,
+        timestamp_ns,
         x,
         y,
         pressure: None,
