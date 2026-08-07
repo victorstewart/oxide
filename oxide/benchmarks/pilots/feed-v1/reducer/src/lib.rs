@@ -255,6 +255,113 @@ impl RgbaImage
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct CallbackMetrics
+{
+   callback_count: usize,
+   achieved_cadence_hz: f64,
+   interval_p50_ms: f64,
+   interval_p95_ms: f64,
+   interval_p99_ms: f64,
+   interval_peak_ms: f64,
+   missed_callback_deadlines: u64,
+   expected_callbacks: u64,
+   missed_callback_deadline_ratio: f64,
+   callback_hitch_ms_per_elapsed_second: f64,
+   target_period_admission_ratio: f64,
+}
+
+#[derive(Clone, Debug)]
+struct MeasuredRun
+{
+   record: RunRecord,
+   intervals: Vec<f64>,
+   metrics: CallbackMetrics,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct RunSummary
+{
+   nonce: String,
+   phase: String,
+   session_index: u32,
+   pair_index: u32,
+   order_index: u32,
+   treatment: String,
+   direction: String,
+   gesture_duration_seconds: f64,
+   inertia_observed: bool,
+   thermal_state_change_count: u32,
+   low_power_mode_change_count: u32,
+   signed_travel_points: f64,
+   travel_distance_points: f64,
+   callback_count: usize,
+   achieved_cadence_hz: f64,
+   interval_p50_ms: f64,
+   interval_p95_ms: f64,
+   interval_p99_ms: f64,
+   interval_peak_ms: f64,
+   missed_callback_deadlines: u64,
+   expected_callbacks: u64,
+   missed_callback_deadline_ratio: f64,
+   callback_hitch_ms_per_elapsed_second: f64,
+   target_period_admission_ratio: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct TreatmentSummary
+{
+   treatment: String,
+   run_count: usize,
+   interval_p50_ms: f64,
+   interval_p95_ms: f64,
+   interval_p99_ms: f64,
+   interval_peak_ms: f64,
+   missed_callback_deadline_ratio: f64,
+   callback_hitch_ms_per_elapsed_second: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct TravelEquivalenceResult
+{
+   treatment: String,
+   direction: String,
+   pair_count: usize,
+   median_relative_delta: f64,
+   confidence_95_lower: f64,
+   confidence_95_upper: f64,
+   median_margin: f64,
+   confidence_margin: f64,
+   passes: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TravelValidation
+{
+   results: Vec<TravelEquivalenceResult>,
+   blockers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct Comparison
+{
+   comparator: String,
+   classification: String,
+   median_pair_relative_p95_delta: f64,
+   confidence_95_lower: f64,
+   confidence_95_upper: f64,
+   oxide_interval_p50_ms: f64,
+   comparator_interval_p50_ms: f64,
+   oxide_interval_p95_ms: f64,
+   comparator_interval_p95_ms: f64,
+   oxide_missed_deadline_ratio: f64,
+   comparator_missed_deadline_ratio: f64,
+   oxide_hitch_ms_per_second: f64,
+   comparator_hitch_ms_per_second: f64,
+   bootstrap_resamples: usize,
+   bootstrap_seed_hex: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AdversarialResult
 {
    mutation: String,
@@ -302,9 +409,24 @@ pub fn frozen_components(start_state: &str) -> Result<Vec<Component>, String>
    frozen_visible_components(start_state)
 }
 
+pub fn deterministic_bootstrap_interval(pair_deltas: &[f64]) -> Result<(f64, f64), String>
+{
+   clustered_bootstrap_interval(pair_deltas)
+}
+
 pub fn frozen_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -> Result<u32, String>
 {
    expected_order_index(phase, session, pair, treatment)
+}
+
+pub fn callback_deadline_counts(samples: &[(f64, f64)]) -> Result<(u64, u64), String>
+{
+   let samples: Vec<DisplaySample> = samples.iter().map(|sample| DisplaySample {
+      timestamp_seconds: sample.0,
+      target_timestamp_seconds: sample.1,
+   }).collect();
+   let (_, metrics) = callback_metrics(&samples)?;
+   Ok((metrics.missed_callback_deadlines, metrics.expected_callbacks))
 }
 
 fn windowed_luma_ssim(reference: &RgbaImage, candidate: &RgbaImage, side: u32) -> Result<f64, String>
@@ -902,12 +1024,215 @@ fn finite(values: &[f64], name: &str) -> Result<(), String>
    Ok(())
 }
 
+fn callback_metrics(samples: &[DisplaySample]) -> Result<(Vec<f64>, CallbackMetrics), String>
+{
+   if samples.len() < 2
+   {
+      return Err("callback metrics require two samples".to_string());
+   }
+   for sample in samples
+   {
+      finite(&[sample.timestamp_seconds, sample.target_timestamp_seconds], "display-link sample")?;
+      if sample.target_timestamp_seconds <= sample.timestamp_seconds
+      {
+         return Err("display-link target timestamp is not after its callback timestamp".to_string());
+      }
+   }
+   let mut intervals = Vec::with_capacity(samples.len() - 1);
+   let mut admitted_periods = 0_usize;
+   let mut missed = 0_u64;
+   let mut expected = 0_u64;
+   let mut hitch_seconds = 0.0;
+   for index in 1 .. samples.len()
+   {
+      let current = samples[index];
+      let previous = samples[index - 1];
+      let interval = current.timestamp_seconds - previous.timestamp_seconds;
+      let period = previous.target_timestamp_seconds - previous.timestamp_seconds;
+      if interval <= 0.0 || period <= 0.0
+      {
+         return Err("display-link interval or target period is not positive".to_string());
+      }
+      if (PERIOD_MIN_SECONDS ..= PERIOD_MAX_SECONDS).contains(&period)
+      {
+         admitted_periods += 1;
+      }
+      let callback_slots = (interval / period).round().max(1.0) as u64;
+      expected += callback_slots;
+      missed += callback_slots.saturating_sub(1);
+      hitch_seconds += (interval - period).max(0.0);
+      intervals.push(interval);
+   }
+   let elapsed = samples[samples.len() - 1].timestamp_seconds - samples[0].timestamp_seconds;
+   if elapsed <= 0.0
+   {
+      return Err("display-link elapsed time is not positive".to_string());
+   }
+   let admission_ratio = admitted_periods as f64 / intervals.len() as f64;
+   let metrics = CallbackMetrics {
+      callback_count: samples.len(),
+      achieved_cadence_hz: intervals.len() as f64 / elapsed,
+      interval_p50_ms: percentile(&intervals, 0.50)? * 1_000.0,
+      interval_p95_ms: percentile(&intervals, 0.95)? * 1_000.0,
+      interval_p99_ms: percentile(&intervals, 0.99)? * 1_000.0,
+      interval_peak_ms: intervals.iter().copied().fold(0.0, f64::max) * 1_000.0,
+      missed_callback_deadlines: missed,
+      expected_callbacks: expected,
+      missed_callback_deadline_ratio: if expected == 0 { 0.0 } else { missed as f64 / expected as f64 },
+      callback_hitch_ms_per_elapsed_second: hitch_seconds * 1_000.0 / elapsed,
+      target_period_admission_ratio: admission_ratio,
+   };
+   if metrics.target_period_admission_ratio < PERIOD_ADMISSION_RATIO
+   {
+      return Err(format!(
+         "only {:.2}% of target periods are inside 7.5-9.2 ms",
+         metrics.target_period_admission_ratio * 100.0
+      ));
+   }
+   Ok((intervals, metrics))
+}
+
+fn percentile(values: &[f64], quantile: f64) -> Result<f64, String>
+{
+   if values.is_empty() || !(0.0 ..= 1.0).contains(&quantile)
+   {
+      return Err("invalid percentile input".to_string());
+   }
+   let mut sorted = values.to_vec();
+   sorted.sort_by(f64::total_cmp);
+   if sorted.len() == 1
+   {
+      return Ok(sorted[0]);
+   }
+   let position = quantile * (sorted.len() - 1) as f64;
+   let lower = position.floor() as usize;
+   let upper = position.ceil() as usize;
+   let fraction = position - lower as f64;
+   Ok(sorted[lower] + (sorted[upper] - sorted[lower]) * fraction)
+}
+
+fn geometry_matches(reference: &Geometry, candidate: &Geometry) -> bool
+{
+   if reference.visible_components.len() != candidate.visible_components.len()
+      || (reference.content_extent_points - candidate.content_extent_points).abs() > 1.0 / f64::from(SCALE)
+      || (reference.maximum_content_offset_points - candidate.maximum_content_offset_points).abs()
+         > 1.0 / f64::from(SCALE)
+      || (reference.captured_content_offset_points - candidate.captured_content_offset_points).abs()
+         > 1.0 / f64::from(SCALE)
+   {
+      return false;
+   }
+   reference.visible_components.iter().zip(&candidate.visible_components).all(|(left, right)| {
+      left.id == right.id
+         && left.kind == right.kind
+         && left.row_index == right.row_index
+         && rect_within(left.content_rect_px, right.content_rect_px, COMPONENT_TOLERANCE_PX)
+         && rect_within(left.viewport_clip_px, right.viewport_clip_px, COMPONENT_TOLERANCE_PX)
+   })
+}
+
 fn rect_within(left: Rect, right: Rect, tolerance: i32) -> bool
 {
    (left.x - right.x).abs() <= tolerance
       && (left.y - right.y).abs() <= tolerance
       && (left.x + left.width - right.x - right.width).abs() <= tolerance
       && (left.y + left.height - right.y - right.height).abs() <= tolerance
+}
+
+fn validate_travel(runs: &[MeasuredRun], population: Population) -> TravelValidation
+{
+   let mut validation = TravelValidation::default();
+   if population == Population::Smoke
+   {
+      return validation;
+   }
+   for treatment in ["uikit-optimized", "oxide"]
+   {
+      for direction in ["forward", "reverse"]
+      {
+         let candidates = runs.iter().filter(|run| {
+            run.record.run.phase == "primary"
+               && run.record.run.treatment == treatment
+               && run.record.run.direction == direction
+         });
+         let mut deltas = Vec::with_capacity(9);
+         for candidate in candidates
+         {
+            let reference = runs.iter().find(|reference| {
+               reference.record.run.phase == "primary"
+                  && reference.record.run.treatment == "uikit-idiomatic"
+                  && reference.record.run.session_index == candidate.record.run.session_index
+                  && reference.record.run.pair_index == candidate.record.run.pair_index
+                  && reference.record.run.direction == direction
+            });
+            let Some(reference) = reference else
+            {
+               validation.blockers.push(format!("missing idiomatic UIKit travel match for {}", candidate.record.run.nonce));
+               continue;
+            };
+            deltas.push(
+               candidate.record.gesture.travel_distance_points
+                  / reference.record.gesture.travel_distance_points
+                  - 1.0,
+            );
+         }
+         if deltas.len() != 9
+         {
+            validation.blockers.push(format!(
+               "primary travel equivalence for {treatment} {direction} has {} pairs, expected 9",
+               deltas.len()
+            ));
+            continue;
+         }
+         let median = match percentile(&deltas, 0.50)
+         {
+            Ok(median) => median,
+            Err(error) =>
+            {
+               validation.blockers.push(format!("primary travel equivalence median failed for {treatment} {direction}: {error}"));
+               continue;
+            }
+         };
+         let (lower, upper) = match clustered_bootstrap_interval(&deltas)
+         {
+            Ok(interval) => interval,
+            Err(error) =>
+            {
+               validation.blockers.push(format!("primary travel equivalence bootstrap failed for {treatment} {direction}: {error}"));
+               continue;
+            }
+         };
+         let passes = travel_equivalence_passes(median, lower, upper);
+         validation.results.push(TravelEquivalenceResult {
+            treatment: treatment.to_string(),
+            direction: direction.to_string(),
+            pair_count: deltas.len(),
+            median_relative_delta: median,
+            confidence_95_lower: lower,
+            confidence_95_upper: upper,
+            median_margin: TRAVEL_MEDIAN_EQUIVALENCE_MARGIN,
+            confidence_margin: TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN,
+            passes,
+         });
+         if !passes
+         {
+            validation.blockers.push(format!(
+               "primary travel equivalence {treatment} {direction}: median {:+.2}% and 95% interval [{:+.2}%, {:+.2}%] violate the frozen 5%/10% margins",
+               median * 100.0,
+               lower * 100.0,
+               upper * 100.0
+            ));
+         }
+      }
+   }
+   validation
+}
+
+pub fn travel_equivalence_passes(median: f64, lower: f64, upper: f64) -> bool
+{
+   median.abs() <= TRAVEL_MEDIAN_EQUIVALENCE_MARGIN + TRAVEL_EQUIVALENCE_EPSILON
+      && lower >= -TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN - TRAVEL_EQUIVALENCE_EPSILON
+      && upper <= TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN + TRAVEL_EQUIVALENCE_EPSILON
 }
 
 fn fill(image: &mut RgbaImage, rect: Rect, rgba: [u8; 4]) -> Result<(), String>
@@ -1069,6 +1394,293 @@ fn adversarial_result(name: &str, reference: &RgbaImage, mutation: RgbaImage) ->
       ssim: metrics.ssim,
       worst_tile_rgb_mae: metrics.worst_tile_rgb_mae,
    })
+}
+
+fn treatment_summary(runs: &[&MeasuredRun], treatment: &str) -> Result<TreatmentSummary, String>
+{
+   if runs.is_empty()
+   {
+      return Err(format!("no primary runs for {treatment}"));
+   }
+   let mut intervals = Vec::new();
+   let mut missed = 0_u64;
+   let mut expected = 0_u64;
+   let mut elapsed = 0.0;
+   let mut hitch_ms = 0.0;
+   for run in runs
+   {
+      intervals.extend_from_slice(&run.intervals);
+      missed += run.metrics.missed_callback_deadlines;
+      expected += run.metrics.expected_callbacks;
+      let run_elapsed: f64 = run.intervals.iter().sum();
+      elapsed += run_elapsed;
+      hitch_ms += run.metrics.callback_hitch_ms_per_elapsed_second * run_elapsed;
+   }
+   Ok(TreatmentSummary {
+      treatment: treatment.to_string(),
+      run_count: runs.len(),
+      interval_p50_ms: percentile(&intervals, 0.50)? * 1_000.0,
+      interval_p95_ms: percentile(&intervals, 0.95)? * 1_000.0,
+      interval_p99_ms: percentile(&intervals, 0.99)? * 1_000.0,
+      interval_peak_ms: intervals.iter().copied().fold(0.0, f64::max) * 1_000.0,
+      missed_callback_deadline_ratio: if expected == 0 { 0.0 } else { missed as f64 / expected as f64 },
+      callback_hitch_ms_per_elapsed_second: if elapsed == 0.0 { 0.0 } else { hitch_ms / elapsed },
+   })
+}
+
+fn run_summary(run: &MeasuredRun) -> RunSummary
+{
+   RunSummary {
+      nonce: run.record.run.nonce.clone(),
+      phase: run.record.run.phase.clone(),
+      session_index: run.record.run.session_index,
+      pair_index: run.record.run.pair_index,
+      order_index: run.record.run.order_index,
+      treatment: run.record.run.treatment.clone(),
+      direction: run.record.run.direction.clone(),
+      gesture_duration_seconds: run.record.gesture.duration_seconds,
+      inertia_observed: run.record.gesture.inertia_observed,
+      thermal_state_change_count: run.record.environment.thermal_state_change_count,
+      low_power_mode_change_count: run.record.environment.low_power_mode_change_count,
+      signed_travel_points: run.record.gesture.signed_travel_points,
+      travel_distance_points: run.record.gesture.travel_distance_points,
+      callback_count: run.metrics.callback_count,
+      achieved_cadence_hz: run.metrics.achieved_cadence_hz,
+      interval_p50_ms: run.metrics.interval_p50_ms,
+      interval_p95_ms: run.metrics.interval_p95_ms,
+      interval_p99_ms: run.metrics.interval_p99_ms,
+      interval_peak_ms: run.metrics.interval_peak_ms,
+      missed_callback_deadlines: run.metrics.missed_callback_deadlines,
+      expected_callbacks: run.metrics.expected_callbacks,
+      missed_callback_deadline_ratio: run.metrics.missed_callback_deadline_ratio,
+      callback_hitch_ms_per_elapsed_second: run.metrics.callback_hitch_ms_per_elapsed_second,
+      target_period_admission_ratio: run.metrics.target_period_admission_ratio,
+   }
+}
+
+fn pair_p95(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: u32) -> Result<f64, String>
+{
+   let selected: Vec<&&MeasuredRun> = runs.iter().filter(|run| {
+      run.record.run.treatment == treatment
+         && run.record.run.session_index == session
+         && run.record.run.pair_index == pair
+   }).collect();
+   if selected.len() != 2
+   {
+      return Err(format!("{treatment} session {session} pair {pair} does not have two directions"));
+   }
+   let directions: BTreeSet<&str> = selected.iter().map(|run| run.record.run.direction.as_str()).collect();
+   if directions != BTreeSet::from(["forward", "reverse"])
+   {
+      return Err(format!("{treatment} session {session} pair {pair} direction set mismatch"));
+   }
+   let mut intervals = Vec::new();
+   for run in selected
+   {
+      intervals.extend_from_slice(&run.intervals);
+   }
+   percentile(&intervals, 0.95)
+}
+
+fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator: &str) -> Result<Comparison, String>
+{
+   let oxide = summaries.iter().find(|summary| summary.treatment == "oxide")
+      .ok_or_else(|| "missing Oxide treatment summary".to_string())?;
+   let native = summaries.iter().find(|summary| summary.treatment == comparator)
+      .ok_or_else(|| format!("missing {comparator} summary"))?;
+   let mut deltas = Vec::with_capacity(9);
+   for session in 0 .. 3
+   {
+      for pair in 0 .. 3
+      {
+         let oxide_p95 = pair_p95(runs, "oxide", session, pair)?;
+         let comparator_p95 = pair_p95(runs, comparator, session, pair)?;
+         if comparator_p95 <= 0.0
+         {
+            return Err("comparator pair p95 is not positive".to_string());
+         }
+         deltas.push((oxide_p95 / comparator_p95) - 1.0);
+      }
+   }
+   let median_delta = percentile(&deltas, 0.50)?;
+   let (lower, upper) = clustered_bootstrap_interval(&deltas)?;
+   let missed_guardrail = oxide.missed_callback_deadline_ratio
+      <= native.missed_callback_deadline_ratio + MISSED_GUARDRAIL_DELTA
+      && oxide.missed_callback_deadline_ratio <= MISSED_GUARDRAIL_ABSOLUTE;
+   let hitch_guardrail = oxide.callback_hitch_ms_per_elapsed_second
+      <= native.callback_hitch_ms_per_elapsed_second + HITCH_GUARDRAIL_DELTA_MS_S
+      && oxide.callback_hitch_ms_per_elapsed_second <= HITCH_GUARDRAIL_ABSOLUTE_MS_S;
+   let classification = if lower > NON_INFERIOR_MARGIN || !missed_guardrail || !hitch_guardrail
+   {
+      "slower"
+   }
+   else if oxide.interval_p50_ms < native.interval_p50_ms
+      && oxide.interval_p95_ms < native.interval_p95_ms
+      && upper < 0.0
+   {
+      "faster"
+   }
+   else if upper <= NON_INFERIOR_MARGIN && missed_guardrail && hitch_guardrail
+   {
+      "non-inferior"
+   }
+   else
+   {
+      "inconclusive"
+   };
+   Ok(Comparison {
+      comparator: comparator.to_string(),
+      classification: classification.to_string(),
+      median_pair_relative_p95_delta: median_delta,
+      confidence_95_lower: lower,
+      confidence_95_upper: upper,
+      oxide_interval_p50_ms: oxide.interval_p50_ms,
+      comparator_interval_p50_ms: native.interval_p50_ms,
+      oxide_interval_p95_ms: oxide.interval_p95_ms,
+      comparator_interval_p95_ms: native.interval_p95_ms,
+      oxide_missed_deadline_ratio: oxide.missed_callback_deadline_ratio,
+      comparator_missed_deadline_ratio: native.missed_callback_deadline_ratio,
+      oxide_hitch_ms_per_second: oxide.callback_hitch_ms_per_elapsed_second,
+      comparator_hitch_ms_per_second: native.callback_hitch_ms_per_elapsed_second,
+      bootstrap_resamples: BOOTSTRAP_RESAMPLES,
+      bootstrap_seed_hex: format!("0x{BOOTSTRAP_SEED:016x}"),
+   })
+}
+
+fn clustered_bootstrap_interval(pair_deltas: &[f64]) -> Result<(f64, f64), String>
+{
+   if pair_deltas.is_empty()
+   {
+      return Err("cluster bootstrap has no gesture pairs".to_string());
+   }
+   finite(pair_deltas, "pair deltas")?;
+   let mut rng = SplitMix64::new(BOOTSTRAP_SEED);
+   let mut samples = Vec::with_capacity(BOOTSTRAP_RESAMPLES);
+   let mut resample = vec![0.0; pair_deltas.len()];
+   for _ in 0 .. BOOTSTRAP_RESAMPLES
+   {
+      for value in &mut resample
+      {
+         *value = pair_deltas[rng.index(pair_deltas.len())];
+      }
+      samples.push(percentile(&resample, 0.50)?);
+   }
+   Ok((percentile(&samples, 0.025)?, percentile(&samples, 0.975)?))
+}
+
+struct SplitMix64
+{
+   state: u64,
+}
+
+impl SplitMix64
+{
+   fn new(seed: u64) -> Self
+   {
+      Self { state: seed }
+   }
+
+   fn next(&mut self) -> u64
+   {
+      self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+      let mut value = self.state;
+      value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+      value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+      value ^ (value >> 31)
+   }
+
+   fn index(&mut self, len: usize) -> usize
+   {
+      let zone = u64::MAX - (u64::MAX % len as u64);
+      loop
+      {
+         let value = self.next();
+         if value < zone
+         {
+            return (value % len as u64) as usize;
+         }
+      }
+   }
+}
+
+fn validate_population(runs: &[MeasuredRun], population: Population) -> Vec<String>
+{
+   let mut blockers = Vec::new();
+   let expected_total = if population == Population::Full { 60 } else { 6 };
+   if runs.len() != expected_total
+   {
+      blockers.push(format!("run population is {}, expected {expected_total}", runs.len()));
+   }
+   let mut expected_runs = BTreeSet::new();
+   for treatment in ["uikit-idiomatic", "uikit-optimized", "oxide"]
+   {
+      for direction in ["forward", "reverse"]
+      {
+         let smoke = ("smoke".to_string(), 0, 0, treatment.to_string(), direction.to_string());
+         expected_runs.insert(smoke);
+         if population == Population::Full
+         {
+            for session in 0 .. 3
+            {
+               for pair in 0 .. 3
+               {
+                  expected_runs.insert(("primary".to_string(), session, pair, treatment.to_string(), direction.to_string()));
+               }
+            }
+         }
+      }
+   }
+   let observed: BTreeSet<_> = runs.iter().map(|run| (
+      run.record.run.phase.clone(),
+      run.record.run.session_index,
+      run.record.run.pair_index,
+      run.record.run.treatment.clone(),
+      run.record.run.direction.clone(),
+   )).collect();
+   if observed != expected_runs || observed.len() != runs.len()
+   {
+      blockers.push("run tuple population is missing, duplicated, or out of scope".to_string());
+   }
+   if population == Population::Full
+   {
+      for session in 0 .. 3
+      {
+         for pair in 0 .. 3
+         {
+            let block: Vec<&MeasuredRun> = runs.iter().filter(|run| {
+               run.record.run.phase == "primary"
+                  && run.record.run.session_index == session
+                  && run.record.run.pair_index == pair
+                  && run.record.run.direction == "forward"
+            }).collect();
+            let orders: BTreeSet<u32> = block.iter().map(|run| run.record.run.order_index).collect();
+            if block.len() != 3 || orders != BTreeSet::from([0, 1, 2])
+            {
+               blockers.push(format!("session {session} pair {pair} treatment order is not balanced"));
+            }
+         }
+      }
+   }
+   for run in runs
+   {
+      match expected_order_index(
+         &run.record.run.phase,
+         run.record.run.session_index,
+         run.record.run.pair_index,
+         &run.record.run.treatment,
+      )
+      {
+         Ok(expected_order) if run.record.run.order_index == expected_order => {}
+         Ok(expected_order) => blockers.push(format!(
+            "run {} order {} differs from frozen order {}",
+            run.record.run.nonce,
+            run.record.run.order_index,
+            expected_order
+         )),
+         Err(error) => blockers.push(error),
+      }
+   }
+   blockers
 }
 
 fn expected_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -> Result<u32, String>
