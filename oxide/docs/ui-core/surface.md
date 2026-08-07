@@ -9,18 +9,21 @@
 - App or router -> `UiSurface` mutation/layout -> `NodeTree` retained sequence.
 - `UiSurface::render_snapshot_retained` -> `oxide_renderer_api::RenderSnapshot`.
 - Backend consumers traverse immutable chunk instances; compatibility encoding explicitly flattens snapshots into a `DrawListBuilder`.
+- Surface-owned retained sequences contain only node-frame primitives plus clip/transform metadata; caller-owned content sequences may independently contain text or image commands.
 
 ## Entry points list
 
 - `UiSurface::retained_cache_policy(&self) -> RetainedCachePolicy`: returns the active tree-owned policy.
 - `UiSurface::set_retained_cache_policy(&mut self, RetainedCachePolicy)`: applies a new policy, enforces reductions immediately, and invalidates the surface-level snapshot cache.
 - `UiSurface::render_snapshot_retained(...) -> Result<SurfaceRenderSnapshot, SurfaceRenderSnapshotError>`: returns an immutable mixed UI/content snapshot plus cache diagnostics.
+- `UiSurface::encode_retained_with_text_atlas_revisions(...) -> RetainedDrawStatus`: released compatibility alias for `encode_retained`; surface-owned node chunks contain no glyph commands.
+- `UiSurface::encode_retained_with_text_ctx(...) -> RetainedDrawStatus`: released compatibility alias for `encode_retained` with no atlas walk.
 - `UiSurface::tick_at(now_ms)`: advances the owned animator, marks transform/opacity property dirtiness without invalidating immutable chunks, and rebuilds only sampled paint values.
 - `SurfaceRenderChunkStats`: keeps the per-snapshot reuse, copy, and retained-byte summary compact. `UiSurface::retained_node_stats` exposes the complete admission, eviction, prepared-byte, build-time, fallback, completeness, and invalidation telemetry on demand so hot snapshot returns do not copy cold diagnostic fields.
 
 ## Logic narrative
 
-The surface asks `NodeTree` for the current immutable UI sequence, combines it with caller-owned content sequences, sorted dynamic properties, and damage, then reuses the complete snapshot only when all identities and metadata match. If the node cache is incomplete because of eviction, suppression, or a zero-byte policy, the surface does not retain a whole-snapshot reference that could keep rejected descendants alive indirectly.
+The surface asks `NodeTree` for the current immutable UI sequence, combines it with caller-owned content sequences, sorted dynamic properties, and damage, then reuses the complete snapshot only when all identities and metadata match. Node chunks emit primitive frames while external content can contain glyph or image commands and retains its own resource dependencies. If the node cache is incomplete because of eviction, suppression, or a zero-byte policy, the surface does not retain a whole-snapshot reference that could keep rejected descendants alive indirectly.
 
 ## Preconditions and postconditions
 
@@ -35,6 +38,7 @@ The surface asks `NodeTree` for the current immutable UI sequence, combines it w
 - A zero CPU budget produces a direct immutable UI chunk and never caches the mixed snapshot.
 - Chunk or snapshot validation errors propagate through `SurfaceRenderSnapshotError`; compatibility encoding falls back to direct surface encoding.
 - Animation changes use the `Animation` invalidation reason and cannot reuse stale node paint.
+- The released text-context encode overloads deliberately do not inspect atlas state because their surface-owned sequence cannot contain glyph commands; checked caller-owned text replay remains the `DrawListBuilder` responsibility.
 
 ## Concurrency and memory behavior
 
@@ -45,6 +49,8 @@ The surface asks `NodeTree` for the current immutable UI sequence, combines it w
 Complete hot snapshots clone shared handles and compare sequence identities. Incomplete snapshots rebuild composition without retaining indirect references. Zero-budget one-use churn avoids thousands of per-node/path allocations while keeping external text/image chunks reusable.
 
 C26 keeps retained geometry node-local and reuses clean sequence/chunk `Arc`s while only compact snapshot properties change. `UiSurface` no longer copies an animator-produced map into separate surface storage; paint overrides remain node-scoped because their pixels are part of immutable chunks.
+
+Retained surface encoding performs no per-frame text-atlas scan because surface-owned chunks cannot contain text. Generic retained snapshots preserve glyph atlas generations in their caller-owned chunk dependencies instead.
 
 ## Feature flags and cfgs
 
@@ -69,5 +75,6 @@ surface.set_retained_cache_policy(policy);
 
 ## Changelog
 
+- 2026-08-07: documented the primitive-only surface chunk invariant, removed dead private atlas routing, and retained released text-context methods as compatibility aliases.
 - 2026-07-13: routed transform/opacity animation through dense dynamic slots, synchronized affine hit-test geometry, and made clip edits metadata-only for C26.
 - 2026-07-13: Added public retained cache policy configuration and complete C23 cache statistics.

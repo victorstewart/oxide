@@ -21,6 +21,8 @@ The split keeps generic overlays simple while giving popups the stricter window-
   Pushes a generic overlay surface and lays it out against the current viewport.
 - `OverlayStack::pointer_event(x, y, buttons) -> OverlayPointerResult`
   Applies generic content-root hit testing and optional release-time background dismissal.
+- `OverlayStack::encode_retained(builder, text_atlases) -> RetainedOverlayStats`
+  Retained-encodes each primitive-only overlay surface. The released atlas argument remains a compatibility parameter and is not routed into surface encoding.
 - `PopupManager::push(surface, spec) -> PopupHandle`
   Pushes a popup surface plus its lifecycle callbacks and touch-region contract.
 - `PopupManager::key_popup() -> Option<PopupHandle>`
@@ -37,6 +39,8 @@ The split keeps generic overlays simple while giving popups the stricter window-
   Overrides the popup touch-exception behavior with either `None`, `ContentRoot`, or a manual rectangle.
 - `PopupManager::pointer_event(x, y, buttons) -> OverlayPointerResult`
   Applies popup hit testing, `approve_touch`, touch-exception dismissal, and release-time background dismissal while preserving key-window input blocking when dismissal is denied.
+- `PopupManager::encode_retained(builder, text_atlases) -> RetainedOverlayStats`
+  Retained-encodes each primitive-only popup surface while preserving the released, unused atlas argument for source compatibility.
 
 ## Logic narrative
 
@@ -86,6 +90,7 @@ When dismissal is attempted, `approve_dismissal` runs first. If it returns `fals
 
 - Popup routing still only inspects the topmost popup for input.
 - Touch-exception resolution is cached and only recomputed on push, viewport changes, explicit resync, or manual override.
+- Retained overlay composition no longer branches through a text-atlas context because `UiSurface` node chunks cannot contain glyph commands.
 - The public authoring perf case in `oxide-perf-runner` exercises the popup lifecycle APIs alongside the existing surface-router composition path.
 
 ## Testing and benchmarks
@@ -97,4 +102,5 @@ When dismissal is attempted, `approve_dismissal` runs first. If it returns `fals
 
 ## Changelog
 
+- 2026-08-07: removed dead atlas routing from retained overlay and popup composition while preserving the released method signatures.
 - 2026-03-28: upgraded `PopupManager` from a thin overlay wrapper into the shared popup-window lifecycle contract with key-popup lookup, approval-gated dismissal, touch exceptions, and explicit content-size refresh support.

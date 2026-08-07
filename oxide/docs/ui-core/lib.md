@@ -57,9 +57,9 @@
 - `elements::ImageView::encode`
   Emits one semantic `DrawCmd::Image`: contain and stretch map the complete natural image, while cover/zoom/pan intersect the fitted destination with the view and map that visible interval back into source pixels.
 - `UiSurface::encode_retained_with_text_ctx`
-  Replays a retained surface with the live `TextCtx` atlas snapshot when it is safe, otherwise falls back to the no-context fail-closed replay path.
+  Preserves the released call surface as a compatibility alias for `encode_retained`; `UiSurface` node chunks do not own text commands.
 - `SurfaceRouter::encode_with_overlays_with_text_ctx`
-  Routes current-surface retained replay through the live `TextCtx` atlas snapshot before adding overlays and popups.
+  Preserves the released call surface as a compatibility alias for `encode_with_overlays`; routed `UiSurface` chunks do not own text commands.
 - `SurfaceRouter::retained_composition_stats`
   Reports current-surface, overlay, and popup retained draw reuse for the most recent router composition encode.
 - `UiSurface::edit_style`
@@ -137,7 +137,7 @@
 - `draw_replay` translates only command-local geometry slices instead of cloning whole draw lists.
 - Cached draw-list replay can reject stale or unknown text atlas revisions before appending glyph geometry, preventing retained text from pointing at an evicted atlas slot.
 - Retained draw-list replay now fails closed when no text-atlas context is supplied, so cached glyph geometry cannot bypass atlas revision checks after atlas eviction, reset, or dirty upload state changes.
-- `TextCtx::retained_text_atlas_revision` keeps surface/router retained text replay on a live atlas by refusing to expose a snapshot while atlas bytes are still dirty.
+- `TextCtx::retained_text_atlas_revision` lets checked draw-list consumers reject replay while atlas bytes are still dirty; the released surface/router text-context overloads are compatibility aliases because surface node chunks contain no glyph commands.
 - `TextCtx` now defers frame-owned atlas publication until all visible labels are prepared, unions damage under an explicit 75% full-upload threshold, and patches provisional atlas handles without reordering commands.
 - `TextCtx` advances a monotonic glyph-geometry revision when device scale changes. `begin_frame_at_scale` invalidates retained geometry before replay; the released no-argument `begin_frame` binds that revision on its first text encode. Resident 1x and 3x atlas entries and GPU pages remain reusable.
 - The released manual `atlas_handle` fallback combines atlas-storage and glyph-geometry revisions, rejecting both reset/eviction staleness and device-scale staleness.
@@ -147,7 +147,7 @@
 - Text-input pointer picking uses the cached `oxide_text::ShapedCursorMap` directly instead of probing every cursor position through repeated cache lookups, including descending visual caret maps for pure RTL runs.
 - When fallback fonts are configured, `TextCtx` builds prefix metrics through `oxide_text::TextShaper::cursor_map_with_fallback_fonts`, so unsupported grapheme clusters contribute the fallback font's shaped advance to caret geometry.
 - Text-input filtering, secure masking, and legacy editable backspace now count grapheme clusters instead of Unicode scalar values.
-- `UiSurface::encode_retained` now tracks bounded, replay-safe retained draw lists per `NodeTree` node so dirty leaf paint/style changes rebuild the leaf and ancestors while replaying clean sibling subtrees.
+- `UiSurface::encode_retained` tracks bounded immutable chunks and persistent sequences per `NodeTree` node so dirty leaf paint/style changes rebuild the leaf path while reusing clean sibling chunks.
 - `NodeTree` assigns every live node stable generation-checked transform and opacity slots, keeps chunks in node-local coordinates, and emits complete nested affine/cumulative-opacity values without invalidating geometry.
 - Ancestor clip changes rebuild descendant instance metadata only; transform/opacity animation changes snapshot properties only. Hit testing uses the identical nested transform composition.
 - Retained node chunks and persistent sequence metadata are governed by exact logical-byte accounting instead of an item-count cutoff. Eviction removes the selected chunk and every ancestor sequence that indirectly references it before the next render.
@@ -193,7 +193,7 @@
 - `crates/ui-core/tests/draw_builder_tests.rs` also covers retained text draw replay rejection after missing, stale, and incomplete atlas revision contexts.
 - `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard, eager 1x/3x invalidation, resident switchback reuse, and lazy scale binding through the released no-argument frame API.
 - `crates/ui-core/tests/elements_tests.rs` covers text-input cache and atlas upload paths that consume cached shaped cursor maps, batched visible fallback-font label encoding, plus pointer cursor picking across combining, ZWJ, pure RTL, and configured fallback-font grapheme-cluster boundaries.
-- `crates/ui-core/tests/surface.rs` covers dirty leaf retained encoding, live `TextCtx` atlas context routing, clean sibling subtree replay through `RetainedNodeStats`, and retained current/overlay/popup router composition stats.
+- `crates/ui-core/tests/surface.rs` covers dirty leaf retained encoding, compatibility-alias equivalence, caller-owned glyph-chunk dependency invalidation, clean sibling subtree replay through `RetainedNodeStats`, and retained current/overlay/popup router composition stats.
 - `crates/ui-core/tests/surface.rs` also covers 300-node zero-geometry animation, nested affine clip/hit-test synchronization, and generation-safe slot reuse; `anim_prop.rs` covers dense compaction and interruption/completion.
 - `crates/ui-core/tests/surface.rs` also covers hard byte enforcement, exact output after eviction, hot-entry protection, explicit churn suppression/readmission, zero-budget direct fallback, and caller-owned text/image chunk identity.
 - `crates/ui-core/tests/surface.rs` covers layout dirty-subtree skipping, descendant-only layout traversal, opacity/clip paint-only dirty-class edits, node-scoped content dirty-class edits, and validates `LayoutStats` visit/skip/measurement counters.
@@ -225,6 +225,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-08-07: removed dead text-atlas routing from retained surfaces while preserving all released text-context methods as compatibility aliases.
 - 2026-08-06: added scale-aware text frames and versioned retained glyph geometry across device-scale transitions while preserving the released no-argument frame API.
 - 2026-08-06: removed the accessibility-frame API and active dirty-bit writes while retaining only the inert released dirty-class value.
 - 2026-08-06: added and re-exported `VerticalScrollSurface`.

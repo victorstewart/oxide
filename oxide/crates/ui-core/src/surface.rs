@@ -1287,35 +1287,33 @@ impl UiSurface {
       self.damage_stats = self.damage_region.finish_stats(stats, effect_expansions);
    }
 
-    pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus {
-        self.encode_retained_impl(b, None)
-    }
+   pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    pub fn encode_retained_with_text_atlas_revisions(
-        &mut self,
-        b: &mut DrawListBuilder,
-        atlases: &[(gfx::ImageHandle, u64)],
-    ) -> RetainedDrawStatus {
-        self.encode_retained_impl(b, Some(atlases))
-    }
+   /// Compatibility alias for [`Self::encode_retained`]. `UiSurface` node chunks do not own text.
+   pub fn encode_retained_with_text_atlas_revisions(
+      &mut self,
+      b: &mut DrawListBuilder,
+      _atlases: &[(gfx::ImageHandle, u64)],
+   ) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    pub fn encode_retained_with_text_ctx(
-        &mut self,
-        b: &mut DrawListBuilder,
-        text: &TextCtx,
-    ) -> RetainedDrawStatus {
-        if let Some(atlases) = text.retained_text_atlas_revisions() {
-            self.encode_retained_impl(b, Some(atlases))
-        } else {
-            self.encode_retained_impl(b, None)
-        }
-    }
+   /// Compatibility alias for [`Self::encode_retained`]. `UiSurface` node chunks do not own text.
+   pub fn encode_retained_with_text_ctx(
+      &mut self,
+      b: &mut DrawListBuilder,
+      _text: &TextCtx,
+   ) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    fn encode_retained_impl(
-        &mut self,
-        b: &mut DrawListBuilder,
-        _text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-    ) -> RetainedDrawStatus {
+   fn encode_retained_impl(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus
+   {
         let retained = if self.animator.overrides().is_empty() {
             self.tree.render_sequence(0)
         } else {
@@ -1559,60 +1557,57 @@ impl SurfaceRouter {
         self.popups.set_viewport(viewport, self.device_scale);
     }
 
-    pub fn encode_with_overlays(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-    ) {
-        self.encode_with_overlays_impl(viewport, device_scale, builder, None);
-    }
+   pub fn encode_with_overlays(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    pub fn encode_with_overlays_with_text_atlas_revisions(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        atlases: &[(gfx::ImageHandle, u64)],
-    ) {
-        self.encode_with_overlays_impl(viewport, device_scale, builder, Some(atlases));
-    }
+   /// Compatibility alias for [`Self::encode_with_overlays`]; surface chunks do not own text.
+   pub fn encode_with_overlays_with_text_atlas_revisions(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+      _atlases: &[(gfx::ImageHandle, u64)],
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    pub fn encode_with_overlays_with_text_ctx(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        text: &TextCtx,
-    ) {
-        if let Some(atlases) = text.retained_text_atlas_revisions() {
-            self.encode_with_overlays_impl(
-                viewport,
-                device_scale,
-                builder,
-                Some(atlases),
-            );
-        } else {
-            self.encode_with_overlays_impl(viewport, device_scale, builder, None);
-        }
-    }
+   /// Compatibility alias for [`Self::encode_with_overlays`]; surface chunks do not own text.
+   pub fn encode_with_overlays_with_text_ctx(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+      _text: &TextCtx,
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    fn encode_with_overlays_impl(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-    ) {
-        self.set_viewport(viewport, device_scale);
-        let mut retained_stats = RetainedCompositionStats::default();
-        if let Some(surface) = self.surfaces.get_mut(self.current) {
-            retained_stats.record_current(surface.encode_retained_impl(builder, text_atlases));
-        }
-        retained_stats.record_overlays(self.overlays.encode_retained(builder, text_atlases));
-        retained_stats.record_popups(self.popups.encode_retained(builder, text_atlases));
-        self.retained_composition_stats = retained_stats;
-    }
+   fn encode_with_overlays_impl(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+   )
+   {
+      self.set_viewport(viewport, device_scale);
+      let mut retained_stats = RetainedCompositionStats::default();
+      if let Some(surface) = self.surfaces.get_mut(self.current)
+      {
+         retained_stats.record_current(surface.encode_retained_impl(builder));
+      }
+      retained_stats.record_overlays(self.overlays.encode_retained(builder, None));
+      retained_stats.record_popups(self.popups.encode_retained(builder, None));
+      self.retained_composition_stats = retained_stats;
+   }
 
     pub fn capture(&mut self, viewport: gfx::RectF, device_scale: f32) -> SurfaceCapture {
         self.set_viewport(viewport, device_scale);

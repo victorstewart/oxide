@@ -75,28 +75,38 @@ fn retained_encode_reuses_clean_drawlist_and_rebuilds_after_dirty() {
 }
 
 #[test]
-fn retained_encode_text_atlas_context_overload_reuses_clean_surface() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(100.0), h: oxide_ui_core::Dim::Px(100.0) },
-        background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        ..NodeStyle::default()
-    });
-    let atlases = [(gfx::ImageHandle(4), 3)];
-    surface.layout(100.0, 100.0);
+fn released_text_context_aliases_match_plain_surface_encoding()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(100.0), h: Dim::Px(100.0) },
+      background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+      ..NodeStyle::default()
+   });
+   surface.layout(100.0, 100.0);
+   let viewport = gfx::RectF::new(0.0, 0.0, 100.0, 100.0);
+   let atlases = [(gfx::ImageHandle(4), 3)];
+   let text = TextCtx::default();
 
-    let mut first = DrawListBuilder::new();
-    assert_eq!(
-        surface.encode_retained_with_text_atlas_revisions(&mut first, &atlases),
-        RetainedDrawStatus::Rebuilt,
-    );
-    let first_items = first.drawlist().items.clone();
+   let mut plain = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained(&mut plain), RetainedDrawStatus::Rebuilt);
+   let expected = plain.drawlist().items.clone();
 
-    let mut second = DrawListBuilder::new();
-    assert_eq!(
-        surface.encode_retained_with_text_atlas_revisions(&mut second, &atlases),
-        RetainedDrawStatus::Reused,
-    );
-    assert_eq!(second.drawlist().items, first_items);
+   let mut atlas_alias = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained_with_text_atlas_revisions(&mut atlas_alias, &atlases), RetainedDrawStatus::Reused);
+   let mut text_alias = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained_with_text_ctx(&mut text_alias, &text), RetainedDrawStatus::Reused);
+   assert_eq!(atlas_alias.drawlist().items, expected);
+   assert_eq!(text_alias.drawlist().items, expected);
+
+   let mut router = SurfaceRouter::new(surface);
+   let mut routed_plain = DrawListBuilder::new();
+   router.encode_with_overlays(viewport, 1.0, &mut routed_plain);
+   let mut routed_atlas_alias = DrawListBuilder::new();
+   router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut routed_atlas_alias, &atlases);
+   let mut routed_text_alias = DrawListBuilder::new();
+   router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut routed_text_alias, &text);
+   assert_eq!(routed_atlas_alias.drawlist().items, routed_plain.drawlist().items);
+   assert_eq!(routed_text_alias.drawlist().items, routed_plain.drawlist().items);
 }
 
 #[test]
@@ -813,51 +823,6 @@ fn router_encode_with_overlays_reuses_clean_overlay_and_popup_surfaces() {
     assert_eq!(stats.current_reused, 1);
     assert_eq!(stats.overlay_rebuilt, 1);
     assert_eq!(stats.popup_reused, 1);
-}
-
-#[test]
-fn router_encode_with_overlays_accepts_text_atlas_context_path() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(120.0), h: oxide_ui_core::Dim::Px(120.0) },
-        background: gfx::Color::rgba(0.16, 0.20, 0.26, 1.0),
-        ..NodeStyle::default()
-    });
-    surface.layout(120.0, 120.0);
-    let viewport = gfx::RectF::new(0.0, 0.0, 120.0, 120.0);
-    let atlases = [(gfx::ImageHandle(4), 3)];
-    let mut router = SurfaceRouter::new(surface);
-
-    let mut first = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut first, &atlases);
-    assert!(!router.current().dirty().affects_draw());
-    let first_items = first.drawlist().items.clone();
-
-    let mut second = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut second, &atlases);
-    assert_eq!(second.drawlist().items, first_items);
-}
-
-#[test]
-fn router_encode_with_overlays_uses_clean_text_ctx_atlas_snapshot() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(120.0), h: oxide_ui_core::Dim::Px(120.0) },
-        background: gfx::Color::rgba(0.16, 0.20, 0.26, 1.0),
-        ..NodeStyle::default()
-    });
-    surface.layout(120.0, 120.0);
-    let viewport = gfx::RectF::new(0.0, 0.0, 120.0, 120.0);
-    let mut text = TextCtx::default();
-    text.atlas_handle = Some(gfx::ImageHandle(4));
-    let mut router = SurfaceRouter::new(surface);
-
-    let mut first = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut first, &text);
-    assert!(!router.current().dirty().affects_draw());
-    let first_items = first.drawlist().items.clone();
-
-    let mut second = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut second, &text);
-    assert_eq!(second.drawlist().items, first_items);
 }
 
 #[test]
