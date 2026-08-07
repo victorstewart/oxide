@@ -4,6 +4,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 
 ## Crates
 
+- [oxide-feed-v1 app](oxide-feed-v1-app/lib.md)
 - [oxide-host-web](oxide-host-web/lib.md)
 - [oxide-host-ios](oxide-host-ios/lib.md)
 - [oxide-host-macos](oxide-host-macos/lib.md)
