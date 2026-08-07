@@ -291,6 +291,10 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Vertical Scroll Surface Input + Advance",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.app.prepared_frame",
+        name: "App Prepared Frame",
+    },
+    AuthoringPerfSpec {
         id: "cpu.authoring.webgpu_pipeline_profile.compose",
         name: "WebGPU Pipeline Profile",
     },
@@ -3380,6 +3384,7 @@ fn push_authoring_cases(
             "cpu.authoring.vertical_scroll_surface.input_advance" => {
                 authoring_vertical_scroll_surface_case(smoke)
             }
+            "cpu.authoring.app.prepared_frame" => authoring_app_prepared_frame_case(smoke),
             "cpu.authoring.webgpu_pipeline_profile.compose" => {
                 authoring_webgpu_pipeline_profile_case(smoke)
             }
@@ -5896,6 +5901,123 @@ fn authoring_vertical_scroll_surface_case(smoke: bool) -> PerfCaseResult
       String::from("inertia_active_after_step"),
       if surface.wants_next_frame() { 1.0 } else { 0.0 },
    );
+   case
+}
+
+struct AuthoringPreparedFrameApp
+{
+   builder: ui::DrawListBuilder,
+   damage: [api::RectI; 1],
+}
+
+impl AuthoringPreparedFrameApp
+{
+   fn new() -> Self
+   {
+      Self {
+         builder: ui::DrawListBuilder::new(),
+         damage: [api::RectI::new(0, 0, 390, 844)],
+      }
+   }
+}
+
+impl platform::App for AuthoringPreparedFrameApp
+{
+   fn init(&mut self, _context: &mut platform::InitContext)
+   {
+   }
+
+   fn event(&mut self, _event: platform::AppEvent, _context: &mut platform::UpdateContext)
+   {
+   }
+
+   fn prepare_frame(
+      &mut self,
+      _context: platform::FrameContext,
+      _uploader: &mut dyn api::RuntimeImageUploader,
+   ) -> platform::FrameDemand
+   {
+      self.builder.clear();
+      for row in 0..24
+      {
+         self.builder.drawlist_mut().items.push(api::DrawCmd::RRect {
+            rect: api::RectF::new(12.0, 8.0 + row as f32 * 34.0, 366.0, 28.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.16, 0.19, 0.24, 1.0),
+         });
+      }
+      platform::FrameDemand::Idle
+   }
+
+   fn prepared_frame(&self) -> Option<platform::PreparedFrame<'_>>
+   {
+      Some(platform::PreparedFrame {
+         draw_list: self.builder.drawlist(),
+         damage: &self.damage,
+      })
+   }
+}
+
+struct AuthoringPreparedFrameUploader;
+
+impl api::RuntimeImageUploader for AuthoringPreparedFrameUploader
+{
+   fn create_a8(&mut self, _width: u32, _height: u32, _data: &[u8], _row_bytes: usize) -> api::ImageHandle
+   {
+      api::ImageHandle(1)
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: api::ImageHandle,
+      _x: u32,
+      _y: u32,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+   }
+}
+
+fn authoring_app_prepared_frame_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 256 } else { 1_024 };
+   let mut app: Box<dyn platform::App> = Box::new(AuthoringPreparedFrameApp::new());
+   let mut uploader = AuthoringPreparedFrameUploader;
+   let context = platform::FrameContext {
+      frame_id: 1,
+      timestamp_ns: PERF_SCROLL_TRACE_START_NS,
+      target_timestamp_ns: PERF_SCROLL_TRACE_START_NS + PERF_120_HZ_STEP_NS,
+      dt_ns: PERF_120_HZ_STEP_NS,
+      viewport: api::RectF::new(0.0, 0.0, 390.0, 844.0),
+      scale: 3.0,
+   };
+   let _ = app.prepare_frame(context, &mut uploader);
+   let mut case = measure_cpu_case(
+      "cpu.authoring.app.prepared_frame",
+      "authoring",
+      smoke,
+      true,
+      0.18,
+      loops,
+      vec![String::from(
+         "One warmed public App prepare/prepared-frame cycle reuses app-owned draw storage for a representative 24-row viewport; this is the sole host-injection authoring row, not a count/style matrix.",
+      )],
+      ||
+      {
+         let demand = app.prepare_frame(context, &mut uploader);
+         let frame = app.prepared_frame().expect("prepared app frame");
+         (frame.draw_list.items.len() as u64)
+            .wrapping_add(frame.damage.len() as u64)
+            .wrapping_add(u64::from(matches!(demand, platform::FrameDemand::Idle)))
+      },
+   );
+   let frame = app.prepared_frame().expect("prepared app frame");
+   case.metrics.insert(String::from("draw_commands_per_frame"), frame.draw_list.items.len() as f64);
+   case.metrics.insert(String::from("damage_rects_per_frame"), frame.damage.len() as f64);
+   case.metrics.insert(String::from("app_owned_frame_storage"), 1.0);
    case
 }
 
