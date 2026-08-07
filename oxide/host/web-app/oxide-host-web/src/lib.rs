@@ -4076,7 +4076,7 @@ mod wasm_host {
                 gfx::Color::rgba(0.20, 0.70, 0.35, 1.0),
             ];
             let mut builder = ui::DrawListBuilder::new();
-            text.begin_frame();
+            text.begin_frame_at_scale(1.0);
             for (index, label) in labels.iter().enumerate() {
                 let font_px = 16.0 + (index % 20) as f32;
                 let wrap = index % 11 == 0;

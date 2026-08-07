@@ -222,6 +222,12 @@ fn cache_f32_bits(value: f32) -> u32 {
     }
 }
 
+#[inline]
+fn normalized_device_scale(device_scale: f32) -> f32
+{
+   if device_scale.is_finite() && device_scale > 0.0 { device_scale } else { 1.0 }
+}
+
 impl LabelLayoutStyleKey {
     fn new(font_id: usize, font_px: f32, wrap: bool, max_w: f32) -> Self {
         Self {
@@ -262,6 +268,9 @@ pub struct TextCtx {
     pub atlas_handle: Option<gfx::ImageHandle>,
     gpu_pages: Vec<TextGpuPage>,
     retained_atlas_revisions: Vec<(gfx::ImageHandle, u64)>,
+    device_scale_bits: Option<u32>,
+    frame_device_scale_bits: Option<u32>,
+    glyph_geometry_revision: u64,
     label_layouts:
         HashMap<LabelLayoutStyleKey, HashMap<alloc::string::String, CachedLabelLayoutEntry>>,
     label_layout_len: usize,
@@ -285,6 +294,9 @@ impl Default for TextCtx {
             gpu_pages: Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
             retained_atlas_revisions:
                 Vec::with_capacity(text::DEFAULT_GLYPH_ATLAS_PAGE_COUNT),
+            device_scale_bits: None,
+            frame_device_scale_bits: None,
+            glyph_geometry_revision: 0,
             label_layouts: HashMap::new(),
             label_layout_len: 0,
             text_prefixes: HashMap::new(),
@@ -322,7 +334,17 @@ impl TextCtx {
         }
     }
 
+    /// Starts a frame and binds its device scale on the first text encode.
     pub fn begin_frame(&mut self) {
+        self.begin_frame_internal(None);
+    }
+
+    /// Starts a frame with an explicit device scale, invalidating stale retained geometry eagerly.
+    pub fn begin_frame_at_scale(&mut self, device_scale: f32) {
+        self.begin_frame_internal(Some(normalized_device_scale(device_scale)));
+    }
+
+    fn begin_frame_internal(&mut self, device_scale: Option<f32>) {
         if self.frame_active {
             self.atlas.end_frame();
         }
@@ -334,11 +356,57 @@ impl TextCtx {
             }
         }
         self.frame_active = true;
+        self.frame_device_scale_bits = None;
+        if let Some(device_scale) = device_scale {
+            self.update_device_scale(device_scale);
+            self.frame_device_scale_bits = Some(device_scale.to_bits());
+        }
         self.frame.page_generations.clear();
         for page in &self.gpu_pages {
             self.frame.page_generations.push((page.id, page.generation));
         }
         self.atlas.begin_frame();
+    }
+
+    fn update_device_scale(&mut self, device_scale: f32) -> f32
+    {
+        let scale = normalized_device_scale(device_scale);
+        let bits = scale.to_bits();
+        if self.device_scale_bits == Some(bits)
+        {
+            return scale;
+        }
+        self.device_scale_bits = Some(bits);
+        self.glyph_geometry_revision = self.glyph_geometry_revision.wrapping_add(1).max(1);
+        for (_, revision) in &mut self.retained_atlas_revisions
+        {
+            *revision = self.glyph_geometry_revision;
+        }
+        scale
+    }
+
+    fn encoding_device_scale(&mut self, requested: f32) -> f32
+    {
+        let requested = normalized_device_scale(requested);
+        if self.frame_active
+        {
+            if let Some(bits) = self.frame_device_scale_bits
+            {
+                let active = f32::from_bits(bits);
+                debug_assert_eq!(active.to_bits(), requested.to_bits());
+                active
+            }
+            else
+            {
+                self.update_device_scale(requested);
+                self.frame_device_scale_bits = Some(requested.to_bits());
+                requested
+            }
+        }
+        else
+        {
+            self.update_device_scale(requested)
+        }
     }
 
     pub fn finish_frame<U: ImageUploader>(
@@ -353,6 +421,7 @@ impl TextCtx {
         self.patch_builder_atlas_pages(builder);
         self.atlas.end_frame();
         self.frame_active = false;
+        self.frame_device_scale_bits = None;
         if self.frame.profiler.is_none() {
             return TextFrameStats::default();
         }
@@ -413,7 +482,7 @@ impl TextCtx {
                 invalidated_runs = invalidated_runs.wrapping_add(1);
             }
             run.atlas = page.handle;
-            run.atlas_revision = 1;
+            run.atlas_revision = self.glyph_geometry_revision;
         }
         if let Some(profiler) = self.frame.profiler.as_mut() {
             profiler.invalidated_runs = profiler.invalidated_runs.wrapping_add(invalidated_runs);
@@ -440,7 +509,12 @@ impl TextCtx {
     pub fn atlas_revision(&self) -> u64 {
         self.retained_atlas_revisions
             .first()
-            .map_or(self.atlas.revision(), |(_, generation)| *generation)
+            .map_or_else(|| self.manual_atlas_revision(), |(_, generation)| *generation)
+    }
+
+    #[inline]
+    fn manual_atlas_revision(&self) -> u64 {
+        self.atlas.revision().wrapping_add(self.glyph_geometry_revision)
     }
 
     #[inline]
@@ -451,7 +525,7 @@ impl TextCtx {
         self.retained_atlas_revisions
             .first()
             .copied()
-            .or_else(|| self.atlas_handle.map(|handle| (handle, self.atlas.revision())))
+            .or_else(|| self.atlas_handle.map(|handle| (handle, self.manual_atlas_revision())))
     }
 
     #[inline]
@@ -575,7 +649,7 @@ impl TextCtx {
         self.atlas_handle = self.gpu_pages.first().map(|page| page.handle);
         self.retained_atlas_revisions.clear();
         self.retained_atlas_revisions.extend(
-            self.gpu_pages.iter().map(|page| (page.handle, 1)),
+            self.gpu_pages.iter().map(|page| (page.handle, self.glyph_geometry_revision)),
         );
     }
 
@@ -586,6 +660,8 @@ impl TextCtx {
         self.atlas_handle = None;
         self.gpu_pages.clear();
         self.retained_atlas_revisions.clear();
+        self.device_scale_bits = None;
+        self.frame_device_scale_bits = None;
         self.frame.retired_pages.clear();
         self.label_layouts.clear();
         self.label_layout_len = 0;
@@ -1099,6 +1175,7 @@ fn bake_cached_label_line<const COUNT_STATS: bool>(
     txt: &mut TextCtx,
     b: &mut DrawListBuilder,
 ) -> (u32, u32) {
+    let device_scale = txt.encoding_device_scale(device_scale);
     let vertex_start = b.drawlist().vertices.len() as u32;
     let index_start = b.drawlist().indices.len() as u32;
     let mut glyph_runs = core::mem::take(&mut txt.frame.glyph_runs);
@@ -1214,7 +1291,7 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
         )
     });
 
-    let scale = if device_scale > 0.0 { device_scale } else { 1.0 };
+    let scale = normalized_device_scale(device_scale);
     let ox = (rect.x * scale).round() / scale;
     let mut oy = (rect.y * scale).round() / scale;
     let line_h = (font_px * 1.25).ceil();
@@ -3074,6 +3151,7 @@ impl TextInput {
         if cfg.length == 0 {
             return;
         }
+        let device_scale = text_ctx.encoding_device_scale(device_scale);
         let length = cfg.length;
         let chars: Vec<char> = display.chars().collect();
         let total_gap = cfg.gap * (length.saturating_sub(1) as f32);

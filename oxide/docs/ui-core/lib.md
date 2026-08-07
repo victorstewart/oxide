@@ -44,8 +44,8 @@
   Coalesces adjacent mergeable draw commands with caller-owned scratch storage for hot frame loops that prewarm allocation capacity.
 - `elements::TextCtx::retained_text_atlas_revision`
   Exposes the live text atlas handle and revision only after dirty atlas bytes have been uploaded to the GPU.
-- `elements::TextCtx::begin_frame` / `elements::TextCtx::finish_frame`
-  Bracket visible label preparation, defer dirty atlas publication, patch provisional glyph handles in place, and return the completed frame's text counters.
+- `elements::TextCtx::begin_frame`, `elements::TextCtx::begin_frame_at_scale`, and `elements::TextCtx::finish_frame`
+  Bracket visible label preparation, bind device scale lazily for released callers or eagerly for scale-aware hosts, defer dirty atlas publication, patch provisional glyph handles in place, and return the completed frame's text counters.
 - `elements::TextCtx::set_frame_stats_enabled` / `elements::TextCtx::last_frame_stats`
   Enable opt-in shaping, raster, cache, upload, eviction, and invalidation diagnostics and read the most recently completed frame.
 - `elements::TextFrameStats`
@@ -139,6 +139,8 @@
 - Retained draw-list replay now fails closed when no text-atlas context is supplied, so cached glyph geometry cannot bypass atlas revision checks after atlas eviction, reset, or dirty upload state changes.
 - `TextCtx::retained_text_atlas_revision` keeps surface/router retained text replay on a live atlas by refusing to expose a snapshot while atlas bytes are still dirty.
 - `TextCtx` now defers frame-owned atlas publication until all visible labels are prepared, unions damage under an explicit 75% full-upload threshold, and patches provisional atlas handles without reordering commands.
+- `TextCtx` advances a monotonic glyph-geometry revision when device scale changes. `begin_frame_at_scale` invalidates retained geometry before replay; the released no-argument `begin_frame` binds that revision on its first text encode. Resident 1x and 3x atlas entries and GPU pages remain reusable.
+- The released manual `atlas_handle` fallback combines atlas-storage and glyph-geometry revisions, rejecting both reset/eviction staleness and device-scale staleness.
 - Disabled text diagnostics retain only one direct frame-active branch; boxed counter state is absent from cache-hit glyph baking, and the warm 1,000-label frame remains allocation-free.
 - `BitmapTextAtlas` keeps deterministic overlay text on a context-owned fontdue cache and reusable geometry scratch, so warm option labels encode as four glyph runs with no rendering mutex, label solids, allocations, or atlas uploads.
 - `TextCtx` builds cached shaped cursor maps from the cached unwrapped owned shape when available, avoiding duplicate shaping between label drawing and text-input cursor metrics.
@@ -189,7 +191,7 @@
 - `crates/ui-core/tests/elements_tests.rs` covers contain, cover, stretch, zoom, pan, alpha, odd natural dimensions, bounded destinations, and fractional source-pixel crops for `ImageView`.
 - `crates/ui-core/tests/draw_builder_tests.rs` covers atomic cached draw-list append plus local/absolute index normalization.
 - `crates/ui-core/tests/draw_builder_tests.rs` also covers retained text draw replay rejection after missing, stale, and incomplete atlas revision contexts.
-- `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard.
+- `crates/ui-core/tests/elements_tests.rs` covers the live `TextCtx` retained atlas snapshot guard, eager 1x/3x invalidation, resident switchback reuse, and lazy scale binding through the released no-argument frame API.
 - `crates/ui-core/tests/elements_tests.rs` covers text-input cache and atlas upload paths that consume cached shaped cursor maps, batched visible fallback-font label encoding, plus pointer cursor picking across combining, ZWJ, pure RTL, and configured fallback-font grapheme-cluster boundaries.
 - `crates/ui-core/tests/surface.rs` covers dirty leaf retained encoding, live `TextCtx` atlas context routing, clean sibling subtree replay through `RetainedNodeStats`, and retained current/overlay/popup router composition stats.
 - `crates/ui-core/tests/surface.rs` also covers 300-node zero-geometry animation, nested affine clip/hit-test synchronization, and generation-safe slot reuse; `anim_prop.rs` covers dense compaction and interruption/completion.
@@ -223,6 +225,7 @@ assert_eq!(text.value(), "");
 ```
 
 ## Changelog
+- 2026-08-06: added scale-aware text frames and versioned retained glyph geometry across device-scale transitions while preserving the released no-argument frame API.
 - 2026-08-06: removed the accessibility-frame API and active dirty-bit writes while retaining only the inert released dirty-class value.
 - 2026-08-06: added and re-exported `VerticalScrollSurface`.
 - 2026-07-14: hard-cut deterministic bitmap-overlay drawing to the explicit A8 `BitmapTextAtlas`/`GlyphRun` path and removed the production solid-alpha-run renderer.

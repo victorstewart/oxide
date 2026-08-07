@@ -100,17 +100,30 @@ fn retained_encode_text_atlas_context_overload_reuses_clean_surface() {
 }
 
 #[test]
-fn text_ctx_retained_snapshot_requires_clean_uploaded_atlas() {
+fn text_ctx_manual_retained_snapshot_tracks_storage_and_device_scale() {
     let mut text = TextCtx::default();
     text.atlas_handle = Some(gfx::ImageHandle(4));
 
-    assert_eq!(text.retained_text_atlas_revision(), Some((gfx::ImageHandle(4), 0)));
+    let initial = text.retained_text_atlas_revision().expect("initial manual atlas");
+    assert_eq!(initial, (gfx::ImageHandle(4), 0));
+
+    text.begin_frame_at_scale(1.0);
+    let scale_one = text.retained_text_atlas_revision().expect("1x manual atlas");
+    assert_ne!(scale_one.1, initial.1);
+
+    text.begin_frame_at_scale(1.0);
+    assert_eq!(text.retained_text_atlas_revision(), Some(scale_one));
+
+    text.begin_frame_at_scale(3.0);
+    let scale_three = text.retained_text_atlas_revision().expect("3x manual atlas");
+    assert_ne!(scale_three.1, scale_one.1);
 
     text.atlas.reset();
     assert_eq!(text.retained_text_atlas_revision(), None);
 
     text.atlas.clear_dirty();
-    assert_eq!(text.retained_text_atlas_revision(), Some((gfx::ImageHandle(4), 1)));
+    let reset = text.retained_text_atlas_revision().expect("reset manual atlas");
+    assert_ne!(reset.1, scale_three.1);
 }
 
 #[test]

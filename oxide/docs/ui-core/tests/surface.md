@@ -20,8 +20,8 @@ Call flow:
   Verifies whole-surface retained replay and rebuild after paint dirtiness.
 - `retained_dirty_leaf_reuses_clean_sibling_subtree()`
   Verifies dirty leaf rebuilds do not force clean sibling subtree redraw.
-- `text_ctx_retained_snapshot_requires_clean_uploaded_atlas()`
-  Verifies retained text atlas snapshots are exposed only after dirty atlas uploads are cleared.
+- `text_ctx_manual_retained_snapshot_tracks_storage_and_device_scale()`
+  Verifies the released manual atlas-handle token changes on device-scale transitions and atlas reset while remaining stable for a repeated scale.
 - `layout_dirty_subtree_skips_clean_sibling_subtree()`
   Verifies a layout-dirty leaf skips unrelated sibling branches.
 - `descendant_only_layout_dirty_skips_parent_measurement()`
@@ -84,6 +84,7 @@ assert!(dirty.visited_nodes < cold.visited_nodes);
 ```
 
 ## Changelog
+- 2026-08-06: extended the manual text-atlas snapshot regression to cover stable same-scale identity plus 1x/3x and storage-reset invalidation.
 - 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit-test, and slot-generation reuse coverage.
 - 2026-07-13: Added C23 hard-budget, LRU/hot protection, churn suppression/readmission, external identity, and exact zero-budget fallback coverage.
 - 2026-06-01: Added coverage that dirty text atlases are not retained-replay-safe until the dirty upload is cleared.

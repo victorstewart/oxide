@@ -2118,7 +2118,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
    let mut uploader = CpuUploader::default();
    let mut builder = ui::DrawListBuilder::new();
    let labels = (0..1_000).map(|index| format!("Warm label {index:04}")).collect::<Vec<_>>();
-   text.begin_frame();
+   text.begin_frame_at_scale(2.0);
    for (index, label) in labels.iter().enumerate()
    {
       encode_matrix_label(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
@@ -2126,7 +2126,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
    let _ = text.finish_frame(&mut uploader, &mut builder);
    let proof_stats = {
       builder.clear();
-      text.begin_frame();
+      text.begin_frame_at_scale(2.0);
       for (index, label) in labels.iter().enumerate()
       {
          encode_matrix_label_profiled(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
@@ -2144,7 +2144,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
          builder.clear();
          if frame_scoped
          {
-            text.begin_frame();
+            text.begin_frame_at_scale(2.0);
          }
          for (index, label) in labels.iter().enumerate()
          {
@@ -2188,7 +2188,7 @@ fn text_new_labels_case(smoke: bool) -> PerfCaseResult
          let mut builder = ui::DrawListBuilder::new();
          if frame_scoped
          {
-            text.begin_frame();
+            text.begin_frame_at_scale(3.0);
          }
          for index in 0..200
          {
@@ -2347,7 +2347,7 @@ fn run_new_label_frame(phase: u64) -> ui::elements::TextFrameStats
    text.set_fallback_fonts(&[1]);
    let mut uploader = CpuUploader::default();
    let mut builder = ui::DrawListBuilder::new();
-   text.begin_frame();
+   text.begin_frame_at_scale(3.0);
    for index in 0..200
    {
       let label = format!("New {phase:08x} Latin 漢字 مرحبا 😀 {index:03}");
@@ -2503,7 +2503,7 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
       text.set_frame_stats_enabled(true);
       let mut uploader = CpuUploader::default();
       let mut builder = ui::DrawListBuilder::new();
-      text.begin_frame();
+      text.begin_frame_at_scale(1.0);
       for (index, (label, font_px)) in labels.iter().enumerate()
       {
          encode_matrix_label_profiled(label, index, 1.0, *font_px, &mut text, &mut uploader, &mut builder);
@@ -2557,7 +2557,7 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
       let frame_started_at = Instant::now();
       if frame_scoped
       {
-         text.begin_frame();
+         text.begin_frame_at_scale(1.0);
       }
       for (index, (label, font_px)) in labels.iter().enumerate()
       {
@@ -2699,7 +2699,7 @@ fn metal_text_glyph_instances_case(id: &str, smoke: bool) -> Result<PerfCaseResu
       upload_bytes: 0,
    };
    let mut builder = ui::DrawListBuilder::new();
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    for (index, label) in labels.iter().enumerate()
    {
       let font_px = 16.0 + (index % 20) as f32;
@@ -3036,7 +3036,7 @@ fn text_script_matrix_case(smoke: bool) -> PerfCaseResult
          text.set_fallback_fonts(&[1]);
          let mut uploader = CpuUploader::default();
          let mut builder = ui::DrawListBuilder::new();
-         text.begin_frame();
+         text.begin_frame_at_scale(3.0);
          for (index, value) in strings.iter().enumerate()
          {
             encode_matrix_label(value, index, 3.0, 24.0, &mut text, &mut uploader, &mut builder);
@@ -3066,7 +3066,7 @@ fn text_scale_sdf_matrix_case(smoke: bool) -> PerfCaseResult
             let mut text = perf_text_ctx();
             let mut uploader = CpuUploader::default();
             let mut builder = ui::DrawListBuilder::new();
-            text.begin_frame();
+            text.begin_frame_at_scale(scale);
             encode_matrix_label("SDF Scale Matrix", index, scale, font_px, &mut text, &mut uploader, &mut builder);
             let stats = text.finish_frame(&mut uploader, &mut builder);
             checksum = checksum
@@ -3178,7 +3178,7 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    let mut builder = ui::DrawListBuilder::new();
    let mut labels = Vec::new();
 
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    for ch in 'A'..='Z'
    {
       let label = ch.to_string();
@@ -3198,7 +3198,7 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    let pinned_label = labels.get(pinned_index).cloned().unwrap_or_else(|| String::from("A"));
 
    builder.clear();
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    encode_matrix_label(&pinned_label, 0, 1.0, 16.0, &mut text, &mut uploader, &mut builder);
    'pressure: for font_px in (17..=23).rev()
    {

@@ -711,7 +711,7 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn draw(&mut self, viewport: gfx::RectF, device_scale: f32, b: &mut DrawListBuilder) {
-        self.text.begin_frame();
+        self.text.begin_frame_at_scale(device_scale);
         // Reset damage for this frame
         self.last_damage.clear();
         b.clip_push(gfx::RectI::new(0, 0, viewport.w.ceil() as i32, viewport.h.ceil() as i32));
