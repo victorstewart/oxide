@@ -118,25 +118,30 @@ free-text reasons are rejected.
 
 ## Runtime behavior
 
-Analysis is single-threaded and has no global mutable state. Memory is bounded
-by the persisted samples, 100,000 bootstrap medians, and one pair-sized
-resample buffer. The module is benchmark tooling and is not reachable from a
-shipping host or renderer path.
+Analysis is single-threaded and has no global mutable state. Publication always
+uses 100,000 bootstrap medians and one pair-sized resample buffer. The module is
+benchmark tooling and is not reachable from a shipping host or renderer path.
 
 ## Tests
 
-`oxide/crates/perf-runner/tests/paired_experiment_tests.rs` covers balanced
-ordering, improvement and regression decisions, no-material-regression tails,
+`oxide/crates/perf-runner/tests/paired_experiment_tests.rs` compiles the same
+reducer source with a bounded private bootstrap count for broad correctness
+coverage of balanced ordering, improvement and regression decisions,
+no-material-regression tails,
 both metric directions, an isolated higher-is-better lower-tail collapse with
 unchanged p50/p95/p99/maximum summaries, typed and bounded invalidation,
 survivor-order balance, equal per-pair sample counts, invalid-pair evidence
 validation, persisted-null compatibility, cold-start warmup handling,
-byte-deterministic serialization, and the reanalysis-only CLI. Tests are kept
-outside production source and documented in
+byte-deterministic serialization, and the reanalysis-only CLI. The CLI test
+still executes the exported publication path and requires the persisted count
+to remain 100,000. Tests are kept outside production source and documented in
 [`tests/paired_experiment_tests.md`](tests/paired_experiment_tests.md).
 
 ## Changelog
 
+- 2026-08-07: bounded broad reducer correctness tests to 1,024 deterministic
+  bootstrap resamples while retaining one exported CLI analysis at the fixed
+  100,000-resample publication contract.
 - 2026-08-06: closed invalidation to four mechanically evidenced reasons,
   capped invalid pairs at 10%, preserved survivor AB/BA balance, required equal
   valid-pair sample counts, and validated all invalid-pair evidence.

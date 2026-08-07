@@ -203,6 +203,12 @@ pub fn balanced_pair_order(seed: u64, pair_count: usize) -> Vec<PairOrder>
 
 pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedExperimentReport>
 {
+   analyze_paired_experiment_with_resamples(input, PAIRED_BOOTSTRAP_RESAMPLES)
+}
+
+pub(crate) fn analyze_paired_experiment_with_resamples(input: PairedExperimentInput, bootstrap_resamples: usize) -> Result<PairedExperimentReport>
+{
+   ensure!(bootstrap_resamples > 0, "paired bootstrap requires at least one resample");
    validate_input(&input)?;
    let valid_pairs = input.pairs.iter().filter(|pair| pair.invalid_reason.is_none()).collect::<Vec<_>>();
    let mut baseline_samples = Vec::new();
@@ -229,7 +235,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
    let baseline = summarize(&baseline_samples);
    let candidate = summarize(&candidate_samples);
    let median_speedup_pct = median(&speedups);
-   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed);
+   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed, bootstrap_resamples);
    let mut reasons = Vec::new();
    if input.acceptance_policy == AcceptancePolicy::Performance
    {
@@ -302,7 +308,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
       lower_is_better: input.lower_is_better,
       acceptance_policy: input.acceptance_policy,
       seed: input.seed,
-      bootstrap_resamples: PAIRED_BOOTSTRAP_RESAMPLES,
+      bootstrap_resamples,
       identity: input.identity,
       baseline_sample_count: baseline_samples.len(),
       candidate_sample_count: candidate_samples.len(),
@@ -493,12 +499,12 @@ fn regresses_by_fraction(baseline: f64, candidate: f64, lower_is_better: bool, a
    regression / baseline > allowed_fraction
 }
 
-fn paired_bootstrap_ci(speedups: &[f64], seed: u64) -> [f64; 2]
+fn paired_bootstrap_ci(speedups: &[f64], seed: u64, bootstrap_resamples: usize) -> [f64; 2]
 {
    let mut state = seed.max(1);
-   let mut medians = Vec::with_capacity(PAIRED_BOOTSTRAP_RESAMPLES);
+   let mut medians = Vec::with_capacity(bootstrap_resamples);
    let mut resample = vec![0.0; speedups.len()];
-   for _ in 0..PAIRED_BOOTSTRAP_RESAMPLES
+   for _ in 0..bootstrap_resamples
    {
       for value in &mut resample
       {

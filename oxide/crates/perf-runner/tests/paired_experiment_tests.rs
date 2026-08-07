@@ -1,17 +1,29 @@
-use oxide_perf_runner::paired::{
-   analyze_paired_experiment, balanced_pair_order, report_json, AcceptancePolicy,
+#[path = "../src/paired.rs"]
+mod paired_under_test;
+
+use paired_under_test::{
+   balanced_pair_order, report_json, AcceptancePolicy,
    EnvironmentFingerprint, ExperimentIdentity, PairInvalidationReason, PairOrder,
-   PairedExperimentInput, SamplePair, WorkloadKind,
+   PairedExperimentInput, PairedExperimentReport, SamplePair, WorkloadKind,
    PAIRED_EXPERIMENT_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 use std::fs;
 
+const TEST_BOOTSTRAP_RESAMPLES: usize = 1_024;
 const BASE_SHA: &str = "1111111111111111111111111111111111111111";
 const TREE_SHA: &str = "2222222222222222222222222222222222222222";
 const INSTRUMENTATION_SHA: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 const BINARY_A_SHA: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 const BINARY_B_SHA: &str = "5555555555555555555555555555555555555555555555555555555555555555";
+
+fn analyze_paired_experiment(input: PairedExperimentInput) -> anyhow::Result<PairedExperimentReport>
+{
+   paired_under_test::analyze_paired_experiment_with_resamples(
+      input,
+      TEST_BOOTSTRAP_RESAMPLES,
+   )
+}
 
 fn environment() -> EnvironmentFingerprint
 {
@@ -118,6 +130,17 @@ fn input_with_pair_count(candidate_factor: f64, pair_count: usize) -> PairedExpe
       })
       .collect();
    expanded
+}
+
+#[test]
+fn publication_wrapper_contract_remains_fixed()
+{
+   let _publication_analyzer: fn(PairedExperimentInput) -> anyhow::Result<PairedExperimentReport> =
+      paired_under_test::analyze_paired_experiment;
+   assert_eq!(
+      paired_under_test::PAIRED_BOOTSTRAP_RESAMPLES,
+      oxide_perf_runner::paired::PAIRED_BOOTSTRAP_RESAMPLES
+   );
 }
 
 #[test]
@@ -485,8 +508,13 @@ fn shared_cli_analyzes_and_persists_raw_evidence()
    ])
    .expect("run paired analyzer CLI");
    let report = fs::read_to_string(&output_path).expect("read paired report");
-   assert!(report.contains("\"accepted\": true"));
-   assert!(report.contains("\"warmup_samples_a\""));
+   let report: serde_json::Value = serde_json::from_str(&report).expect("parse paired report");
+   assert_eq!(report["decision"]["accepted"].as_bool(), Some(true));
+   assert!(report["pairs"][0]["warmup_samples_a"].is_array());
+   assert_eq!(
+      report["bootstrap_resamples"].as_u64(),
+      Some(oxide_perf_runner::paired::PAIRED_BOOTSTRAP_RESAMPLES as u64)
+   );
    fs::remove_dir_all(root).expect("remove temp root");
 }
 

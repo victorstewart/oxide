@@ -115,8 +115,10 @@ returning. No sleeps, network access, threads, or device resources are used.
 ## Performance notes
 
 These are deterministic reducer correctness tests, not performance
-measurements. Each analysis performs the production 100,000-resample bootstrap;
-the isolated-tail fixture adds no repeated soak matrix.
+measurements. Broad decision coverage compiles the production reducer source
+with a private 1,024-resample budget. The CLI test alone executes the exported
+100,000-resample publication path and requires that count in its report. The
+isolated-tail fixture adds no repeated soak matrix.
 
 ## Feature flags and cfgs
 
@@ -137,6 +139,8 @@ cargo test --locked -p oxide-perf-runner --test paired_experiment_tests \
 
 ## Changelog
 
+- 2026-08-07: reduced repeated correctness bootstrap work by 94.48% while
+  retaining one end-to-end 100,000-resample CLI publication check.
 - 2026-08-06: added exploit, closed-schema, invalidation-cap, survivor-balance,
   equal-population, invalid-evidence, and persisted-null compatibility coverage.
 - 2026-08-06: required serialized metric direction and exact baseline/candidate p05, p01, and minimum decision inputs.
