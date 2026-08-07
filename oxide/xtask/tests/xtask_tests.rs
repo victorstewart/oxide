@@ -2563,6 +2563,16 @@ fn oxide_device_launch_environment_json_forwards_runner_debug_env() {
 }
 
 #[test]
+fn flat_rect_remove_rebuild_cycle_has_honest_parity_ids()
+{
+   let selected = map_uikit_case("testFlatRects100RemoveRebuildCycle")
+      .expect("map remove/rebuild cycle");
+   assert_eq!(selected.0, "uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle");
+   assert_eq!(selected.1, "cpu.primitive.flat_rects.100.remove_rebuild_cycle");
+   assert!(map_uikit_case("testFlatRects100RemoveAll").is_err());
+}
+
+#[test]
 fn map_uikit_case_includes_oxide_hybrid_preview_layer_live_case() {
     let selected =
         map_uikit_case("testCameraNV12LegacyHybridPreviewLayerLivePreview").expect("map case");

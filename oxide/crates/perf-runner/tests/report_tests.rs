@@ -1,5 +1,5 @@
 use oxide_perf_runner::{
-    assert_case_metric_contract, assert_contract_coverage, assert_full_coverage,
+    assert_case_metric_contract, assert_contract_coverage,
     collect_suite_report, compare_reports, render_report_markdown, AuditFinding,
     ContractCoverageEntry, ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
 };
@@ -1055,166 +1055,6 @@ fn compare_reports_large_reordered_same_length_baseline_keeps_lookup_semantics()
    assert_eq!(comparison.regressions[0].id, "cpu.compare.reordered.13");
    assert!(comparison.missing_baseline.is_empty());
    assert_eq!(comparison.improvements, vec![String::from("cpu.compare.reordered.5")]);
-}
-
-#[test]
-fn full_coverage_check_accepts_complete_registry_counts() {
-    let coverage = CoverageReport {
-        components_total: 2,
-        components_covered: vec![String::from("Button"), String::from("Label")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_ok());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_journey_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 2,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_authoring_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 2,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_bridge_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 2,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
 }
 
 #[test]
@@ -3964,35 +3804,63 @@ fn compare_reports_bench_iters_requires_bench_flag()
 }
 
 #[test]
-fn smoke_suite_keeps_popup_wheel_picker_case_id_stable() {
-    let report = collect_suite_report(true).expect("collect smoke suite");
-    let ids =
-        report.cases.iter().map(|case| case.id.as_str()).collect::<std::collections::BTreeSet<_>>();
+fn canonical_smoke_suite_keeps_exact_inventory()
+{
+   let report = collect_suite_report(true).expect("collect smoke suite");
+   let mut ids = report.cases.iter().map(|case| case.id.as_str()).collect::<Vec<_>>();
+   ids.sort_unstable();
 
-    assert!(ids.contains("cpu.authoring.popup_wheel_picker.interaction"));
-    assert!(!ids.contains("cpu.authoring.popup_picker.interaction"));
+   assert_eq!(report.suite, "canonical-smoke");
+   assert_eq!(ids.len(), 23);
+   assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+   assert_eq!(case_id_digest(&ids), 0x025eafdefc5ce69b);
 }
 
 #[test]
-fn filtered_run_suite_skips_full_coverage_gate() {
-    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
-        .arg("--run-suite")
-        .arg("--smoke")
-        .output()
-        .expect("run filtered smoke suite");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+fn baseline_write_rejects_smoke_sampling()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .arg("--write-baseline")
+      .arg("--smoke")
+      .output()
+      .expect("reject smoke baseline write");
+   let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(stdout.contains("layout="), "stdout: {stdout}");
-    assert!(stdout.contains("text_input="), "stdout: {stdout}");
-    assert!(stdout.contains("endurance="), "stdout: {stdout}");
-    assert!(stdout.contains("stress="), "stdout: {stdout}");
-    assert!(stdout.contains("case=cpu.system.prepare_draws.current"), "stdout: {stdout}");
-    assert!(!stdout.contains("case=cpu.system.prepare_draws.legacy"), "stdout: {stdout}");
-    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+   assert!(!output.status.success(), "smoke baseline write unexpectedly succeeded");
+   assert!(stderr.contains("--write-baseline cannot be combined with --smoke"));
+}
+
+#[test]
+fn baseline_write_rejects_touched_filter()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
+      .arg("--write-baseline")
+      .output()
+      .expect("reject filtered baseline write");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(!output.status.success(), "filtered baseline write unexpectedly succeeded");
+   assert!(stderr.contains("--write-baseline cannot be combined with OXIDE_PERF_RUNNER_FILTER"));
+}
+
+#[test]
+fn filtered_run_suite_runs_only_the_touched_case()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .output()
+      .expect("run filtered smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("suite=touched-smoke cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.system.prepare_draws.current"), "stdout: {stdout}");
+   assert!(!stdout.contains("case=cpu.system.prepare_draws.legacy"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
 }
 
 #[test]

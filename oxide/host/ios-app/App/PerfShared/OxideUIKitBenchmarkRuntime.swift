@@ -10532,7 +10532,7 @@ private func makeFlatRectMutateBenchmark(
 }
 
 @MainActor
-private func makeFlatRectRemoveAllBenchmark(
+private func makeFlatRectRemoveRebuildCycleBenchmark(
     testName: String,
     count: Int,
     host: PerfSurfaceHost
@@ -12713,8 +12713,8 @@ enum OxideUIKitBenchmarkCatalog
             return makeFlatRectMutateBenchmark(testName: normalizedTestName, count: 100, host: host)
         case "testFlatRects1000Mutate":
             return makeFlatRectMutateBenchmark(testName: normalizedTestName, count: 1_000, host: host)
-        case "testFlatRects100RemoveAll":
-            return makeFlatRectRemoveAllBenchmark(testName: normalizedTestName, count: 100, host: host)
+        case "testFlatRects100RemoveRebuildCycle":
+            return makeFlatRectRemoveRebuildCycleBenchmark(testName: normalizedTestName, count: 100, host: host)
         case "testFlatRects100Remount":
             return makeFlatRectRemountBenchmark(testName: normalizedTestName, count: 100, host: host)
         case "testOptimizedFlatRects10Mount":

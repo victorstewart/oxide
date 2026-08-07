@@ -884,10 +884,10 @@ const UIKIT_CASE_SPECS: &[UIKitCaseSpec] = &[
         note: "Retained flat-rect grid shared-fill mutation parity at 1000 nodes.",
     },
     UIKitCaseSpec {
-        test_name: "testFlatRects100RemoveAll",
-        case_id: "uikit.idiomatic.primitive.flat_rects.100.remove_all",
-        oxide_case_id: "cpu.primitive.flat_rects.100.remove_all",
-        note: "Retained flat-rect grid teardown parity at 100 nodes.",
+        test_name: "testFlatRects100RemoveRebuildCycle",
+        case_id: "uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle",
+        oxide_case_id: "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
+        note: "Retained flat-rect grid remove/rebuild cycle parity at 100 nodes.",
     },
     UIKitCaseSpec {
         test_name: "testFlatRects100Remount",
@@ -11778,7 +11778,7 @@ fn build_uikit_contract_coverage(
             if has_case("uikit.idiomatic.primitive.empty_root.mount")
                 && has_case("uikit.idiomatic.primitive.control_set.mount")
                 && has_case("uikit.idiomatic.primitive.control_set.mutate_state")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_all")
+                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle")
                 && has_case("uikit.idiomatic.primitive.flat_rects.100.remount")
             {
                 "implemented"
@@ -11788,15 +11788,15 @@ fn build_uikit_contract_coverage(
             vec![if has_case("uikit.idiomatic.primitive.empty_root.mount")
                 && has_case("uikit.idiomatic.primitive.control_set.mount")
                 && has_case("uikit.idiomatic.primitive.control_set.mutate_state")
-                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_all")
+                && has_case("uikit.idiomatic.primitive.flat_rects.100.remove_rebuild_cycle")
                 && has_case("uikit.idiomatic.primitive.flat_rects.100.remount")
             {
                 String::from(
-                    "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-view remove-all/remount slices are all covered.",
+                    "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-view remove/rebuild plus remount slices are all covered.",
                 )
             } else {
                 String::from(
-                    "Flat rects, labels, cards, and images cover mount plus mutate; the empty-root, shared control-set, and retained-view remove-all/remount slices are still incomplete.",
+                    "Flat rects, labels, cards, and images cover mount plus mutate; the empty-root, shared control-set, and retained-view remove/rebuild plus remount slices are still incomplete.",
                 )
             }],
         ),

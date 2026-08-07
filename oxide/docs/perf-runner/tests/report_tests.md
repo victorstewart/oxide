@@ -25,11 +25,18 @@ This integration suite freezes performance-report schemas, filtered execution, c
   SDF row to declare a cold cache state, execute both pre-shaped Latin and CJK
   glyph runs, and publish nonzero geometry and dirty-pixel counters.
 - `filtered_run_suite_classifies_first_visible_images_as_cold()` runs the linear and nearest first-visible image rows, requires cold resource metadata, and freezes the render-only note boundary after texture publication and draw-list construction.
+- `canonical_smoke_suite_keeps_exact_inventory()` freezes the exact 23-row canonical count and ID digest.
+- `filtered_run_suite_runs_only_the_touched_case()` proves an explicit filter executes and validates only its requested noncanonical row.
+- `baseline_write_rejects_smoke_sampling()` and `baseline_write_rejects_touched_filter()` prevent sampled or touched-only runs from replacing the canonical baseline.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
 
 Each filtered integration test writes a process-unique temporary report, verifies the child process succeeded, isolates the requested rows, and asserts exact semantic counters before deleting the artifact. The frame-resource row asserts exact ring residency and upload bytes so a timing-only result cannot hide reduced depth, omitted stress, or unexercised growth.
+
+Unfiltered smoke freezes the minimal canonical inventory. Diagnostic matrices
+remain reachable through explicit touched filters, and no integration path
+requests every registered case at once.
 
 ## Preconditions and postconditions
 
@@ -73,6 +80,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-07: froze the exact 23-row canonical smoke inventory and explicit touched-only execution after retiring the exhaustive workspace mode.
 - 2026-08-06: required linear and nearest first-visible image rows to report cold resource state and an explicit begin/encode/submit timing boundary.
 - 2026-08-06: froze the 401-row workspace case set after the SDF addition and semantic cutover to hit-test-only dynamic-animation row IDs.
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.

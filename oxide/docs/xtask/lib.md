@@ -46,7 +46,7 @@
 
 ## Logic narrative
 
-The crate maintains one authoritative UIKit case table that maps XCTest methods to Oxide benchmark identifiers and contract metadata. That table now spans idiomatic UIKit coverage for components, animation effects, primitive lifecycle slices such as empty-root mount, retained-view remove-all/remount, and a shared control-set mount/mutate case, plus the first hand-optimized UIKit flat-rect family.
+The crate maintains one authoritative UIKit case table that maps XCTest methods to Oxide benchmark identifiers and contract metadata. That table now spans idiomatic UIKit coverage for components, animation effects, primitive lifecycle slices such as empty-root mount, an honestly named retained-view remove/rebuild cycle, remount, and a shared control-set mount/mutate case, plus the first hand-optimized UIKit flat-rect family.
 
 `cargo xtask experiments check` validates `perf-experiments.toml` before Phase 4 alternatives can age into permanent architecture. Each manifest entry records an id, introduced commit/date, required backends and devices, correctness and performance gates, an expiry date, and a decision state. Undecided entries must name a `perf-ab...` gate because alternate implementations must stay off the default path until same-workload A/B evidence promotes them. Accepted or rejected entries must keep proof and cleanup notes because the losing path, runtime switch, comparison rows, tests, and docs are expected to be deleted after a decision.
 
@@ -63,7 +63,7 @@ The active device harness now trims a large amount of orchestration dead weight 
 
 Before any `xcodebuild test-without-building` device batch, the harness now also preflights the phone's interactive state through `devicectl device info lockState` and `devicectl device info displays`. If the phone is locked or the main display backlight is off, the run fails fast and keeps its checkpoints instead of burning time in Xcode destination-preflight limbo.
 
-The default committed UIKit device battery is intentionally a compact representative signal battery, not the exhaustive case matrix. It now includes headline UI object rows for labels, progress bars, spinners, buttons, toggles, sliders, images, nine-slice images, and collection views, plus common animation rows for spinner, indeterminate progress, button press scale, toggle spring, slider movement, image zoom/pan, and timeline bars. Dense count/style matrices are tiered down to a smaller high-signal subset in the default run so the official device baseline preserves distinct behaviors instead of every near-duplicate permutation. The full case table remains callable by explicit `--case` selection when a touched area or nightly/full-contract run needs the complete matrix.
+The default committed UIKit device battery is intentionally a compact representative signal battery, not the exhaustive case matrix. It now includes headline UI object rows for labels, progress bars, spinners, buttons, toggles, sliders, images, nine-slice images, and collection views, plus common animation rows for spinner, indeterminate progress, button press scale, toggle spring, slider movement, image zoom/pan, and timeline bars. Dense count/style matrices are tiered down to a smaller high-signal subset in the default run so the official device baseline preserves distinct behaviors instead of every near-duplicate permutation. Noncanonical rows remain callable by explicit `--case` selection for touched-area investigation; there is no run-everything contract.
 
 The official compare flow is now staged instead of using the full baseline pass as a debugging tool. `cargo xtask ios compare-device-perf --watchable-smoke` runs a small visibly watchable representative set and writes its own checkpointed artifacts under `watchable/<family-or-all>/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` runs the compact proof set for one family under `family/<family>/`. The root-level full `--write-baseline` promotion run keeps using `uikit/` and `oxide/`, but it now refuses to write official baselines until the corresponding family proofs for the current build stamp are green in `proof-status.json`.
 
@@ -111,6 +111,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: Renamed the repeated flat-rect teardown workload and parity mapping to a remove/rebuild cycle so report IDs match timed work.
 - 2026-08-07: Replaced the duplicate featureless workspace test pass with an all-target compile check.
 - 2026-07-15: preserved strict UIKit device cadence reporting when xctrace drops launched-target stdout by combining the same-case Metal trace with a bounded console-summary fallback pass.
 - 2026-07-14: recorded the accepted C35 WebGPU ID-mask field packing, bringing the manifest to 170 decided entries with 81 accepted and 89 rejected.

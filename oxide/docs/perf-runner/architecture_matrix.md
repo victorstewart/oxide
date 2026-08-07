@@ -9,6 +9,9 @@
 - `perf-runner::run_suite` calls `architecture_matrix::push_architecture_matrix_cases` after global case filtering is configured.
 - CPU rows exercise `ui-core`, `renderer-api`, text, and retained structures directly; GPU rows own a real `renderer-metal` instance and use its production frame APIs.
 - `tests/report_tests.rs` launches the runner as a child process and freezes the emitted report contract.
+- Unfiltered execution admits only architecture IDs in the 23-row canonical
+  battery. Other matrices remain compiled and are reached through explicit
+  `OXIDE_PERF_RUNNER_FILTER` touched runs; there is no full-catalog mode.
 
 ## Entry points list
 
@@ -124,6 +127,7 @@ Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.images.immutable_minified_shared_
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.images.icons_` for the C60 scaling matrix; add `OXIDE_C60_STANDALONE_IMAGES=1` for the same-pixel standalone control.
 
 ## Changelog
+- 2026-08-07: limited unfiltered architecture execution to canonical rows while preserving exact-filter access to diagnostic matrices.
 - 2026-08-07: constrained the paged-atlas locality row to one device scale while retaining deterministic glyph/font-size pressure, and renamed its ID so old mixed-scale samples cannot be compared as the corrected workload.
 - 2026-07-15: added C60 100/1,000/10,000 unique-icon architecture rows, public atlas-grid authoring journey, decode/upload/residency/invalidation counters, and standalone evidence control.
 - 2026-07-15: added C59 immutable-image Shared/Private/mip policy controls, large/minified/one-use/public-authoring rows, direct GPU and startup distributions, residency/upload counters, indexed samples, and output-quality evidence.

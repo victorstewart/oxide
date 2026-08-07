@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use oxide_harness_registry as registry;
 use oxide_input::{GestureRecognizer, TouchSurfaceRecognizer};
 use oxide_permissions as permissions;
@@ -53,6 +53,39 @@ const PERF_SCROLL_TRACE_START_NS: u64 = 1_000_000_000;
 const FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS: u64 = 1_024;
 static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
 
+const CANONICAL_CASE_IDS: &[&str] = &[
+   "cpu.authoring.app.prepared_frame",
+   "cpu.authoring.surface_retained.dirty_leaf_encode",
+   "cpu.bridge.permission_callback_fanout",
+   "cpu.image_pipeline.png.decode",
+   "cpu.journey.feed_raw_touch_fling",
+   "cpu.launch.simple_home.cold_launch",
+   "cpu.layout.dirty_subtree.incremental_relayout",
+   "cpu.primitive.control_set.mount",
+   "cpu.primitive.control_set.mutate_state",
+   "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
+   "cpu.reconcile.tree_mutation_10pct",
+   "cpu.stress.flat_rects.10000.mount",
+   "cpu.system.text_sdf_bake",
+   "cpu.system.text_shape_bake",
+   "cpu.text_input.ime.composition_commit_cycle",
+   "gpu.animation.effects.refresh_matrix",
+   "gpu.architecture.scene3d.create_release_endurance",
+   "gpu.authoring.image_store.atlas_grid_1000",
+   "gpu.authoring.retained_snapshot.clean_mixed",
+   "gpu.authoring.scene3d.mixed_frame",
+   "gpu.image_pipeline.png.first_visible",
+   "gpu.image_pipeline.png.upload",
+   "gpu.journey.collection_navigation.frame_pacing",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PerfSuiteScope
+{
+   Canonical,
+   Touched,
+}
+
 struct ScenePerfSpec {
     slug: &'static str,
     name: &'static str,
@@ -93,7 +126,7 @@ enum PrimitiveLifecycleKind {
 enum PrimitiveLifecycleOp {
     Mount,
     Mutate,
-    RemoveAll,
+    RemoveRebuildCycle,
     Remount,
 }
 
@@ -110,7 +143,7 @@ impl PrimitiveLifecycleOp {
         match self {
             Self::Mount => "mount",
             Self::Mutate => "mutate",
-            Self::RemoveAll => "remove-all",
+            Self::RemoveRebuildCycle => "remove-rebuild-cycle",
             Self::Remount => "remount",
         }
     }
@@ -137,16 +170,67 @@ fn load_perf_case_filters() -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn perf_case_allowed(case_id: &str) -> bool {
-    let filters = perf_case_filters();
-    filters.is_empty()
-        || filters.iter().any(|filter| case_id.starts_with(filter))
+fn perf_case_allowed(case_id: &str) -> bool
+{
+   match perf_suite_scope()
+   {
+      PerfSuiteScope::Canonical => CANONICAL_CASE_IDS.contains(&case_id),
+      PerfSuiteScope::Touched => perf_case_filters()
+         .iter()
+         .any(|filter| case_id.starts_with(filter)),
+   }
 }
 
-fn perf_case_prefix_allowed(prefix: &str) -> bool {
-    let filters = perf_case_filters();
-    filters.is_empty()
-        || filters.iter().any(|filter| filter.starts_with(prefix) || prefix.starts_with(filter))
+fn perf_case_prefix_allowed(prefix: &str) -> bool
+{
+   match perf_suite_scope()
+   {
+      PerfSuiteScope::Canonical => CANONICAL_CASE_IDS
+         .iter()
+         .any(|case_id| case_id.starts_with(prefix) || prefix.starts_with(case_id)),
+      PerfSuiteScope::Touched => perf_case_filters()
+         .iter()
+         .any(|filter| filter.starts_with(prefix) || prefix.starts_with(filter)),
+   }
+}
+
+fn perf_suite_scope() -> PerfSuiteScope
+{
+   if perf_case_filters().is_empty()
+   {
+      PerfSuiteScope::Canonical
+   }
+   else
+   {
+      PerfSuiteScope::Touched
+   }
+}
+
+fn assert_canonical_case_inventory(cases: &[PerfCaseResult]) -> Result<()>
+{
+   ensure!(
+      cases.len() == CANONICAL_CASE_IDS.len(),
+      "canonical battery produced {} cases instead of {}",
+      cases.len(),
+      CANONICAL_CASE_IDS.len()
+   );
+   let actual = cases
+      .iter()
+      .map(|case| case.id.as_str())
+      .collect::<BTreeSet<_>>();
+   ensure!(
+      actual.len() == CANONICAL_CASE_IDS.len(),
+      "canonical battery contains duplicate case IDs"
+   );
+   for expected in CANONICAL_CASE_IDS
+   {
+      ensure!(
+         actual.contains(expected),
+         "canonical battery omitted `{}`",
+         expected
+      );
+   }
+   Ok(())
 }
 
 fn set_env_if_unset(name: &str, value: &str) {
@@ -475,11 +559,11 @@ const PERF_PRIMITIVE_LIFECYCLE_SPECS: &[PrimitiveLifecycleSpec] = &[
         op: PrimitiveLifecycleOp::Mutate,
     },
     PrimitiveLifecycleSpec {
-        id: "cpu.primitive.flat_rects.100.remove_all",
-        name: "Flat Rects 100 Remove All",
+        id: "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
+        name: "Flat Rects 100 Remove/Rebuild Cycle",
         kind: PrimitiveLifecycleKind::FlatRects,
         count: 100,
-        op: PrimitiveLifecycleOp::RemoveAll,
+        op: PrimitiveLifecycleOp::RemoveRebuildCycle,
     },
     PrimitiveLifecycleSpec {
         id: "cpu.primitive.flat_rects.100.remount",
@@ -1567,23 +1651,24 @@ fn parse_cli(args: &[String]) -> Result<Cli> {
     Ok(cli)
 }
 
-fn print_usage() {
-    println!("oxide-perf-runner");
-    println!("  default: legacy renderer summary for sweep scripts");
-    println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
-    println!("  --write-baseline writes to benchmarks/workspace/latest.json and latest.md");
-    println!("  --paired-analyze INPUT --paired-json-out OUTPUT");
-    println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
-    println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
-    println!("  --bench-json-render PATH [--bench-json-iters N]");
-    println!("  --bench-json-string-render PATH [--bench-json-iters N]");
-    println!("  --bench-sample-summary [--bench-sample-summary-iters N]");
-    println!("  --bench-case-filter [--bench-case-filter-iters N]");
-    println!("  --bench-compare-reports CURRENT BASELINE [--bench-compare-iters N]");
-    println!("  --bench-frame-pacing-metrics [--bench-frame-pacing-iters N]");
-    println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
-    println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
-    println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
+fn print_usage()
+{
+   println!("oxide-perf-runner");
+   println!("  default: legacy renderer summary for sweep scripts");
+   println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
+   println!("  --write-baseline writes the canonical battery to benchmarks/workspace/latest.json and latest.md");
+   println!("  --paired-analyze INPUT --paired-json-out OUTPUT");
+   println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+   println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+   println!("  --bench-json-render PATH [--bench-json-iters N]");
+   println!("  --bench-json-string-render PATH [--bench-json-iters N]");
+   println!("  --bench-sample-summary [--bench-sample-summary-iters N]");
+   println!("  --bench-case-filter [--bench-case-filter-iters N]");
+   println!("  --bench-compare-reports CURRENT BASELINE [--bench-compare-iters N]");
+   println!("  --bench-frame-pacing-metrics [--bench-frame-pacing-iters N]");
+   println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
+   println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
+   println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
 }
 
 fn run_paired_analysis(cli: Cli) -> Result<()>
@@ -2285,48 +2370,72 @@ fn comparison_bench_hash_u64(hash: u64, value: u64) -> u64 {
     (hash ^ value).wrapping_mul(0x100000001b3)
 }
 
-fn run_suite(cli: Cli) -> Result<()> {
-    let report = collect_suite(cli.smoke)?;
-    if perf_case_filters().is_empty() {
-        assert_full_coverage(&report.coverage)?;
-        assert_contract_coverage(&report.contract)?;
-        assert_case_metric_contract(&report.cases)?;
-    }
+fn run_suite(cli: Cli) -> Result<()>
+{
+   ensure!(
+      !(cli.write_baseline && cli.smoke),
+      "--write-baseline cannot be combined with --smoke"
+   );
+   ensure!(
+      !(cli.write_baseline && !perf_case_filters().is_empty()),
+      "--write-baseline cannot be combined with OXIDE_PERF_RUNNER_FILTER"
+   );
+   let scope = perf_suite_scope();
+   let report = collect_suite(cli.smoke)?;
+   if scope == PerfSuiteScope::Canonical
+   {
+      assert_canonical_case_inventory(&report.cases)?;
+   }
+   assert_contract_coverage(&report.contract)?;
+   assert_case_metric_contract(&report.cases)?;
 
-    let comparison = if let Some(path) = cli.compare.as_ref() {
-        let baseline = load_report(path)?;
-        Some(compare_reports(&report, &baseline))
-    } else {
-        None
-    };
+   let comparison = if let Some(path) = cli.compare.as_ref()
+   {
+      let baseline = load_report(path)?;
+      Some(compare_reports(&report, &baseline))
+   }
+   else
+   {
+      None
+   };
 
-    let json_out = if cli.write_baseline {
-        Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_JSON)))
-    } else {
-        cli.json_out
-    };
-    let markdown_out = if cli.write_baseline {
-        Some(cli.markdown_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_MARKDOWN)))
-    } else {
-        cli.markdown_out
-    };
+   let json_out = if cli.write_baseline
+   {
+      Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_JSON)))
+   }
+   else
+   {
+      cli.json_out
+   };
+   let markdown_out = if cli.write_baseline
+   {
+      Some(cli.markdown_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_MARKDOWN)))
+   }
+   else
+   {
+      cli.markdown_out
+   };
 
-    if let Some(path) = json_out.as_ref() {
-        write_report_json(path, &report)?;
-    }
-    if let Some(path) = markdown_out.as_ref() {
-        write_markdown_outputs(path, &report, comparison.as_ref())?;
-    }
+   if let Some(path) = json_out.as_ref()
+   {
+      write_report_json(path, &report)?;
+   }
+   if let Some(path) = markdown_out.as_ref()
+   {
+      write_markdown_outputs(path, &report, comparison.as_ref())?;
+   }
 
-    print_summary(&report, comparison.as_ref());
+   print_summary(&report, comparison.as_ref());
 
-    if let Some(comp) = comparison.as_ref() {
-        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
-            bail!("performance comparison failed; inspect the generated report and update the committed baseline only with review");
-        }
-    }
+   if let Some(comp) = comparison.as_ref()
+   {
+      if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty()
+      {
+         bail!("performance comparison failed; inspect the generated report and update the committed baseline only with review");
+      }
+   }
 
-    Ok(())
+   Ok(())
 }
 
 pub fn collect_suite_report(smoke: bool) -> Result<PerfReport> {
@@ -2548,7 +2657,13 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 
     Ok(PerfReport {
         version: 1,
-        suite: if smoke { String::from("smoke") } else { String::from("full") },
+        suite: String::from(match (perf_suite_scope(), smoke)
+        {
+           (PerfSuiteScope::Canonical, false) => "canonical",
+           (PerfSuiteScope::Canonical, true) => "canonical-smoke",
+           (PerfSuiteScope::Touched, false) => "touched",
+           (PerfSuiteScope::Touched, true) => "touched-smoke",
+        }),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
         cases,
         coverage,
@@ -2558,24 +2673,27 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 }
 
 fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageReport {
-    let has = |prefix: &str| cases.iter().any(|case| case.id.starts_with(prefix));
     let has_case = |needle: &str| cases.iter().any(|case| case.id == needle);
+    let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let layers = vec![
         contract_entry(
             "engine",
             "Engine Microbenchmarks",
-            if has("cpu.system.")
-                && has("cpu.component.")
-                && has("cpu.animation.")
-                && has("cpu.primitive.")
-                && has("cpu.authoring.")
+            if has_all(&[
+                "cpu.authoring.app.prepared_frame",
+                "cpu.authoring.surface_retained.dirty_leaf_encode",
+                "cpu.layout.dirty_subtree.incremental_relayout",
+                "cpu.primitive.control_set.mount",
+                "cpu.reconcile.tree_mutation_10pct",
+                "cpu.system.text_shape_bake",
+            ])
             {
                 "implemented"
             } else {
                 "partial"
             },
             vec![String::from(
-                "Engine coverage currently spans system hot paths, primitive views, animations, primitive lifecycle slices, and author-facing APIs.",
+                "The canonical engine signal spans app injection, retained invalidation, layout, primitive lifecycle, reconciliation, and text hot paths; subsystem matrices remain explicit touched-case tools.",
             )],
         ),
         contract_entry(
@@ -2583,84 +2701,55 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
             "Representative Screen Flows",
             "partial",
             vec![String::from(
-                "Flow coverage now spans offscreen launch/lifecycle, router scenes, explicit CPU user journeys, and a macOS Metal collection-navigation journey frame-pacing row, but physical-device refresh-mode batteries remain incomplete.",
+                "The canonical flow signal spans an internal cold-bootstrap proxy, a raw-touch settled feed, and a Metal collection-navigation journey; process lifecycle and native-refresh authority remain physical-device work.",
             )],
         ),
         contract_entry(
             "os-bridge",
             "OS-Bridge Benchmarks",
-            if has("cpu.bridge.") { "implemented" } else { "missing" },
+            if has_case("cpu.bridge.permission_callback_fanout") { "implemented" } else { "missing" },
             vec![String::from(
-                "Bridge coverage currently measures only app-owned wrapper overhead, not system-owned surface cost as a renderer win.",
+                "The canonical bridge signal measures app-owned permission callback overhead; system-owned surface cost remains separate device evidence rather than an Oxide renderer win.",
             )],
         ),
     ];
-    let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let battery = vec![
-        contract_battery_entry(
+        contract_entry(
             "launch-lifecycle",
             "Launch & Lifecycle",
-            has_all(&[
-                "cpu.launch.simple_home.cold_launch",
-                "cpu.launch.heavy_home.cold_launch",
-                "cpu.launch.detail.deep_link_launch",
-                "cpu.launch.simple_home.warm_resume",
-                "cpu.launch.heavy_home.foreground_after_background",
-            ]),
-            "Offscreen bootstrap now includes simple-home and heavy-home cold launch, route-driven detail launch, warm resume, and foreground-after-background lifecycle workloads.",
-            "No dedicated cold launch, warm resume, deep-link launch, or foreground-after-background battery is wired into oxide-perf-runner yet.",
+            if has_case("cpu.launch.simple_home.cold_launch") { "partial" } else { "missing" },
+            vec![String::from(
+                "The canonical workspace signal includes one internal cold-bootstrap/first-frame proxy; real process launch, warm resume, and foreground lifecycle remain physical-device work.",
+            )],
         ),
         contract_battery_entry(
             "primitive-lifecycle",
             "Primitive Mount / Update / Destroy",
             has_all(&[
-                "cpu.primitive.empty_root.mount",
                 "cpu.primitive.control_set.mount",
                 "cpu.primitive.control_set.mutate_state",
-                "cpu.primitive.flat_rects.100.remove_all",
-                "cpu.primitive.flat_rects.100.remount",
+                "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
             ]),
-            "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-tree remove-all/remount slices are all covered.",
-            "Flat rects, labels, cards, and images cover mount plus mutate, but the empty-root, shared control-set, and retained-tree remove-all/remount slices are still incomplete.",
+            "The canonical primitive signal covers representative control mount, control-state mutation, and a retained-tree remove/rebuild cycle; count/type matrices remain touched-case tools.",
+            "The canonical mount, update, and remove/rebuild lifecycle slices are not all present.",
         ),
         contract_battery_entry(
             "layout-invalidation",
             "Layout & Invalidation",
-            has_all(&[
-                "cpu.layout.flat_grid.rotation_relayout",
-                "cpu.layout.deep_stack.theme_swap",
-                "cpu.layout.grid.safe_area_swap",
-                "cpu.layout.dirty_subtree.incremental_relayout",
-                "cpu.layout.descendant_only.incremental_relayout",
-                "cpu.layout.transform_only.reposition",
-                "cpu.layout.paint_only.opacity_clip",
-                "cpu.layout.node_content_dirty.retained_replay",
-                "cpu.layout.hit_test_dirty.retained_reuse",
-                "cpu.layout.scoped_tree_mutation.add_remove",
-            ]),
-            "Flat-grid rotation, deep-stack theme swap, safe-area inset relayout, dirty-subtree relayout, descendant-only relayout, transform-only reposition, paint-only opacity/clip, node content-dirty retained-replay, hit-test dirty retained-reuse, and scoped tree add/remove batteries are all implemented.",
-            "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
+            has_case("cpu.layout.dirty_subtree.incremental_relayout"),
+            "The canonical layout signal measures dirty-subtree incremental relayout with direct visit/skip counters; invalidation-class variants remain touched-case tools.",
+            "The canonical dirty-subtree layout/invalidation signal is absent.",
         ),
         contract_battery_entry(
             "text-input",
             "Text & Text Input",
             has_all(&[
-                "cpu.system.text_atlas_pressure",
-                "cpu.system.text_atlas_dirty_rect_upload",
-                "cpu.system.text_fallback_label_encode",
-                "cpu.system.wrapped_label_cached_encode",
-                "cpu.text_input.large_editor.keystroke_burst",
-                "cpu.text_input.large_editor.paste_10kb",
-                "cpu.text_input.large_editor.selection_replace",
+                "cpu.system.text_sdf_bake",
+                "cpu.system.text_shape_bake",
                 "cpu.text_input.ime.composition_commit_cycle",
-                "cpu.text_input.cursor_pick.cluster_map",
-                "cpu.text_input.cursor_pick.rtl_cluster_map",
-                "cpu.text_input.cursor_pick.fallback_cluster_map",
-                "cpu.text_input.cursor_pick.mixed_bidi_affinity",
-                "cpu.journey.text_ime_composition_cycle",
             ]),
-            "Large-editor keystroke, paste, selection-replace, IME composition, LTR/RTL/fallback-font/mixed-bidi cursor-pick cluster-map, fallback-font label encoding, wrapped-label cache-miss fitting, atlas eviction pressure, and dirty-rect atlas upload workloads now complement the text-field and routed input-form coverage.",
-            "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor, IME composition, atlas eviction, and dirty-rect upload battery is still incomplete.",
+            "The canonical text signal separates shaping, SDF generation, and IME composition/commit; editor, atlas-pressure, fallback, and cursor variants remain touched-case tools.",
+            "The canonical shaping, SDF, and IME signals are not all present.",
         ),
         contract_battery_entry(
             "image-pipeline",
@@ -2669,33 +2758,26 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "cpu.image_pipeline.png.decode",
                 "gpu.image_pipeline.png.upload",
                 "gpu.image_pipeline.png.first_visible",
-                "gpu.image_pipeline.rgba.nearest_first_visible",
             ]),
-            "The compact image battery splits PNG decode, Metal texture upload, linear first-visible presentation, and one nearest-sampled first-visible path into separate persisted workloads without a count/style permutation matrix.",
-            "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics.",
+            "The canonical image signal separates PNG decode, Metal upload, and first-visible presentation; sampling/count/storage variants remain touched-case tools.",
+            "The canonical decode, upload, and first-visible image phases are not all present.",
         ),
         contract_battery_entry(
             "lists-grids-chat",
             "Lists, Grids, & Chat",
             has_all(&[
                 "cpu.journey.feed_raw_touch_fling",
-                "cpu.journey.feed_scroll_matrix",
-                "cpu.journey.thumbnail_grid_scroll_matrix",
-                "cpu.journey.chat_thread_scroll_matrix",
+                "gpu.authoring.image_store.atlas_grid_1000",
             ]),
-            "A representative 2000-row raw-touch feed fling now reaches actual settlement beside the distinct programmatic feed, thumbnail-grid, and chat-thread viewport-transition matrices.",
-            "Collection encode and navigation coverage exist, but the raw-touch settled feed journey or compact feed/grid/chat viewport-transition matrices are still incomplete.",
+            "The canonical collection signal combines a settled 2,000-row raw-touch feed with a 1,000-image atlas grid; programmatic feed, thumbnail-grid, and chat variants remain explicit touched cases.",
+            "The canonical feed and grid collection signals are not both present.",
         ),
         contract_battery_entry(
             "navigation-input",
             "Navigation & Input Latency",
-            has_all(&[
-                "cpu.navigation.button_press.response",
-                "cpu.navigation.slider_scrub.response",
-                "cpu.navigation.text_focus.response",
-            ]),
-            "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases.",
-            "Navigation, orchestration, and zoom journeys exist, but direct event-to-first-response latency batteries are still missing.",
+            has_case("gpu.journey.collection_navigation.frame_pacing"),
+            "The canonical navigation journey reports event-to-visible, frame, GPU, hitch, and missed-frame distributions; interaction variants remain touched-case tools.",
+            "The canonical event-to-visible collection navigation signal is absent.",
         ),
         contract_entry(
             "animation-effects",
@@ -2714,52 +2796,31 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
         contract_battery_entry(
             "state-reconcile",
             "State Mutation & Reconciliation",
-            has_all(&[
-                "cpu.reconcile.single_node_mutation",
-                "cpu.reconcile.tree_mutation_1pct",
-                "cpu.reconcile.tree_mutation_10pct",
-                "cpu.reconcile.theme_swap_full",
-            ]),
-            "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly.",
-            "Primitive mutations and surface-router composition exist, but there is no dedicated diff/apply battery for 1 percent, 10 percent, or full-theme tree mutation yet.",
+            has_case("cpu.reconcile.tree_mutation_10pct"),
+            "The canonical reconciliation signal measures a nontrivial 10-percent retained-tree mutation; single-node, 1-percent, and full-theme variants remain touched-case tools.",
+            "The canonical retained-tree reconciliation signal is absent.",
         ),
         contract_battery_entry(
             "os-bridge",
             "OS Bridge Overhead",
-            has_all(&[
-                "cpu.bridge.permission_callback_fanout",
-                "cpu.bridge.sensor_location_snapshot",
-                "cpu.bridge.bluetooth_cache_update",
-                "cpu.bridge.photo_import_thumbnail",
-                "cpu.bridge.file_import_render",
-                "cpu.bridge.share_payload_prepare",
-                "cpu.bridge.local_json_transport_render",
-                "cpu.bridge.local_image_transport_render",
-            ]),
-            "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win.",
-            "Permission, location, and Bluetooth wrappers are covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing.",
+            has_case("cpu.bridge.permission_callback_fanout"),
+            "The canonical bridge signal measures app-owned permission callback fanout without claiming system-owned UI as renderer work; other bridge variants remain touched cases or device evidence.",
+            "The canonical app-owned OS-bridge overhead signal is absent.",
         ),
-        contract_battery_entry(
+        contract_entry(
             "endurance-thermal",
             "Endurance, Memory, & Thermal Drift",
-            has_all(&[
-                "cpu.endurance.open_close_heavy_screen.100x",
-                "cpu.endurance.tab_switch_heavy.500x",
-                "cpu.endurance.idle_animation.600_frames",
-            ]),
-            "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed Oxide battery.",
-            "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current Oxide suite.",
+            if has_case("gpu.architecture.scene3d.create_release_endurance") { "partial" } else { "missing" },
+            vec![String::from(
+                "The canonical workspace signal exercises repeated Scene3D resource creation/release with post-churn live GPU-byte accounting; thermal drift and energy remain physical-device evidence.",
+            )],
         ),
         contract_battery_entry(
             "stress-pathological",
             "Stress & Pathological Regressions",
-            has_all(&[
-                "cpu.stress.flat_rects.10000.mount",
-                "cpu.stress.simultaneous_animations.300",
-                "cpu.stress.ticker_100hz",
-            ]),
-            "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the router stress scene.",
-            "The router stress scene exists, but the explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete.",
+            has_case("cpu.stress.flat_rects.10000.mount"),
+            "The canonical pathological signal mounts a 10,000-node retained tree; animation and ticker traps remain touched-case tools.",
+            "The canonical 10,000-node stress signal is absent.",
         ),
     ];
     ContractCoverageReport {
@@ -2770,7 +2831,7 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "The Oxide report is intentionally explicit about missing contract families so the battery does not over-claim comprehensiveness.",
             ),
             String::from(
-                "Current Oxide coverage now spans engine hot paths, launch/lifecycle, representative scenes, and bridge slices; the biggest remaining gaps are hitch-oriented flow metrics and real-device refresh-mode coverage.",
+                "The canonical workspace battery covers one high-signal row per required family or distinct production phase; dense variants are selected explicitly when their owning code changes.",
             ),
         ],
     }
@@ -3869,7 +3930,7 @@ fn primitive_flat_rects_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Resu
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle => {
             let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(viewport_w));
             let mut nodes = populate_flat_rect_surface(&mut surface, count, 0);
             surface.layout(viewport_w, viewport_h.max((count_f / 10.0).ceil() * 28.0));
@@ -3985,7 +4046,7 @@ fn primitive_labels_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<P
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported label primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4038,7 +4099,7 @@ fn primitive_cards_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<Pe
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported card primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4098,7 +4159,7 @@ fn primitive_images_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<P
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported image primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4162,7 +4223,7 @@ fn primitive_control_set_case(
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported control-set primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -9808,99 +9869,6 @@ where
     comparison
 }
 
-pub fn assert_full_coverage(coverage: &CoverageReport) -> Result<()> {
-    let checks = [
-        (
-            coverage.components_total,
-            coverage.components_covered.len(),
-            "component perf coverage is incomplete",
-        ),
-        (
-            coverage.animations_total,
-            coverage.animations_covered.len(),
-            "animation perf coverage is incomplete",
-        ),
-        (
-            coverage.launch_total,
-            coverage.launch_covered.len(),
-            "launch perf coverage is incomplete",
-        ),
-        (
-            coverage.primitive_lifecycle_total,
-            coverage.primitive_lifecycle_covered.len(),
-            "primitive lifecycle perf coverage is incomplete",
-        ),
-        (
-            coverage.scenes_cpu_total,
-            coverage.scenes_cpu_covered.len(),
-            "cpu scene perf coverage is incomplete",
-        ),
-        (
-            coverage.scenes_gpu_total,
-            coverage.scenes_gpu_covered.len(),
-            "gpu scene perf coverage is incomplete",
-        ),
-        (
-            coverage.journeys_total,
-            coverage.journeys_covered.len(),
-            "user journey perf coverage is incomplete",
-        ),
-        (
-            coverage.authoring_total,
-            coverage.authoring_covered.len(),
-            "authoring perf coverage is incomplete",
-        ),
-        (
-            coverage.layout_total,
-            coverage.layout_covered.len(),
-            "layout perf coverage is incomplete",
-        ),
-        (
-            coverage.text_input_total,
-            coverage.text_input_covered.len(),
-            "text-input perf coverage is incomplete",
-        ),
-        (
-            coverage.image_pipeline_total,
-            coverage.image_pipeline_covered.len(),
-            "image-pipeline perf coverage is incomplete",
-        ),
-        (
-            coverage.navigation_total,
-            coverage.navigation_covered.len(),
-            "navigation perf coverage is incomplete",
-        ),
-        (
-            coverage.reconcile_total,
-            coverage.reconcile_covered.len(),
-            "reconcile perf coverage is incomplete",
-        ),
-        (
-            coverage.endurance_total,
-            coverage.endurance_covered.len(),
-            "endurance perf coverage is incomplete",
-        ),
-        (
-            coverage.stress_total,
-            coverage.stress_covered.len(),
-            "stress perf coverage is incomplete",
-        ),
-        (
-            coverage.bridges_total,
-            coverage.bridges_covered.len(),
-            "bridge perf coverage is incomplete",
-        ),
-    ];
-
-    for (total, covered, message) in checks {
-        if total != covered {
-            bail!(message);
-        }
-    }
-
-    Ok(())
-}
-
 pub fn assert_contract_coverage(contract: &ContractCoverageReport) -> Result<()> {
    for entry in contract.layers.iter().chain(contract.battery.iter()) {
       match entry.status.as_str() {
@@ -10345,43 +10313,7 @@ fn compute_audit_speedups(_report: &PerfReport) -> Vec<(String, f64)> {
 }
 
 fn print_summary(report: &PerfReport, comparison: Option<&PerfComparison>) {
-    println!(
-        "suite={} cases={} components={}/{} animations={}/{} launch={}/{} primitive_lifecycle={}/{} scenes_cpu={}/{} scenes_gpu={}/{} journeys={}/{} authoring={}/{} layout={}/{} text_input={}/{} image_pipeline={}/{} navigation={}/{} reconcile={}/{} endurance={}/{} stress={}/{} bridges={}/{}",
-        report.suite,
-        report.cases.len(),
-        report.coverage.components_covered.len(),
-        report.coverage.components_total,
-        report.coverage.animations_covered.len(),
-        report.coverage.animations_total,
-        report.coverage.launch_covered.len(),
-        report.coverage.launch_total,
-        report.coverage.primitive_lifecycle_covered.len(),
-        report.coverage.primitive_lifecycle_total,
-        report.coverage.scenes_cpu_covered.len(),
-        report.coverage.scenes_cpu_total,
-        report.coverage.scenes_gpu_covered.len(),
-        report.coverage.scenes_gpu_total,
-        report.coverage.journeys_covered.len(),
-        report.coverage.journeys_total,
-        report.coverage.authoring_covered.len(),
-        report.coverage.authoring_total,
-        report.coverage.layout_covered.len(),
-        report.coverage.layout_total,
-        report.coverage.text_input_covered.len(),
-        report.coverage.text_input_total,
-        report.coverage.image_pipeline_covered.len(),
-        report.coverage.image_pipeline_total,
-        report.coverage.navigation_covered.len(),
-        report.coverage.navigation_total,
-        report.coverage.reconcile_covered.len(),
-        report.coverage.reconcile_total,
-        report.coverage.endurance_covered.len(),
-        report.coverage.endurance_total,
-        report.coverage.stress_covered.len(),
-        report.coverage.stress_total,
-        report.coverage.bridges_covered.len(),
-        report.coverage.bridges_total
-    );
+   println!("suite={} cases={}", report.suite, report.cases.len());
     for case in &report.cases {
         println!(
             "case={} layer={} scenario={} variant={} cache={} refresh={} median={:.3} p95={:.3} p99={:.3} unit={}",

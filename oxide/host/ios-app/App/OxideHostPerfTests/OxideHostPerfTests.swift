@@ -868,7 +868,7 @@ final class OxideHostPerfTests: XCTestCase
         measureBenchmark(named: #function)
     }
 
-    func testFlatRects100RemoveAll()
+    func testFlatRects100RemoveRebuildCycle()
     {
         measureBenchmark(named: #function)
     }
