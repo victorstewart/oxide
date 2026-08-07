@@ -1,3 +1,5 @@
+#![cfg(feature = "test-scenes-entrypoint")]
+
 use oxide_renderer_api::{DrawCmd, RectF};
 use oxide_test_scenes::{Router, SceneKind};
 use oxide_text::Font;

@@ -1,3 +1,5 @@
+#![cfg(feature = "test-scenes-entrypoint")]
+
 use oxide_host_ios::OxideHostStats;
 use std::mem::{align_of, size_of};
 

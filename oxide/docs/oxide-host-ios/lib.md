@@ -1,7 +1,8 @@
 # oxide-host-ios `lib.rs`
 
 ## Intention and purpose
-- Own the Rust side of the iOS host static library: explicit app injection, UIApplication entry, renderer setup, scene routing, input callback bridges, text/IME bridges, push/permission bridges, camera benchmarking hooks, and performance report export.
+- Own the Rust side of the production iOS app host: explicit app injection, UIApplication entry, renderer setup, raw event delivery, two-stage frame submission, and platform services.
+- Keep legacy scene routing, camera benchmarks, fixture loading, and perf exports behind one explicit test-host feature.
 - Provide the iOS counterpart used to keep Apple host callback behavior aligned with the macOS host.
 
 ## Relation to the rest of the code
@@ -14,7 +15,7 @@
 
 ## Entry points list
 - `rust_entry(argc, argv) -> libc::c_int`
-  Starts the native iOS host through the Objective-C UIApplication shim.
+  Starts the legacy benchmark/test host and exists only with `test-scenes-entrypoint`.
 - `install_app(Box<dyn App>)` and `run_app(argc, argv, Box<dyn App>)`
   Install exactly one production app before host initialization and start the native UIApplication shell. The raw C `argc`/`argv` start call is explicitly unsafe and leaves the app slot untouched off iOS.
 - `display_link_frame_rate_range() -> Option<DisplayLinkFrameRateRange>`
@@ -36,7 +37,7 @@
 - `oxide_host_app_prepare_frame_timed(...)`, `oxide_host_app_submit_prepared_frame_with_drawable(...)`, and `oxide_host_app_cancel_prepared_frame()`
   Split CPU frame preparation from drawable-backed present work so UIKit acquires a `CAMetalDrawable` only after Rust has updated state, built the draw list, and decided the frame will submit.
 - `oxide_host_app_stats(out) -> libc::c_int`
-  Exports the host stats ABI consumed by Objective-C and Swift benchmark harnesses.
+  Exports the legacy host stats ABI consumed by Objective-C and Swift benchmark harnesses under `test-scenes-entrypoint`.
 - `oxide_host_on_memory_warning()`
   Purges retained effect/bloom targets, layer storage, prepared render chunks, and immutable ID-mask fields, marks the frame dirty, and forwards critical pressure to telemetry.
 
@@ -52,6 +53,7 @@
 - Apps with an owned `PreparedFrame` submit that draw list directly. The host only copies damage into reusable scratch and preserves the prepared frame across a generation-bound retry when drawable acquisition, Metal backpressure, or submission fails.
 - Frame wake generations are acknowledged only after a successful Metal submit. A newer wake or changed drawable geometry invalidates a retained retry, while `FrameDemand::NextVsync` continues scheduling without legacy settle frames.
 - Window, raw input, text, IME, and lifecycle events are delivered directly to the installed app. Posted tasks are drained before preparation and successful submits report observational `AppEvent::RendererStats` without invalidating frame state.
+- Production `AppState` contains only renderer, injected-app, prepared-frame, damage, and wake ownership. The scene router, camera/perf snapshots, telemetry services, fixture loaders, and report storage compile only for the legacy feature.
 - The product shell forwards native touch and display-link timestamps, prepares Rust work before acquiring a drawable, and publishes its configured display-link range through a lock-free snapshot.
 - The host exposes no platform motion-preference state, control, or ABI; authored Oxide animation durations pass through unchanged.
 - Compile-time layout assertions freeze `OxideHostStats` and the private camera perf/contract snapshot mirrors so benchmark out-parameters cannot silently drift from their native or Swift consumers.
@@ -85,14 +87,16 @@
 
 ## Feature flags and cfgs
 - iOS-only native services are compiled behind `target_os = "ios"` guards.
-- Host unit tests compile the Rust callback bridge on the local host without launching UIKit.
-- `test-scenes-entrypoint` rejects production app installation so the legacy test host and injected app cannot claim the same process.
-- `test-scenes-entrypoint` selects the legacy Objective-C host; without it, `build.rs` compiles only the product shell. Benchmark stubs are ignored unless the legacy host is selected.
+- `tokio-runtime` is additive and forwards to `oxide-platform-ios/tokio-runtime`; both UIApplication entry paths install the spawn hook only under that feature.
+- `test-scenes-entrypoint` selects the legacy Objective-C host and is the only feature that includes `oxide-test-scenes`, `oxide-perf-runner`, text fixtures, permissions, networking, telemetry, and PNG support.
+- Production app installation fails with `LegacyTestHostSelected` when the mutually exclusive legacy host is selected.
+- `perf-host-stubs` adds its Objective-C source only when `test-scenes-entrypoint` is also active.
 - Critical memory warnings purge renderer-owned effect/bloom targets, retained and pooled layer textures, persistent prepared chunks, and ID-mask raster/JFA fields, then mark the frame dirty so visible content rebuilds lazily through the normal Rust render path.
 
 ## Testing and benchmarks
-- Covered by `cargo test -p oxide-host-ios --tests --locked`.
-- Device-target compile coverage uses `cargo check -p oxide-host-ios --target aarch64-apple-ios --tests --locked`.
+- Production coverage uses `cargo test --locked -p oxide-host-ios --no-default-features --tests`.
+- Legacy coverage uses `cargo test --locked -p oxide-host-ios --features test-scenes-entrypoint --tests`.
+- ARM64 device-target checks run both feature configurations with `IPHONEOS_DEPLOYMENT_TARGET=18.0`.
 - Host camera typedef, stats, tick/debug perf, and camera snapshot ABI guard retention is covered by [abi_layout_tests.md](tests/abi_layout_tests.md).
 - Camera benchmark contract coverage lives in [camera_benchmark_tests.md](tests/camera_benchmark_tests.md); it statically gates `AVCaptureVideoPreviewLayer` to explicit baseline or diagnostic-only paths.
 - [injected_app_tests.md](tests/injected_app_tests.md) freezes direct sampled-RGBA uploader wiring, invalid-handle mapping, and renderer-owned release.
@@ -106,6 +110,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 ```
 
 ## Changelog
+- 2026-08-06: isolated legacy dependencies, state, exports, native services, and test suites behind `test-scenes-entrypoint`; made Tokio support independently additive.
 - 2026-08-06: added the bounded product Objective-C shell, exact native frame/input timing, idle display-link scheduling, and thread-safe display-link range observation.
 - 2026-08-06: added explicit production app injection, app-owned prepared frames with a persistent legacy fallback encoder, display-link timing, wake-generation retry scheduling, direct event delivery, and renderer feedback.
 - 2026-08-06: adapted app draw commands to reusable host draw-list storage and wired sampled runtime images directly into Metal-owned resources.

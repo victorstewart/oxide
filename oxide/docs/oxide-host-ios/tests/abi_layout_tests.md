@@ -40,10 +40,10 @@
 - The Swift host-stat mirror now includes the Rust tail fields so benchmark out-parameters do not corrupt adjacent Swift stack memory before A/B evidence is collected.
 
 ## Feature flags and cfgs
-- No feature-specific branches.
+- The entire integration test is compiled only with `test-scenes-entrypoint`, because every guarded ABI belongs to the legacy benchmark/test host rather than the default production shell.
 
 ## Testing and benchmarks
-- Run with `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
+- Run with `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --features test-scenes-entrypoint --test abi_layout_tests`.
 
 ## Changelog
 - 2026-06-22: expanded host ABI coverage to stats, tick/debug perf, private camera snapshots, and the Swift benchmark-runtime host-stat mirror.

@@ -60,6 +60,7 @@
 ## Feature flags and cfgs
 
 - The shell is selected when `test-scenes-entrypoint` is absent. That feature selects the legacy `app.m` source instead, so both UIApplication implementations are never linked together.
+- Default production builds exclude legacy scene, perf-runner, text-fixture, permission, networking, telemetry, and PNG dependencies. `tokio-runtime` is separately additive and forwarded to `oxide-platform-ios` only when requested.
 
 ## Testing and benchmarks
 
@@ -79,5 +80,6 @@ let result = unsafe
 ## Changelog
 
 - 2026-08-06: enforced single-scene ownership, explicit accessibility opt-out, actual-only startup metrics, and thread-safe display-link range observation.
+- 2026-08-06: isolated the production shell from legacy Rust dependencies and exports behind `test-scenes-entrypoint`.
 - 2026-08-06: bound the atomic camera wake callback to foreground lifecycle and stopped duplicating key releases as repeat events.
 - 2026-08-06: added the bounded production app-injection shell and environment-transition accounting.

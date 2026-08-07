@@ -1,3 +1,5 @@
+#![cfg(feature = "test-scenes-entrypoint")]
+
 use oxide_host_ios::{
     merge_camera_contract_fields, oxide_host_app_frame, oxide_host_app_init,
     oxide_host_app_shutdown, oxide_host_app_stats, oxide_host_camera_preview_plan,

@@ -12,6 +12,6 @@ The upload wiring test freezes direct forwarding of the caller's RGBA slice, row
 
 ## Command
 
-`cargo test --locked -p oxide-host-ios --test injected_app_tests`
+`cargo test --locked -p oxide-host-ios --no-default-features --test injected_app_tests`
 
 `cargo test --locked -p oxide-host-ios --features test-scenes-entrypoint --test injected_app_tests`

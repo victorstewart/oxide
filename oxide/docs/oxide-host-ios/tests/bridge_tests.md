@@ -49,7 +49,7 @@
 - The tested changes do not add allocation to callback-installed input paths.
 
 ## Feature flags and cfgs
-- Tests run under the host test target for `oxide-host-ios`.
+- Callback, input, text, push, and IME tests run in both host configurations. Only the overlay test requires `test-scenes-entrypoint`, because that control belongs to the legacy benchmark/test host.
 
 ## Testing and benchmarks
 - Run with `cargo test -p oxide-host-ios --tests --locked`.
