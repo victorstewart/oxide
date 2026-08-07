@@ -34,7 +34,7 @@ Call graph:
 ## Logic narrative
 
 1. Construction parses the treatment, endpoint, phase, nonce, and sampling indices, builds the 2,001-entry height prefix, registers the embedded Asap fonts, and preallocates all frame and observation scratch. Before ready admission, it streams the complete 717,745-byte canonical fixture through SHA-256 and fails unless both the observed byte count and digest match the frozen Swift identity. Phase and indices affect record identity only; smoke and primary runs share identical scene and interaction behavior.
-2. The cold mount composes the visible viewport, admits the static collection content extent once, and schedules one natural warm frame. The warm mount freezes actual visible component geometry and then waits for the exact frame's successful-submit acknowledgement.
+2. Every composition starts text collection with `begin_frame_at_scale(frame.scale)`, emits visible glyph commands, and calls `finish_frame` through `RuntimeTextUploader` before the prepared draw list is published. That frame scope coalesces glyph-atlas publication instead of uploading each glyph mutation independently. The cold mount composes the visible viewport, admits the static collection content extent once, and schedules one natural warm frame. The warm mount freezes actual visible component geometry and then waits for the exact frame's successful-submit acknowledgement.
 3. Ready admission first snapshots cumulative thermal/low-power transition counters, then samples device/display-link state and posts the nonce-scoped ready notification. Counter-first ordering closes the gap in which a transient state change and return could otherwise disappear before the baseline.
 4. A raw touch inside the feed becomes `TouchPending`. Only the first move that crosses Rust-owned drag slop starts measurement, records the gesture timestamp/offset, and requests continuous frames.
 5. Touch release marks `inertia_observed` only when `VerticalScrollSurface::wants_next_frame` proves Rust-owned inertial motion is active. Gesture frames append bounded display-link timestamp pairs, advance that motion, and render only visible rows. When motion settles, one additional callback composes the exact closing frame.
@@ -70,11 +70,12 @@ Call graph:
 
 ## Concurrency and memory behavior
 
-`FeedV1App` is owned and driven on the host app thread; it does not create threads or locks. Prepared draw-list storage, damage, callback samples, visible-component arrays, strings, checker bytes/handles, collection caches, and text state are retained by the app. Borrowed `PreparedFrame` data cannot outlive the app. Startup canonical verification reuses bounded scratch and never stores the complete canonical byte stream. The host transition counters are atomics, but this crate only takes coherent cumulative snapshots through the C ABI.
+`FeedV1App` is owned and driven on the host app thread; it does not create threads or locks. Prepared draw-list storage, damage, callback samples, visible-component arrays, strings, checker bytes/handles, collection caches, and text state are retained by the app. `RuntimeTextUploader` preserves the renderer's complete A8 atlas lifecycle by forwarding create, update, append, and release operations to the host uploader. Borrowed `PreparedFrame` data cannot outlive the app. Startup canonical verification reuses bounded scratch and never stores the complete canonical byte stream. The host transition counters are atomics, but this crate only takes coherent cumulative snapshots through the C ABI.
 
 ## Performance notes
 
 - After natural warmup, the steady frame path is designed to avoid heap allocation and capacity growth.
+- Frame-scoped text publication creates the cold atlas once, coalesces same-frame glyph writes, and does not republish unchanged warm glyph pixels.
 - Static content extent admission runs only on the cold mount; it is not recomputed or checked on every measured frame.
 - `CollectionView` visits visible rows only. Each row retains a cheap out-of-range guard, but no measured-frame fixture-vs-recipe height recheck remains.
 - Checker source scratch is fixed at 576 bytes; upload handles are cached by 64 deterministic variants. Observation uses fixed arrays of 1,024 callbacks and 96 visible components.
@@ -119,6 +120,7 @@ assert_eq!(status.callback_sample_count, 0);
 
 ## Changelog
 
+- 2026-08-07: Scoped text collection/publication to each rendered frame and preserved append/release operations through the runtime A8 uploader adapter.
 - 2026-08-06: Added complete allocation-bounded canonical identity admission at startup.
 - 2026-08-06: Consolidated standalone build and verification commands into the required mapped crate documentation.
 - 2026-08-06: Required direct observation of Rust-owned inertia and ready-to-completion thermal/low-power transition deltas.

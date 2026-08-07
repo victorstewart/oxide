@@ -23,6 +23,8 @@ Call graph:
 - `measurement_begins_at_the_first_drag_offset_change` proves touch-down and sub-slop motion remain unmeasured.
 - `a_touch_that_never_drags_returns_to_ready` proves a tap does not create a benchmark sample.
 - `checker_uploads_use_only_frozen_nearest_sampled_source_bytes` inspects every visible RGBA upload.
+- `text_atlas_publication_is_coalesced_once_per_frame` requires one cold A8 atlas creation, no separate cold glyph update, and no unchanged warm-frame republication.
+- `runtime_text_adapter_preserves_append_and_release_operations` protects forwarding of the A8 append and release lifecycle through the runtime uploader adapter.
 - `rendered_frame_colors_round_trip_the_frozen_srgb_bytes` inspects renderer commands after sRGB-to-linear conversion.
 - `ready_frame_exposes_frozen_damage_clip_and_image_geometry` checks full-canvas damage, surface clip, and the first rounded checker bounds.
 - `failed_submissions_retry_the_immutable_frame_under_the_latest_frame_id` freezes exact retry ownership and acknowledgement identity.
@@ -36,7 +38,7 @@ Call graph:
 
 Each test acquires one process-wide environment lock, installs valid controller variables, and restores the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
 
-`UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. No test includes source files by path or accesses private fields.
+`UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Its A8 counters prove that frame-scoped text publication folds cold glyphs into one atlas creation and leaves an unchanged warm frame upload-free. A focused adapter regression inspects the bounded `RuntimeTextUploader` implementation and requires both append and release forwarding. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. Tests do not access private app fields or mutate state outside public interfaces.
 
 ## Preconditions and postconditions
 
@@ -59,7 +61,7 @@ Rust's test runner may schedule cases concurrently, but all environment mutation
 
 ## Performance notes
 
-Most assertions use one or two visible frames. The single inertia completion case has a 768-frame fail-closed ceiling but exits at actual settlement; it is a deterministic state-machine proof, not a repeated soak battery. Device A/B evidence remains in the pilot harness.
+Most assertions use one or two visible frames. The text-publication case compares the cold and unchanged warm frames directly without a repeated loop. The single inertia completion case has a 768-frame fail-closed ceiling but exits at actual settlement; it is a deterministic state-machine proof, not a repeated soak battery. Device A/B evidence remains in the pilot harness.
 
 ## Feature flags and cfgs
 
@@ -89,5 +91,6 @@ cargo test --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Ca
 
 ## Changelog
 
+- 2026-08-07: Added frame-coalesced text-atlas publication and complete runtime A8 adapter forwarding coverage.
 - 2026-08-06: Added real-inertia success, noninertial rejection, and required zero environment-transition coverage.
 - 2026-08-06: Replaced inline private-state tests with focused public-API integration coverage.
