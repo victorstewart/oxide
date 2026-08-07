@@ -12,9 +12,17 @@ pub mod observation;
 use std::string::String;
 
 use oxide_platform_api::{
+   App,
+   AppEvent,
    FrameContext,
+   FrameDemand,
+   InitContext,
+   InputEvent,
+   Lifecycle,
+   PreparedFrame,
    TouchEvent,
    TouchPhase,
+   UpdateContext,
 };
 use oxide_renderer_api as gfx;
 use oxide_text as text;
@@ -27,8 +35,10 @@ use observation::{
    CallbackSample,
    DeviceState,
    EnvironmentTransitionCounts,
+   FailureRecord,
    ObservedComponent,
    ObservedRect,
+   RunRecord,
    MAX_CALLBACK_SAMPLES,
    MAX_VISIBLE_COMPONENTS,
 };
@@ -40,6 +50,7 @@ const ROUNDED_INDEX_COUNT: usize = ROUNDED_BOUNDARY_POINTS * 3;
 const FAILURE_STAGE_LAUNCH: &str = "launch";
 const FAILURE_STAGE_INITIAL_ADMISSION: &str = "initial-admission";
 const FAILURE_STAGE_GESTURE: &str = "gesture";
+const FAILURE_STAGE_PERSISTENCE: &str = "persistence";
 const EMPTY_VERTEX: gfx::Vertex = gfx::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 };
 const QUARTER_CIRCLE: [(f32, f32); 17] = [
    (1.000_000_0, 0.000_000_0),
@@ -113,6 +124,15 @@ pub struct FeedV1Status
    pub pending_submit_frame_id: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubmitAckAction
+{
+   None,
+   Ready,
+   Complete,
+   ReadyFrameMismatch,
+   CompletionFrameMismatch,
+}
 
 struct RunConfig
 {
@@ -576,6 +596,317 @@ impl FeedV1App
       }
    }
 
+   fn finish_record(&mut self)
+   {
+      if self.failure.is_none() && self.callback_count < 2
+      {
+         self.fail(
+            FAILURE_STAGE_GESTURE,
+            "complete feed-v1 run has fewer than two display-link samples",
+         );
+      }
+      if self.failure.is_none() && !self.inertia_observed
+      {
+         self.fail(
+            FAILURE_STAGE_GESTURE,
+            "feed-v1 gesture never entered Rust-owned inertial motion",
+         );
+      }
+      if self.failure.is_none() && self.device_before.maximum_frames_per_second == 0
+      {
+         self.fail(
+            FAILURE_STAGE_INITIAL_ADMISSION,
+            "live display-link state was not captured before the gesture",
+         );
+      }
+      if self.failure.is_none()
+      {
+         if let Some(device_after) = observation::capture_device_state()
+         {
+            self.device_after = device_after;
+         }
+         else
+         {
+            self.fail(
+               FAILURE_STAGE_GESTURE,
+               "live configured display-link range was unavailable after the gesture",
+            );
+         }
+      }
+      if self.failure.is_none()
+      {
+         let current = observation::capture_environment_transition_counts();
+         let thermal = current
+            .thermal_state
+            .saturating_sub(self.environment_transition_baseline.thermal_state);
+         let low_power = current
+            .low_power_mode
+            .saturating_sub(self.environment_transition_baseline.low_power_mode);
+         match (u32::try_from(thermal), u32::try_from(low_power))
+         {
+            (Ok(thermal), Ok(low_power)) =>
+            {
+               self.thermal_state_change_count = thermal;
+               self.low_power_mode_change_count = low_power;
+            }
+            _ => self.fail(
+               FAILURE_STAGE_GESTURE,
+               "environment transition count exceeded the feed-v1 record range",
+            ),
+         }
+      }
+      if self.failure.is_some()
+      {
+         self.persist_failure_record();
+         self.app_phase = AppPhase::Finished;
+         return;
+      }
+      let record = RunRecord {
+         nonce: &self.config.nonce,
+         phase: &self.config.phase,
+         session_index: self.config.session_index,
+         pair_index: self.config.pair_index,
+         order_index: self.config.order_index,
+         state: self.config.state,
+         fixture: &self.fixture,
+         captured_content_offset_points: self.captured_content_offset_points,
+         visible_components: &self.captured_components[..self.captured_component_count],
+         start_offset_points: self.gesture_start_offset_points,
+         end_offset_points: self.scroll.offset(),
+         gesture_start_timestamp_ns: self.gesture_start_timestamp_ns,
+         settled_timestamp_ns: self.settled_timestamp_ns,
+         inertia_observed: self.inertia_observed,
+         device_before: self.device_before,
+         device_after: self.device_after,
+         thermal_state_change_count: self.thermal_state_change_count,
+         low_power_mode_change_count: self.low_power_mode_change_count,
+         callbacks: &self.callback_samples[..self.callback_count],
+      };
+      if let Err(error) = observation::persist_success_and_post(&record)
+      {
+         self.fail(
+            FAILURE_STAGE_PERSISTENCE,
+            format!("success record persistence or completion notification failed: {error}"),
+         );
+         self.persist_failure_record();
+      }
+      self.app_phase = AppPhase::Finished;
+   }
+
+   fn persist_failure_record(&self)
+   {
+      let nonce = if observation::nonce_is_valid(&self.config.nonce)
+      {
+         Some(self.config.nonce.as_str())
+      }
+      else
+      {
+         None
+      };
+      let record = FailureRecord {
+         nonce,
+         treatment: self.config.treatment.as_deref(),
+         stage: self.failure_stage,
+         message: self.failure.as_deref().unwrap_or("unknown feed-v1 failure"),
+      };
+      if observation::persist_failure_and_post(&record).is_err()
+      {
+         if let Some(nonce) = nonce
+         {
+            let _ = observation::post_failure(nonce);
+         }
+      }
+   }
+
+   fn handle_submit_acknowledgement(&mut self, frame_id: u64)
+   {
+      match submit_ack_action(
+         self.app_phase,
+         self.pending_ready_frame_id,
+         self.pending_completion_frame_id,
+         frame_id,
+      )
+      {
+         SubmitAckAction::ReadyFrameMismatch =>
+         {
+            self.fail(
+               FAILURE_STAGE_INITIAL_ADMISSION,
+               "ready-frame submit acknowledgement has the wrong frame id",
+            );
+            self.finish_record();
+         }
+         SubmitAckAction::Ready =>
+         {
+            self.environment_transition_baseline =
+               observation::capture_environment_transition_counts();
+            let Some(device_before) = observation::capture_device_state() else
+            {
+               self.fail(
+                  FAILURE_STAGE_INITIAL_ADMISSION,
+                  "live configured display-link range was unavailable before ready",
+               );
+               self.finish_record();
+               return;
+            };
+            self.device_before = device_before;
+            self.inertia_observed = false;
+            if observation::post_ready(&self.config.nonce).is_err()
+            {
+               self.fail(FAILURE_STAGE_INITIAL_ADMISSION, "feed-v1 ready notification failed");
+               self.finish_record();
+            }
+            else
+            {
+               self.app_phase = AppPhase::Ready;
+            }
+         }
+         SubmitAckAction::CompletionFrameMismatch =>
+         {
+            self.fail(
+               FAILURE_STAGE_GESTURE,
+               "completion-frame submit acknowledgement has the wrong frame id",
+            );
+            self.finish_record();
+         }
+         SubmitAckAction::Complete => self.finish_record(),
+         SubmitAckAction::None => {}
+      }
+   }
+
+   fn accept_submit_retry(&mut self, frame_id: u64) -> bool
+   {
+      match self.app_phase
+      {
+         AppPhase::AwaitingReadySubmit => self.pending_ready_frame_id = frame_id,
+         AppPhase::AwaitingCompletionSubmit => self.pending_completion_frame_id = frame_id,
+         _ => return false,
+      }
+      true
+   }
+
+   fn handle_lifecycle_exit(&mut self)
+   {
+      let Some(stage) = lifecycle_exit_stage(self.app_phase) else
+      {
+         return;
+      };
+      if stage == FAILURE_STAGE_GESTURE
+      {
+         self.scroll.cancel_motion();
+      }
+      self.fail(stage, "feed-v1 app left the foreground before protocol completion");
+      self.finish_record();
+   }
+
+   fn fail_if_viewport_mismatched(&mut self, frame: FrameContext)
+   {
+      let valid = frame.viewport.w == contract::HOST_WIDTH_POINTS as f32
+         && frame.viewport.h == contract::HOST_HEIGHT_POINTS as f32
+         && (frame.scale - contract::SURFACE_SCALE as f32).abs() <= f32::EPSILON;
+      if !valid && self.failure.is_none()
+      {
+         let stage = self.render_failure_stage();
+         self.fail(
+            stage,
+            "feed-v1 requires the frozen 440x956 point, 3x canvas",
+         );
+      }
+   }
+}
+
+impl App for FeedV1App
+{
+   fn init(&mut self, _ctx: &mut InitContext)
+   {
+   }
+
+   fn event(&mut self, event: AppEvent, _ctx: &mut UpdateContext)
+   {
+      match event
+      {
+         AppEvent::Input(InputEvent::Touch(touch)) => self.handle_touch(&touch),
+         AppEvent::RendererStats(stats) => self.handle_submit_acknowledgement(stats.frame_id),
+         AppEvent::Lifecycle(Lifecycle::DidEnterBackground | Lifecycle::WillTerminate) =>
+            self.handle_lifecycle_exit(),
+         _ => {}
+      }
+   }
+
+   fn prepare_frame(&mut self, frame: FrameContext, uploader: &mut dyn gfx::RuntimeImageUploader) -> FrameDemand
+   {
+      let phase_at_frame_start = self.app_phase;
+      if self.accept_submit_retry(frame.frame_id)
+      {
+         return FrameDemand::Idle;
+      }
+      if phase_at_frame_start == AppPhase::Finished
+      {
+         return FrameDemand::Idle;
+      }
+      if phase_at_frame_start == AppPhase::TouchPending
+      {
+         return FrameDemand::Idle;
+      }
+      self.fail_if_viewport_mismatched(frame);
+      if phase_at_frame_start == AppPhase::Gesture
+      {
+         self.advance_gesture_frame(frame);
+      }
+      self.render_frame(frame, uploader);
+      if self.app_phase == AppPhase::Gesture && self.failure.is_some()
+      {
+         self.settled_timestamp_ns = frame.timestamp_ns;
+         self.app_phase = AppPhase::SettledFramePrepared;
+      }
+      if self.failure.is_some() && !matches!(self.app_phase, AppPhase::Gesture | AppPhase::SettledFramePrepared)
+      {
+         self.settled_timestamp_ns = frame.timestamp_ns;
+         self.finish_record();
+         return FrameDemand::Idle;
+      }
+      match self.app_phase
+      {
+         AppPhase::MountCold =>
+         {
+            self.app_phase = AppPhase::MountWarm;
+            FrameDemand::NextVsync
+         }
+         AppPhase::MountWarm =>
+         {
+            self.pending_ready_frame_id = frame.frame_id;
+            self.app_phase = AppPhase::AwaitingReadySubmit;
+            FrameDemand::Idle
+         }
+         AppPhase::AwaitingReadySubmit => FrameDemand::Idle,
+         AppPhase::Ready => FrameDemand::Idle,
+         AppPhase::TouchPending => FrameDemand::Idle,
+         AppPhase::Gesture => FrameDemand::NextVsync,
+         AppPhase::SettledFramePrepared =>
+         {
+            if !completion_frame_may_await_submit_ack(phase_at_frame_start, self.app_phase)
+            {
+               return FrameDemand::NextVsync;
+            }
+            if self.failure.is_none()
+            {
+               self.push_callback_sample(CallbackSample {
+                  timestamp_ns: frame.timestamp_ns,
+                  target_timestamp_ns: frame.target_timestamp_ns,
+               });
+            }
+            self.pending_completion_frame_id = frame.frame_id;
+            self.app_phase = AppPhase::AwaitingCompletionSubmit;
+            FrameDemand::Idle
+         }
+         AppPhase::AwaitingCompletionSubmit => FrameDemand::Idle,
+         AppPhase::Finished => FrameDemand::Idle,
+      }
+   }
+
+   fn prepared_frame(&self) -> Option<PreparedFrame<'_>>
+   {
+      Some(PreparedFrame { draw_list: self.builder.drawlist(), damage: &self.damage })
+   }
 }
 
 struct FeedMeasure<'a>
@@ -1007,4 +1338,52 @@ fn component_rect_within_one_physical_pixel(actual: ObservedRect, expected: cont
 fn config_state_offset(config: &RunConfig) -> f32
 {
    config.state.offset_points() as f32
+}
+
+fn completion_frame_may_await_submit_ack(phase_at_frame_start: AppPhase, phase_after_render: AppPhase) -> bool
+{
+   phase_at_frame_start == AppPhase::SettledFramePrepared
+      && phase_after_render == AppPhase::SettledFramePrepared
+}
+
+fn submit_ack_action(phase: AppPhase, ready_frame_id: u64, completion_frame_id: u64, submitted_frame_id: u64) -> SubmitAckAction
+{
+   match phase
+   {
+      AppPhase::AwaitingReadySubmit if ready_frame_id == submitted_frame_id => SubmitAckAction::Ready,
+      AppPhase::AwaitingReadySubmit => SubmitAckAction::ReadyFrameMismatch,
+      AppPhase::AwaitingCompletionSubmit if completion_frame_id == submitted_frame_id =>
+      {
+         SubmitAckAction::Complete
+      }
+      AppPhase::AwaitingCompletionSubmit => SubmitAckAction::CompletionFrameMismatch,
+      _ => SubmitAckAction::None,
+   }
+}
+
+fn lifecycle_exit_stage(phase: AppPhase) -> Option<&'static str>
+{
+   match phase
+   {
+      AppPhase::Ready | AppPhase::AwaitingReadySubmit => Some(FAILURE_STAGE_INITIAL_ADMISSION),
+      AppPhase::TouchPending
+      | AppPhase::Gesture
+      | AppPhase::SettledFramePrepared
+      | AppPhase::AwaitingCompletionSubmit =>
+      {
+         Some(FAILURE_STAGE_GESTURE)
+      }
+      _ => None,
+   }
+}
+
+#[no_mangle]
+/// Starts the production iOS host with one environment-configured feed app.
+pub extern "C" fn rust_entry(argc: i32, argv: *mut *mut core::ffi::c_char) -> i32
+{
+   // SAFETY: Objective-C main forwards its untouched C argc/argv pair.
+   unsafe
+   {
+      oxide_host_ios::run_app(argc, argv, Box::new(FeedV1App::from_environment()))
+   }
 }
