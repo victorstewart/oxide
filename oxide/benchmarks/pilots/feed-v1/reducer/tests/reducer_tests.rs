@@ -1,5 +1,6 @@
 use oxide_feed_v1_reducer::{
    frozen_components, frozen_order_index, strict_validate_failure_json, strict_validate_run_json,
+   visual_metrics, RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -98,6 +99,30 @@ fn frozen_recipe_matches_contract_extent_and_component_states() -> Result<(), St
    assert!(bottom.iter().all(|component| component.viewport_clip_px.y >= 0));
    Ok(())
 }
+
+#[test]
+fn visual_gate_rejects_one_corrupt_48_pixel_tile() -> Result<(), String>
+{
+   let reference = solid_rgba_image(96, 96, [247, 244, 238, 255]);
+   let mut corrupt = reference.clone();
+   for y in 48 .. 96
+   {
+      for x in 48 .. 96
+      {
+         let index = ((y * corrupt.width + x) * 4) as usize;
+         corrupt.pixels[index .. index + 4].copy_from_slice(&[0, 0, 0, 255]);
+      }
+   }
+   let exact = visual_metrics(&reference, &reference)?;
+   let mutated = visual_metrics(&reference, &corrupt)?;
+   assert!(exact.passes);
+   assert_eq!(exact.ssim, 1.0);
+   assert_eq!(exact.worst_tile_rgb_mae, 0.0);
+   assert_eq!(exact.exact_rgb_mae, 0.0);
+   assert!(!mutated.passes);
+   assert!(mutated.worst_tile_rgb_mae > 18.0);
+   Ok(())
+}
 #[test]
 fn frozen_order_maps_each_treatment_and_both_directions_share_it() -> Result<(), String>
 {
@@ -189,3 +214,13 @@ fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treat
       "failure": null
    }))
 }
+fn solid_rgba_image(width: u32, height: u32, rgba: [u8; 4]) -> RgbaImage
+{
+   let mut pixels = vec![0; width as usize * height as usize * 4];
+   for pixel in pixels.chunks_exact_mut(4)
+   {
+      pixel.copy_from_slice(&rgba);
+   }
+   RgbaImage { width, height, pixels }
+}
+
