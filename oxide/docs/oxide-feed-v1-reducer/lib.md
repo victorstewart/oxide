@@ -65,21 +65,22 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 ## Feature flags and cfgs
 
-No feature flags are used. On Unix, attachment admission compares device/inode file identities so hard links cannot authorize two capture names; canonical-path alias checks remain active on every platform. The reducer is a standalone Cargo workspace member so it does not expand the product workspace graph.
+No feature flags are used. On Unix, attachment admission compares device/inode file identities so hard links cannot authorize two capture names; canonical-path alias checks remain active on every platform. The reducer is a non-default root workspace member, so it shares dependency resolution and build artifacts without expanding ordinary product builds. Its root-owned `feed-v1-reducer` profile preserves the pre-workspace release panic policy.
 
 ## Testing and benchmarks
 
 Run:
 
 ```sh
-CARGO_TARGET_DIR=/tmp/oxide-feed-v1-reducer-test \
-  cargo test --locked --manifest-path oxide/benchmarks/pilots/feed-v1/reducer/Cargo.toml
+cd oxide
+cargo test --locked -p oxide-feed-v1-reducer
 ```
 
 `tests/reducer_tests.rs` covers strict schemas, the frozen recipe, nondegenerate travel and inertia, thermal/power transitions, visual corruption, bootstrap determinism, travel-equivalence margin and confidence boundaries, order, callback math/admission, failure blocking, non-secret device output, the six-smoke/six-PNG attachment bijection and exact test provenance, path and hard-link alias rejection, rejection of pre-cropped screenshot input, clean-Git source manifests, authority cleanup, the six-run smoke/full split, and byte-identical repeated full reduction with four travel decisions and 54 primary per-run summaries.
 
 ## Changelog
 
+- 2026-08-07: Joined the non-default root workspace graph and removed the nested lock/profile boundary.
 - 2026-08-06: Replaced unreplicated smoke travel matching with balanced primary travel equivalence, persisted its four decisions in revision-3 reports, and bound screenshot authority to the exact controller test and distinct file identities.
 - 2026-08-06: Reduced visual evidence to one full-screen PNG for each of the six smoke treatment/direction tuples; removed capture JSON, repeat images, and the repeat gate.
 - 2026-08-06: Reused the six smoke visuals as the immutable-build gate for one 54-run primary block and kept publication tables limited to those primary rows.

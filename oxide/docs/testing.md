@@ -14,6 +14,7 @@ This document captures the current state of automated testing across the Oxide w
 - `cargo test -p oxide-ui-core` – runs CPU layout/collection simulation property tests.
 - `cargo test -p oxide-renderer-metal --features snapshot-tests` – runs GPU readback snapshot tests on macOS.
 - `cargo test -p oxide-platform-ios` – exercises the camera capability heuristics.
+- `cargo test --locked -p oxide-feed-v1-app -p oxide-feed-v1-reducer` – runs the two non-default feed-v1 pilot crates on the shared workspace graph.
 
 ## Workspace Inventory
 
@@ -36,6 +37,8 @@ This document captures the current state of automated testing across the Oxide w
 | `oxide-perf-runner` | `crates/perf-runner` | bin | automated perf sweeps over scenes with configurable thresholds | No automated tests yet | needs CLI arg tests, deterministic stats fixtures |
 | `oxide-snapshot-runner` | `crates/snapshot-runner` | bin | offscreen renderer harness, PNG export, golden diffing | No automated tests yet | add CLI smoke tests, golden diff verification, fixture management |
 | `oxide-harness-registry` | `crates/harness-registry` | lib | compile-time registry of components and animations | No automated tests yet | add compile-time completeness tests, ensure IDs stay synchronized with scenes |
+| `oxide-feed-v1-app` | `benchmarks/pilots/feed-v1/ios/oxide-feed-app` | benchmark-only lib | production-path Oxide treatment for the frozen physical-iPhone feed pilot | Public-API contract, observation, state-machine, rendering, and build-graph integration suites | physical-device pilot remains authoritative for visual and timing evidence |
+| `oxide-feed-v1-reducer` | `benchmarks/pilots/feed-v1/reducer` | benchmark-only lib/bin | fail-closed admission and reduction of frozen feed-pilot evidence | Strict schema, fixture, visual, provenance, cleanup, and full-population integration coverage | device energy evidence remains manual-pending |
 | `xtask` | `xtask` | bin | iOS project preparation (capabilities, shader bundling) | Unit tests around entitlements merge | extend with workspace test runner, add tests for argument parsing |
 | `host/macos-app/Resources` | `host/macos-app/Resources` | assets | fonts/images consumed in tests | N/A | ensure fixture availability documented |
 | `tools/*` | `tools/anim_agg`, `tools/snap_agg`, `tools/sweep_agg` | bins | aggregation utilities for perf/snapshot data | Not exercised by the default local matrix | add unit/CLI tests once stabilized |

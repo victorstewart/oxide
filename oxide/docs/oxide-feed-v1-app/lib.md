@@ -84,7 +84,7 @@ Call graph:
 
 ## Feature flags and cfgs
 
-The app defines no crate features. The library compiles on the native host for deterministic integration tests. `observation` uses iOS FFI for live device/display-link/transition state and Darwin notifications; non-iOS tests receive a deterministic nominal 120 Hz state, zero transition counters, and no-op notifications.
+The app defines no crate features. The library compiles on the native host for deterministic integration tests. The root-owned `feed-v1-device` profile preserves the pilot's frozen release codegen, including `opt-level = 3` for `oxide-host-ios`, instead of inheriting the product host's size-oriented package override. `observation` uses iOS FFI for live device/display-link/transition state and Darwin notifications; non-iOS tests receive a deterministic nominal 120 Hz state, zero transition counters, and no-op notifications.
 
 ## Testing and benchmarks
 
@@ -96,19 +96,18 @@ The app defines no crate features. The library compiles on the native host for d
 Build the arm64 device archive with an explicit device-only `staticlib` output and an external target directory:
 
 ```sh
+cd oxide
 IPHONEOS_DEPLOYMENT_TARGET=18.0 \
 CARGO_TARGET_DIR=/tmp/oxide-feed-v1-device-build \
-cargo rustc --locked --offline --release --target aarch64-apple-ios \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --lib --crate-type staticlib
+cargo rustc --locked --offline --profile feed-v1-device \
+  --target aarch64-apple-ios -p oxide-feed-v1-app --lib --crate-type staticlib
 ```
 
 Run the host-side contract and state-machine tests with:
 
 ```sh
-CARGO_TARGET_DIR=/tmp/oxide-feed-v1-native-build \
-cargo test --locked --offline \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml
+cd oxide
+cargo test --locked --offline -p oxide-feed-v1-app
 ```
 
 ## Examples
@@ -121,6 +120,7 @@ assert_eq!(status.callback_sample_count, 0);
 
 ## Changelog
 
+- 2026-08-07: Joined the non-default root workspace graph and replaced the nested lock/profile boundary with root-owned resolution and target reuse.
 - 2026-08-07: Made ordinary host builds rlib-only and moved static-archive emission to the explicit arm64 device build.
 - 2026-08-07: Scoped text collection/publication to each rendered frame and preserved append/release operations through the runtime A8 uploader adapter.
 - 2026-08-06: Added complete allocation-bounded canonical identity admission at startup.

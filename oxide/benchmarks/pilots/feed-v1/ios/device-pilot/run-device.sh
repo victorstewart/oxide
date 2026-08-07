@@ -489,14 +489,14 @@ then
    exit 1
 fi
 
-CARGO_TARGET_DIR="$REDUCER_TARGET" cargo build --locked --release \
+CARGO_TARGET_DIR="$REDUCER_TARGET" cargo build --locked --profile feed-v1-reducer \
    --manifest-path "$FEED_ROOT/reducer/Cargo.toml"
 if [[ $? -ne 0 ]]
 then
    echo "reducer build failed" >&2
    exit 1
 fi
-cp "$REDUCER_TARGET/release/oxide-feed-v1-reducer" "$REDUCER_RUN_ROOT/oxide-feed-v1-reducer"
+cp "$REDUCER_TARGET/feed-v1-reducer/oxide-feed-v1-reducer" "$REDUCER_RUN_ROOT/oxide-feed-v1-reducer"
 REDUCER="$REDUCER_RUN_ROOT/oxide-feed-v1-reducer"
 
 if ! verify_source_snapshot "evidence-manifest capture"

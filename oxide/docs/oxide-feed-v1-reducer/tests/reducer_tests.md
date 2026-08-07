@@ -69,14 +69,15 @@ No feature flags or device cfg branches.
 ## Testing and benchmarks
 
 ```sh
-CARGO_TARGET_DIR=/tmp/oxide-feed-v1-reducer-test \
-  cargo test --locked --manifest-path oxide/benchmarks/pilots/feed-v1/reducer/Cargo.toml
+cd oxide
+cargo test --locked -p oxide-feed-v1-reducer
 ```
 
 Expected integration result: every focused integration case passes.
 
 ## Changelog
 
+- 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Reduced synthetic smoke evidence to six full-screen PNGs, added pre-cropped-input rejection, and limited full-report assertions to the 54 primary rows.
 - 2026-08-06: Added cleanup, provenance, transition/inertia, full-population per-run, and byte-identical rerun regressions.
 - 2026-08-06: Added source-manifest contamination coverage for stale reports, results, evidence, targets, and XCTest artifacts.

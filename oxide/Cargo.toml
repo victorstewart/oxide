@@ -26,6 +26,8 @@ members = [
     "crates/perf-runner",
     "crates/snapshot-runner",
     "crates/harness-registry",
+    "benchmarks/pilots/feed-v1/ios/oxide-feed-app",
+    "benchmarks/pilots/feed-v1/reducer",
     "xtask", "crates/test-scenes",
 ]
 default-members = [
@@ -73,3 +75,13 @@ lto = "thin"
 # Host staticlib prefers code-size in release
 [profile.release.package."oxide-host-ios"]
 opt-level = "z"
+
+[profile.feed-v1-device]
+inherits = "release"
+
+[profile.feed-v1-device.package."oxide-host-ios"]
+opt-level = 3
+
+[profile.feed-v1-reducer]
+inherits = "release"
+panic = "unwind"

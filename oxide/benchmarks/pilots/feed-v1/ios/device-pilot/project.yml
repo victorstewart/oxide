@@ -132,8 +132,8 @@ targets:
           export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}"
           export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-18.0}"
           unset SDKROOT SDK_DIR SDK_NAME
-          cargo rustc --locked --release --target aarch64-apple-ios --manifest-path "${MANIFEST}" --lib --crate-type staticlib
-          cp "${CARGO_TARGET_DIR}/aarch64-apple-ios/release/liboxide_feed_v1_app.a" "${BUILT_PRODUCTS_DIR}/liboxide_feed_v1_app.a"
+          cargo rustc --locked --profile feed-v1-device --target aarch64-apple-ios --manifest-path "${MANIFEST}" --lib --crate-type staticlib
+          cp "${CARGO_TARGET_DIR}/aarch64-apple-ios/feed-v1-device/liboxide_feed_v1_app.a" "${BUILT_PRODUCTS_DIR}/liboxide_feed_v1_app.a"
   FeedV1Controller:
     type: bundle.ui-testing
     platform: iOS

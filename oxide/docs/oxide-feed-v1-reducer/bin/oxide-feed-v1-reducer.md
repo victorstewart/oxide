@@ -52,7 +52,8 @@ No feature flags or platform cfg branches.
 Library and integration coverage runs with:
 
 ```sh
-cargo test --locked --manifest-path oxide/benchmarks/pilots/feed-v1/reducer/Cargo.toml
+cd oxide
+cargo test --locked -p oxide-feed-v1-reducer
 ```
 
 The physical-device runner exercises all four subcommands across its smoke and full modes. Reducer tests cover exact attachment authority, path/file-identity alias rejection, and report-schema/travel-decision output.
@@ -65,5 +66,6 @@ oxide-feed-v1-reducer verify-smoke /tmp/feed-v1-smoke
 
 ## Changelog
 
+- 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Bound attachment verification to the exact six-file controller export and documented revision-3 travel-equivalence output.
 - 2026-08-06: Added strict `reduce`, `manifest`, `verify-attachments`, and `verify-smoke` dispatch.

@@ -190,11 +190,59 @@ fn ordinary_builds_are_rlib_only_and_the_device_build_explicitly_requests_static
 
    let project = include_str!("../../device-pilot/project.yml");
    assert!(project.contains(
-      "cargo rustc --locked --release --target aarch64-apple-ios --manifest-path \"${MANIFEST}\" --lib --crate-type staticlib",
+      "cargo rustc --locked --profile feed-v1-device --target aarch64-apple-ios --manifest-path \"${MANIFEST}\" --lib --crate-type staticlib",
    ));
    assert!(!project.contains(
       "cargo build --locked --release --target aarch64-apple-ios --manifest-path \"${MANIFEST}\"",
    ));
+}
+
+#[test]
+fn feed_crates_share_the_root_workspace_without_entering_default_builds()
+{
+   let workspace = include_str!("../../../../../../Cargo.toml");
+   let lines: Vec<&str> = workspace.lines().map(str::trim).collect();
+   let workspace_array = |heading: &str|
+   {
+      let start = lines.iter().position(|line| *line == heading)
+         .expect("root workspace array heading") + 1;
+      let end = start + lines[start..].iter().position(|line| *line == "]")
+         .expect("root workspace array closing bracket");
+      &lines[start..end]
+   };
+   let members = workspace_array("members = [");
+   let default_members = workspace_array("default-members = [");
+   for member in [
+      "benchmarks/pilots/feed-v1/ios/oxide-feed-app",
+      "benchmarks/pilots/feed-v1/reducer",
+   ]
+   {
+      let entry = format!("\"{member}\",");
+      assert!(members.contains(&entry.as_str()));
+      assert!(!default_members.contains(&entry.as_str()));
+   }
+   assert!(workspace.contains(
+      "[profile.feed-v1-device.package.\"oxide-host-ios\"]\nopt-level = 3",
+   ));
+   assert!(workspace.contains(
+      "[profile.feed-v1-reducer]\ninherits = \"release\"\npanic = \"unwind\"",
+   ));
+
+   let app_manifest = include_str!("../Cargo.toml");
+   let reducer_manifest = include_str!("../../../reducer/Cargo.toml");
+   for manifest in [app_manifest, reducer_manifest]
+   {
+      assert!(!manifest.contains("\n[workspace]"));
+      assert!(!manifest.contains("\n[profile."));
+   }
+
+   let app_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+   assert!(!app_root.join("Cargo.lock").exists());
+   assert!(!app_root.join("../../reducer/Cargo.lock").exists());
+
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   assert!(runner.contains("cargo build --locked --profile feed-v1-reducer"));
+   assert!(runner.contains("$REDUCER_TARGET/feed-v1-reducer/oxide-feed-v1-reducer"));
 }
 
 #[test]

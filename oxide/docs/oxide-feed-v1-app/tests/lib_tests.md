@@ -21,6 +21,7 @@ Call graph:
 ## Entry points list
 
 - `ordinary_builds_are_rlib_only_and_the_device_build_explicitly_requests_staticlib` prevents normal host builds and tests from aggregating the complete dependency graph into an unused static archive while requiring the arm64 device phase to request that archive explicitly.
+- `feed_crates_share_the_root_workspace_without_entering_default_builds` requires both pilot crates to use the root member/lock/profile graph while keeping them outside ordinary default-member work.
 - `frozen_app_starts_at_each_exact_contract_offset` covers both controller endpoints.
 - `measurement_begins_at_the_first_drag_offset_change` proves touch-down and sub-slop motion remain unmeasured.
 - `a_touch_that_never_drags_returns_to_ready` proves a tap does not create a benchmark sample.
@@ -38,7 +39,7 @@ Call graph:
 
 ## Logic narrative
 
-The build-contract source guard first requires an rlib-only crate manifest and an explicit `cargo rustc --crate-type staticlib` Xcode device command. Runtime tests acquire one process-wide environment lock, install valid controller variables, and restore the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
+The build-contract source guards require an rlib-only crate manifest, an explicit `cargo rustc --crate-type staticlib` Xcode device command, one root workspace/lock/profile owner, and exclusion of both pilot crates from `default-members`. Runtime tests acquire one process-wide environment lock, install valid controller variables, and restore the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
 
 `UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Its A8 counters prove that frame-scoped text publication folds cold glyphs into one atlas creation and leaves an unchanged warm frame upload-free. A focused adapter regression inspects the bounded `RuntimeTextUploader` implementation and requires both append and release forwarding. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. Tests do not access private app fields or mutate state outside public interfaces.
 
@@ -74,10 +75,8 @@ No feature flags or target cfg branches. Native execution intentionally selects 
 Run with:
 
 ```sh
-CARGO_TARGET_DIR=/tmp/oxide-feed-v1-native-build \
-cargo test --locked --offline \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test lib_tests
+cd oxide
+cargo test --locked --offline -p oxide-feed-v1-app --test lib_tests
 ```
 
 The physical-device smoke/full pilot is required for host FFI, raw OS gestures, submitted Metal pixels, and native-refresh evidence.
@@ -87,12 +86,14 @@ The physical-device smoke/full pilot is required for host FFI, raw OS gestures, 
 Filter the retry contract while iterating:
 
 ```sh
-cargo test --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test lib_tests failed_submissions_retry_the_immutable_frame
+cd oxide
+cargo test -p oxide-feed-v1-app --test lib_tests \
+  failed_submissions_retry_the_immutable_frame
 ```
 
 ## Changelog
 
+- 2026-08-07: Added a source guard for shared root workspace ownership without default-member expansion.
 - 2026-08-07: Added a source guard for rlib-only ordinary builds and explicit device-only static-archive emission.
 - 2026-08-07: Added frame-coalesced text-atlas publication and complete runtime A8 adapter forwarding coverage.
 - 2026-08-06: Added real-inertia success, noninertial rejection, and required zero environment-transition coverage.

@@ -60,9 +60,8 @@ No feature flags or platform cfg branches. Tests call the pure serializers, so t
 ## Testing and benchmarks
 
 ```sh
-cargo test --locked --offline \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test observation_tests
+cd oxide
+cargo test --locked --offline -p oxide-feed-v1-app --test observation_tests
 ```
 
 This validates schema logic only; physical runs validate durable files and notifications.
@@ -70,12 +69,13 @@ This validates schema logic only; physical runs validate durable files and notif
 ## Examples
 
 ```sh
-cargo test --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test observation_tests complete_record_matches
+cd oxide
+cargo test -p oxide-feed-v1-app --test observation_tests complete_record_matches
 ```
 
 ## Changelog
 
+- 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Added explicit underscore and period rejection to keep Rust nonce admission symmetric with UIKit.
 - 2026-08-06: Added required direct-inertia and nonzero thermal/low-power transition-field coverage.
 - 2026-08-06: Moved exact success/failure schema, geometry, and nonce coverage into a mapped public-API integration suite.

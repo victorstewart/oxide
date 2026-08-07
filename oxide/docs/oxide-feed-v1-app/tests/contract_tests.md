@@ -59,9 +59,8 @@ No feature flags or platform cfg branches.
 ## Testing and benchmarks
 
 ```sh
-cargo test --locked --offline \
-  --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test contract_tests
+cd oxide
+cargo test --locked --offline -p oxide-feed-v1-app --test contract_tests
 ```
 
 These are deterministic contract tests, not performance measurements.
@@ -69,11 +68,12 @@ These are deterministic contract tests, not performance measurements.
 ## Examples
 
 ```sh
-cargo test --manifest-path oxide/benchmarks/pilots/feed-v1/ios/oxide-feed-app/Cargo.toml \
-  --test contract_tests rust_recipe_reproduces
+cd oxide
+cargo test -p oxide-feed-v1-app --test contract_tests rust_recipe_reproduces
 ```
 
 ## Changelog
 
+- 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Reused the production canonical streamer and deleted the duplicate test-only byte builder.
 - 2026-08-06: Moved complete identity, row, checker, payload, and real-font coverage out of source into a mapped integration suite.
