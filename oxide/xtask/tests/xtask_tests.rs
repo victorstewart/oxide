@@ -2741,6 +2741,53 @@ fn uikit_perf_environment_forwards_camera_benchmark_overrides() {
 }
 
 #[test]
+fn shared_device_launch_environment_forwards_oxide_overrides()
+{
+   let overrides = [
+      ("OXIDE_PERF_RUNNER_FILTER", Some("gpu.scene.damage_lab.frame")),
+      ("OXIDE_DEBUG_ENCODE_EVERY", Some("8")),
+      ("OXIDE_ENABLE_DAMAGE", Some("0")),
+      ("OXIDE_ENABLE_LAYER_CACHE", Some("0")),
+      ("OXIDE_ENABLE_IMAGE_ARG_BUFFER", Some("0")),
+      ("OXIDE_GLYPH_USE_ICB", Some("0")),
+      ("OXIDE_DAMAGE_USE_THRESH", Some("0")),
+      ("OXIDE_DAMAGE_PREFILTER_THRESH", Some("12")),
+   ];
+   with_env_vars(&overrides, || {
+      let json = uikit_perf_environment_json_for_test_name(
+         "testCameraNV12LegacyLivePreview",
+         "native",
+      )
+      .expect("shared device launch environment");
+      let environment = serde_json::from_str::<BTreeMap<String, String>>(&json)
+         .expect("parse shared device launch environment");
+      for (key, expected) in overrides
+      {
+         assert_eq!(
+            environment.get(key).map(String::as_str),
+            expected,
+            "missing forwarded `{key}`",
+         );
+      }
+   });
+
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let forwarding = source
+      .split_once("fn append_forwarded_uikit_perf_environment(")
+      .and_then(|(_, tail)| tail.split_once("fn encode_environment_json("))
+      .map(|(body, _)| body)
+      .expect("shared forwarding body");
+   assert!(forwarding.contains("OXIDE_DEVICE_FORWARD_ENV_VARS"));
+   let oxide_console = source
+      .split_once("fn run_oxide_onscreen_case_console_capture(")
+      .and_then(|(_, tail)| tail.split_once("fn run_oxide_onscreen_case_trace("))
+      .map(|(body, _)| body)
+      .expect("Oxide console launch body");
+   assert!(oxide_console.contains("oxide_onscreen_launch_spec(spec)"));
+   assert!(oxide_console.contains("run_uikit_device_case_console_capture("));
+}
+
+#[test]
 fn uikit_perf_environment_enables_real_app_camera_host_for_real_app_cases() {
     let custom_json = uikit_perf_environment_json_for_test_name(
         "testCameraNV12LegacyRealAppLivePreview",

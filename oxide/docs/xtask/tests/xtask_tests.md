@@ -37,6 +37,7 @@ Call flow:
 - `standalone_device_promotion_rejects_partial_batteries_before_device_work()`: rejects narrowed UIKit/Oxide canonical writes before source, build, or device work.
 - `react_device_perf_rejects_unstamped_external_derived_data_reuse()`: freezes the hard cut from existence-only React Native cache imports.
 - `device_build_reuse_requires_toolchain_and_artifact_stamp()`: requires the shared exact toolchain/artifact stamp validator for automatic and explicit reuse.
+- `shared_device_launch_environment_forwards_oxide_overrides()`: proves every supported Oxide override reaches the shared real launch environment and freezes the Oxide-to-shared-launch call path.
 - `paired_reports_serialize_identical_repository_revision()`: proves paired UIKit and Oxide reports publish the same repository ref/HEAD/tree.
 - `uikit_version_two_rejects_missing_repository_revision_and_version_one_defaults_it()`: freezes strict version-2 serialization and historical version-1 compatibility.
 - Resumable-root stamp tests prove only an exact full evidence identity retains checkpoints; changes to source, toolchain, configuration, artifact, device OS, stage, ordered cases, trace duration, environment, report label, or power input clear them while preserving DerivedData, and legacy build-only stamps fail closed.
@@ -92,6 +93,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: added runtime and source-contract coverage for Oxide device override forwarding.
 - 2026-08-07: added partial standalone promotion and final source-recapture coverage.
 - 2026-08-07: added full evidence-run invalidation, toolchain/artifact reuse, and the React cache hard cut.
 - 2026-08-07: froze the Release/iphoneos configuration used by physical-device build-for-testing.

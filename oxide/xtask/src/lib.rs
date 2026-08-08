@@ -5293,6 +5293,10 @@ fn append_forwarded_uikit_perf_environment(env: &mut BTreeMap<String, String>) {
     if !env.contains_key(UIKIT_PERF_CAMERA_MAX_DRAWABLE_COUNT_ENV) {
         env.insert(String::from(UIKIT_PERF_CAMERA_MAX_DRAWABLE_COUNT_ENV), String::from("2"));
     }
+    for key in OXIDE_DEVICE_FORWARD_ENV_VARS
+    {
+       insert_env_if_present(env, key);
+    }
 }
 
 fn encode_environment_json(env: &BTreeMap<String, String>, context: &str) -> Result<String> {

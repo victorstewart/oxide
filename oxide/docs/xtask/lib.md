@@ -115,6 +115,8 @@ Watchable smoke runs now also enable app-rendered frame capture for both Oxide a
 
 Resumable UIKit and Oxide device flows admit a completed report, checkpoint, xcresult, or trace only when a separate complete evidence-run stamp matches. That stamp binds the validated build artifacts, implementation/stage, exact ordered UIKit and Oxide mappings, device identity and OS build, native refresh mode, trace duration, watch-capture mode, effective per-case metrics/launch environments, report label, and content digests for imported power traces. A mismatch clears stale evidence while preserving only validated DerivedData, so a changed trace duration, override, power input, OS build, source revision, or run stage cannot silently reuse old results.
 
+Oxide device launches use the same environment construction path recorded in that stamp. Explicit runner filter/debug, damage, layer-cache, image-argument-table, glyph-ICB, and damage-threshold overrides are forwarded to the launched app instead of being accepted only by an unused JSON helper; canonical runs remain unchanged when those variables are absent.
+
 Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. Standalone commands recapture cleanliness, ref, commit, and tree after comparison admission and immediately before output-path resolution and writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
 
 Standalone UIKit, React Native, and Oxide device commands treat a requested comparison as report admission, not post-publication diagnostics. They print the comparison summary and reject missing rows or gated regressions before resolving default paths or invoking any JSON, latest-Markdown, or dated-Markdown writer. The paired command likewise completes both comparison gates before committed-baseline promotion; its external `current.*` files remain resumable run staging.
@@ -160,6 +162,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: forwarded explicit Oxide device renderer/debug overrides through the real shared launch environment and therefore into the evidence-run identity.
 - 2026-08-07: rejected partial standalone baseline promotion and moved final source-drift validation to the output boundary.
 - 2026-08-07: required exact source/toolchain/artifact validation for imported DerivedData, separated full evidence-run identity from build identity, and removed unsafe React Native external reuse.
 - 2026-08-07: made device build-for-testing explicitly Release/iphoneos for the shared Oxide/UIKit and React Native device harnesses.
