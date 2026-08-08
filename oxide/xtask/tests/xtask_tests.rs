@@ -3451,6 +3451,29 @@ fn device_commands_share_one_gpu_counter_capability_per_run()
 }
 
 #[test]
+fn uikit_console_summary_capture_is_outside_trace_retries()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let trace = source
+      .split_once("fn run_uikit_device_case_trace(")
+      .and_then(|(_, tail)| tail.split_once("fn load_resumable_uikit_device_trace_run("))
+      .map(|(body, _)| body)
+      .expect("UIKit trace retry body");
+   let console_capture = trace
+      .find("run_uikit_device_case_console_capture(")
+      .expect("outer console capture");
+   let retry_loop = trace.find("\n   loop").expect("trace retry loop");
+   assert!(console_capture < retry_loop);
+
+   let attempt = source
+      .split_once("fn run_uikit_device_case_trace_attempt(")
+      .and_then(|(_, tail)| tail.split_once("fn run_uikit_device_launched_trace("))
+      .map(|(body, _)| body)
+      .expect("UIKit trace attempt body");
+   assert!(!attempt.contains("run_uikit_device_case_console_capture("));
+}
+
+#[test]
 fn retryable_uikit_trace_handshake_error_matches_completion_timeout_text() {
     assert!(is_retryable_uikit_trace_handshake_error(
         "Error: xcrun devicectl device notification observe --device 00008150-001529C434F8401C --name com.oxide.perf.complete --session-timeout 30 --timeout 35 exited without observing `com.oxide.perf.complete` and console marker `OXIDE_COMPLETE testOptimizedCollectionViewEncode` never appeared before the timeout"

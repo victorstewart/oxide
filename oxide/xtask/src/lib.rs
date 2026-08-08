@@ -8357,7 +8357,35 @@ fn run_uikit_device_case_trace(
    gpu_counter_capability: &mut MetalGpuCounterCapability,
 ) -> Result<DeviceTraceRun>
 {
-   let mut notes = Vec::new();
+   let console_run = if uikit_case_requires_console_launch_summary(spec)
+   {
+      Some(run_uikit_device_case_console_capture(
+         root,
+         device,
+         built_app,
+         spec,
+         refresh_mode,
+         case_dir,
+         watch_capture,
+      )?)
+   }
+   else
+   {
+      None
+   };
+   let mut notes = console_run
+      .as_ref()
+      .into_iter()
+      .flat_map(|run| run.notes.iter())
+      .filter(|note| !note.starts_with("GPU trace status: skipped"))
+      .cloned()
+      .collect::<Vec<_>>();
+   if console_run.is_some()
+   {
+      notes.push(String::from(
+         "GPU trace source: collected through one separate launched xctrace pass after the required console-summary run, so console-owned summaries and GPU timing remain available when xctrace target stdout is empty.",
+      ));
+   }
    let mut include_gpu_counters = gpu_counter_capability.should_request();
    if !include_gpu_counters
    {
@@ -8396,6 +8424,10 @@ fn run_uikit_device_case_trace(
                {
                   gpu_counter_capability.record_supported();
                }
+            }
+            if let Some(console_run) = console_run.as_ref()
+            {
+               run.launch_stdout_path.clone_from(&console_run.launch_stdout_path);
             }
             run.notes.splice(0..0, notes.drain(..));
             return Ok(run);
@@ -8711,61 +8743,25 @@ fn run_uikit_device_case_trace_attempt(
    {
       extra_instruments.push(String::from("Metal GPU Counters"));
    }
-   let mut notes = Vec::new();
-   let (trace_path, launch_stdout_path, stderr_path) =
-      if uikit_case_requires_console_launch_summary(spec)
-      {
-         let console_run = run_uikit_device_case_console_capture(
-            root,
-            device,
-            built_app,
-            spec,
-            refresh_mode,
-            case_dir,
-            watch_capture,
-         )?;
-         notes.extend(console_run.notes.iter().cloned());
-         notes.push(String::from(
-            "GPU trace source: collected through a separate launched xctrace pass after the console-summary camera run, so camera stage summaries and GPU timing stay available without the flaky attached-trace camera path.",
-         ));
-         let (trace_path, _, stderr_path) = run_uikit_device_launched_trace(
-            root,
-            device,
-            built_app,
-            spec,
-            refresh_mode,
-            case_dir,
-            "metal",
-            "Metal System Trace",
-            &extra_instruments,
-            trace_seconds,
-            true,
-            watch_capture,
-         )?;
-         (trace_path, console_run.launch_stdout_path, stderr_path)
-      }
-      else
-      {
-         run_uikit_device_launched_trace(
-            root,
-            device,
-            built_app,
-            spec,
-            refresh_mode,
-            case_dir,
-            "metal",
-            "Metal System Trace",
-            &extra_instruments,
-            trace_seconds,
-            true,
-            watch_capture,
-         )?
-      };
+   let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_launched_trace(
+      root,
+      device,
+      built_app,
+      spec,
+      refresh_mode,
+      case_dir,
+      "metal",
+      "Metal System Trace",
+      &extra_instruments,
+      trace_seconds,
+      true,
+      watch_capture,
+   )?;
    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
    let explicit_unsupported =
       include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr);
    Ok((
-      DeviceTraceRun { trace_path, launch_stdout_path, notes },
+      DeviceTraceRun { trace_path, launch_stdout_path, notes: Vec::new() },
       explicit_unsupported,
    ))
 }
