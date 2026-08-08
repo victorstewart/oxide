@@ -70,7 +70,7 @@ Dates use `YYYY-MM-DD`, metric distributions must be finite and ordered, report 
 
 ## Edge cases and failure modes
 
-Coverage includes empty/missing report markers, incomplete shards, stale resumable checkpoints, non-native refresh requests, absent device counters, invalid distribution fields, clipped or backdated signposts, unsupported GPU-counter profiles, retryable device streaming/install failures, and trace bundles versus raw exports. Errors must remain descriptive rather than being converted into an apparently valid empty report.
+Coverage includes empty/missing report markers, incomplete shards, stale resumable checkpoints, non-native refresh requests, absent device counters, invalid distribution fields, clipped or backdated signposts, unavailable GPU-counter profiles cached after rejection or timeout, retryable device streaming/install failures, and trace bundles versus raw exports. Errors must remain descriptive rather than being converted into an apparently valid empty report.
 
 ## Concurrency and memory behavior
 

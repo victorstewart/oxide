@@ -3427,7 +3427,7 @@ fn unsupported_gpu_counter_profile_detection_matches_xctrace_error_text() {
 }
 
 #[test]
-fn metal_gpu_counter_capability_only_disables_explicitly_unsupported_profiles()
+fn metal_gpu_counter_capability_disables_unavailable_profiles_for_the_command()
 {
    let mut capability = MetalGpuCounterCapability::default();
    assert_eq!(capability, MetalGpuCounterCapability::Unknown);
@@ -3439,9 +3439,7 @@ fn metal_gpu_counter_capability_only_disables_explicitly_unsupported_profiles()
    assert!(is_retryable_xctrace_record_timeout_error(
       "xcrun xctrace record exceeded wall-time timeout before xctrace finished",
    ));
-   assert!(capability.should_request());
-
-   capability.record_explicit_unsupported();
+   capability.record_unavailable();
    assert_eq!(capability, MetalGpuCounterCapability::Unsupported);
    assert!(!capability.should_request());
 }

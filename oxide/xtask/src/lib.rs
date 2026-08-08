@@ -3445,7 +3445,7 @@ impl MetalGpuCounterCapability
       }
    }
 
-   pub fn record_explicit_unsupported(&mut self)
+   pub fn record_unavailable(&mut self)
    {
       *self = Self::Unsupported;
    }
@@ -7090,7 +7090,7 @@ fn run_oxide_onscreen_case_trace(
    if !include_gpu_counters
    {
       notes.push(String::from(
-         "GPU counter status: an earlier trace in this command established that the attached device explicitly rejects the Metal GPU Counters profile, so this case requested direct GPU time and GPU latency only.",
+         "GPU counter status: an earlier trace in this command established that the Metal GPU Counters profile is unavailable on the attached device/toolchain, so this case requested direct GPU time and GPU latency only.",
       ));
    }
    loop
@@ -7125,7 +7125,7 @@ fn run_oxide_onscreen_case_trace(
                "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
                device.name, spec.test_name
             );
-            gpu_counter_capability.record_explicit_unsupported();
+            gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
                "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
@@ -7140,9 +7140,10 @@ fn run_oxide_onscreen_case_trace(
                "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
                device.name, spec.test_name
             );
+            gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
-               "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
+               "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
             ));
             continue;
          }
@@ -7172,7 +7173,7 @@ fn run_oxide_onscreen_case_trace(
             "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
             device.name, spec.test_name
          );
-         gpu_counter_capability.record_explicit_unsupported();
+         gpu_counter_capability.record_unavailable();
          include_gpu_counters = false;
          notes.push(String::from(
             "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
@@ -7185,9 +7186,10 @@ fn run_oxide_onscreen_case_trace(
             "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
             device.name, spec.test_name
          );
+         gpu_counter_capability.record_unavailable();
          include_gpu_counters = false;
          notes.push(String::from(
-            "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
+            "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
          ));
          continue;
       }
@@ -8390,7 +8392,7 @@ fn run_uikit_device_case_trace(
    if !include_gpu_counters
    {
       notes.push(String::from(
-         "GPU counter status: an earlier trace in this command established that the attached device explicitly rejects the Metal GPU Counters profile, so this case requested direct GPU time and GPU latency only.",
+         "GPU counter status: an earlier trace in this command established that the Metal GPU Counters profile is unavailable on the attached device/toolchain, so this case requested direct GPU time and GPU latency only.",
       ));
    }
    let mut handshake_attempt = 0usize;
@@ -8415,7 +8417,7 @@ fn run_uikit_device_case_trace(
             {
                if explicit_unsupported
                {
-                  gpu_counter_capability.record_explicit_unsupported();
+                  gpu_counter_capability.record_unavailable();
                   notes.push(String::from(
                      "GPU counter status: the attached device explicitly rejected the Metal GPU Counters profile, so this case includes direct GPU time and GPU latency only.",
                   ));
@@ -8440,7 +8442,7 @@ fn run_uikit_device_case_trace(
                "Metal GPU Counters unsupported on {}; retrying `{}` without the counter profile.",
                device.name, spec.test_name
             );
-            gpu_counter_capability.record_explicit_unsupported();
+            gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
                "GPU counter status: the attached device explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
@@ -8454,9 +8456,10 @@ fn run_uikit_device_case_trace(
                "Metal GPU Counters timed out on {}; retrying `{}` without the counter profile.",
                device.name, spec.test_name
             );
+            gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
-               "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
+               "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
             ));
          }
          Err(err)
