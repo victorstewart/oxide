@@ -26,6 +26,7 @@ Call flow:
 - `device_battery_policy_uses_canonical_mode_naming()`: rejects legacy mode terminology and requires the canonical-promotion/no-run-everything contract.
 - `contract_coverage_status_distinguishes_absence_from_partial_coverage()`: prevents an unselected workload family from being reported as partial evidence.
 - `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check and requires all five Cargo subprocesses to honor the lockfile.
+- `justfile_official_recipes_use_locked_paired_publication()`: requires locked workspace comparison/publication and collapses every official device shortcut onto the paired Oxide/UIKit comparison and promotion paths.
 - `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
 - `canonical_device_battery_is_exactly_five_matched_comparison_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, comparison families, required workload-family mappings, and matching Oxide ids.
 - `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.
@@ -96,6 +97,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: required locked workspace comparison/publication and paired Oxide/UIKit device recipes in the root Justfile.
 - 2026-08-07: added fail-closed UIKit and Oxide selection coverage for mixed valid/unknown exact-case requests.
 - 2026-08-07: froze pre-rendering of all six paired canonical outputs before the shared atomic promotion call.
 - 2026-08-07: added runtime and source-contract coverage for Oxide device override forwarding.

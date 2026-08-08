@@ -109,6 +109,31 @@ fn test_all_checks_the_featureless_graph_without_rerunning_test_binaries()
    ));
 }
 
+#[test]
+fn justfile_official_recipes_use_locked_paired_publication()
+{
+   let justfile = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Justfile"));
+   assert!(justfile.contains(
+      "perf:\n    cd oxide && cargo run --release --locked",
+   ));
+   assert!(justfile.contains(
+      "perf-baseline:\n    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --release --locked",
+   ));
+   for alias in [
+      "ios-perf: ios-device-perf",
+      "ios-perf-baseline: ios-device-perf-baseline",
+      "oxide-device-perf: ios-device-perf",
+      "oxide-device-perf-baseline: ios-device-perf-baseline",
+   ]
+   {
+      assert!(justfile.contains(alias), "missing paired Justfile alias `{alias}`");
+   }
+   assert_eq!(justfile.matches("-- ios compare-device-perf --uikit-compare").count(), 1);
+   assert_eq!(justfile.matches("-- ios compare-device-perf --write-baseline").count(), 1);
+   assert!(!justfile.contains("-- ios device-perf"));
+   assert!(!justfile.contains("-- ios oxide-device-perf"));
+}
+
 fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
     PerfReport {
         version: 1,
