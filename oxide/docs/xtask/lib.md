@@ -112,6 +112,8 @@ Resumable UIKit and Oxide device flows only reuse a completed `current.json` whe
 
 Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. The harness revalidates cleanliness, ref, commit, and tree before current-report and committed-baseline writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
 
+Standalone UIKit, React Native, and Oxide device commands treat a requested comparison as report admission, not post-publication diagnostics. They print the comparison summary and reject missing rows or gated regressions before resolving default paths or invoking any JSON, latest-Markdown, or dated-Markdown writer. The paired command likewise completes both comparison gates before committed-baseline promotion; its external `current.*` files remain resumable run staging.
+
 For camera preview, the official today bucket is the parked microscope pair: the pure custom Oxide-owned NV12 live preview path and the matching `AVCaptureVideoPreviewLayer` baseline. Actual app-host camera runs and hybrid visible-preview-layer variants remain callable by explicit `--case`, but they are separate diagnostic or shipping-oriented buckets and are not part of the default committed camera baseline.
 
 The Oxide device flow installs the host app on the same physical iPhone, launches the parked benchmark app with the in-process Rust perf suite enabled, triggers it over Darwin notifications, then reconstructs the JSON report from the console payload and persists it under `benchmarks/oxide-device/`. Markdown rendering rewrites the baseline workflow so the report points at the device-only command instead of the desktop workspace runner.
@@ -153,6 +155,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: moved standalone device comparison failures ahead of all report-output resolution and writes, preserving accepted baselines on rejection.
 - 2026-08-07: bound paired and standalone device reports plus resumable build stamps to one clean, stable Git revision and rejected version-2 reports with missing provenance.
 - 2026-08-07: Renamed the repeated flat-rect teardown workload and parity mapping to a remove/rebuild cycle so report IDs match timed work.
 - 2026-08-07: Replaced the 38-row UIKit default with an exact ten-row/five-pair canonical selector, matched the standalone Oxide default to its five unique rows, and kept every other registered row exact-`--case` only.

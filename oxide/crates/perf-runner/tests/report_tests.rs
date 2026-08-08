@@ -1037,6 +1037,81 @@ fn markdown_reports_selected_case_count_without_catalog_fractions()
 }
 
 #[test]
+fn comparison_rejection_precedes_report_output_resolution_and_writes()
+{
+   let source = include_str!("../src/lib.rs");
+   let body = source
+      .split_once("fn run_suite(cli: Cli)")
+      .and_then(|(_, tail)| tail.split_once("pub fn collect_suite_report"))
+      .map(|(body, _)| body)
+      .expect("run-suite source body");
+   let rejection = body
+      .find("performance comparison failed; existing report outputs were preserved")
+      .expect("comparison rejection gate");
+
+   for output in [
+      "let json_out =",
+      "let markdown_out =",
+      "write_report_json(path, &report)",
+      "write_markdown_outputs(path, &report",
+      "session.write(path, &report.cases",
+   ]
+   {
+      let output = body.find(output).unwrap_or_else(|| panic!("missing output path `{output}`"));
+      assert!(rejection < output, "comparison rejection follows `{output}`");
+   }
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
+fn rejected_comparison_preserves_existing_report_outputs()
+{
+   let nonce = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system clock before epoch")
+      .as_nanos();
+   let root = std::env::temp_dir().join(format!(
+      "oxide-perf-rejected-output-{}-{nonce}",
+      std::process::id(),
+   ));
+   fs::create_dir_all(&root).expect("create rejected-output fixture");
+   let baseline = root.join("baseline.json");
+   let json_out = root.join("current.json");
+   let markdown_out = root.join("current.md");
+   let json_sentinel = b"preserve-json\n";
+   let markdown_sentinel = b"preserve-markdown\n";
+   fs::write(
+      &baseline,
+      serde_json::to_vec(&sample_report(Vec::new())).expect("serialize empty baseline"),
+   )
+   .expect("write empty baseline");
+   fs::write(&json_out, json_sentinel).expect("write JSON sentinel");
+   fs::write(&markdown_out, markdown_sentinel).expect("write Markdown sentinel");
+
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.component.label.encode")
+      .env_remove("PERF_REPORT_DATE")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--compare")
+      .arg(&baseline)
+      .arg("--json-out")
+      .arg(&json_out)
+      .arg("--markdown-out")
+      .arg(&markdown_out)
+      .output()
+      .expect("run rejected comparison");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(!output.status.success(), "comparison unexpectedly succeeded");
+   assert!(stderr.contains("existing report outputs were preserved"), "stderr: {stderr}");
+   assert_eq!(fs::read(&json_out).expect("read JSON sentinel"), json_sentinel);
+   assert_eq!(fs::read(&markdown_out).expect("read Markdown sentinel"), markdown_sentinel);
+
+   fs::remove_dir_all(root).expect("remove rejected-output fixture");
+}
+
+#[test]
 fn source_bound_report_serializes_and_renders_repository_revision()
 {
    let mut report = sample_report(vec![sample_case("cpu.report.source", 1.0, 0.10, true)]);
@@ -3811,8 +3886,8 @@ fn child_run_suite_tests_keep_everyday_tiering()
       }
    }
 
-   assert_eq!(total, 55);
-   assert_eq!(ignored, 53);
+   assert_eq!(total, 56);
+   assert_eq!(ignored, 54);
    assert_eq!(active, 2);
 }
 

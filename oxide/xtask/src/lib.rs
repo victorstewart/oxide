@@ -3003,6 +3003,15 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         None
     };
 
+    print_uikit_summary(&report, comparison.as_ref());
+    if let Some(comp) = comparison.as_ref() {
+        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
+            bail!(
+                "UIKit device performance comparison failed; existing report outputs were preserved"
+            );
+        }
+    }
+
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_UIKIT_DEVICE_BASELINE_JSON)))
     } else {
@@ -3023,16 +3032,6 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
     if let Some(path) = markdown_out.as_ref() {
         write_uikit_markdown(path, &report, comparison.as_ref())?;
         write_uikit_dated_markdown(path, &report, comparison.as_ref())?;
-    }
-
-    print_uikit_summary(&report, comparison.as_ref());
-
-    if let Some(comp) = comparison.as_ref() {
-        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
-            bail!(
-                "UIKit device performance comparison failed; inspect the generated report and update the committed baseline only with review"
-            );
-        }
     }
 
     Ok(())
@@ -3165,6 +3164,15 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
         None
     };
 
+    print_react_device_summary(&report, comparison.as_ref());
+    if let Some(comp) = comparison.as_ref() {
+        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
+            bail!(
+                "React Native device performance comparison failed; existing report outputs were preserved"
+            );
+        }
+    }
+
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_REACT_DEVICE_BASELINE_JSON)))
     } else {
@@ -3185,16 +3193,6 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
     if let Some(path) = markdown_out.as_ref() {
         write_react_device_report_markdown(path, &report, comparison.as_ref())?;
         write_react_device_dated_markdown(path, &report, comparison.as_ref())?;
-    }
-
-    print_react_device_summary(&report, comparison.as_ref());
-
-    if let Some(comp) = comparison.as_ref() {
-        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
-            bail!(
-                "React Native device performance comparison failed; inspect the generated report and update the committed baseline only with review"
-            );
-        }
     }
 
     Ok(())
@@ -3308,6 +3306,15 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
         None
     };
 
+    print_oxide_device_summary(&report, comparison.as_ref());
+    if let Some(comp) = comparison.as_ref() {
+        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
+            bail!(
+                "Oxide device performance comparison failed; existing report outputs were preserved"
+            );
+        }
+    }
+
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_OXIDE_DEVICE_BASELINE_JSON)))
     } else {
@@ -3328,16 +3335,6 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     if let Some(path) = markdown_out.as_ref() {
         write_oxide_device_report_markdown(path, &report, comparison.as_ref())?;
         write_oxide_device_dated_markdown(path, &report, comparison.as_ref())?;
-    }
-
-    print_oxide_device_summary(&report, comparison.as_ref());
-
-    if let Some(comp) = comparison.as_ref() {
-        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
-            bail!(
-                "Oxide device performance comparison failed; inspect the generated report and update the committed baseline only with review"
-            );
-        }
     }
 
     Ok(())

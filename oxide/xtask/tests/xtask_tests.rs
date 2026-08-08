@@ -2938,6 +2938,58 @@ fn compare_device_promotion_validates_before_committed_baseline_writes()
 }
 
 #[test]
+fn standalone_device_comparison_failures_precede_all_report_outputs()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   for (start, end, rejection, writers) in [
+      (
+         "fn ios_device_perf(",
+         "fn ios_react_device_perf(",
+         "UIKit device performance comparison failed; existing report outputs were preserved",
+         ["write_uikit_report_json(", "write_uikit_markdown(", "write_uikit_dated_markdown("],
+      ),
+      (
+         "fn ios_react_device_perf(",
+         "fn ios_oxide_device_perf(",
+         "React Native device performance comparison failed; existing report outputs were preserved",
+         [
+            "write_react_device_report_json(",
+            "write_react_device_report_markdown(",
+            "write_react_device_dated_markdown(",
+         ],
+      ),
+      (
+         "fn ios_oxide_device_perf(",
+         "fn ios_time_profiler_summary(",
+         "Oxide device performance comparison failed; existing report outputs were preserved",
+         [
+            "write_oxide_device_report_json(",
+            "write_oxide_device_report_markdown(",
+            "write_oxide_device_dated_markdown(",
+         ],
+      ),
+   ]
+   {
+      let body = source
+         .split_once(start)
+         .and_then(|(_, tail)| tail.split_once(end))
+         .map(|(body, _)| body)
+         .unwrap_or_else(|| panic!("missing source body `{start}`"));
+      let rejection = body.find(rejection).expect("comparison rejection gate");
+      for output in ["let json_out =", "let markdown_out ="]
+      {
+         let output = body.find(output).unwrap_or_else(|| panic!("missing `{output}` in `{start}`"));
+         assert!(rejection < output, "comparison rejection follows `{output}` in `{start}`");
+      }
+      for writer in writers
+      {
+         let writer = body.find(writer).unwrap_or_else(|| panic!("missing `{writer}` in `{start}`"));
+         assert!(rejection < writer, "comparison rejection follows `{writer}` in `{start}`");
+      }
+   }
+}
+
+#[test]
 fn compare_device_promotion_rejects_partial_case_selection()
 {
    let args = [

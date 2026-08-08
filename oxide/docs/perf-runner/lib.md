@@ -101,6 +101,7 @@ The canonical workspace bridge signal is the app-owned permission callback fanou
 The canonical workspace report is serialized to JSON and Markdown, compared by gated median, and frozen by schema, case-ID, metric-key, and workload-contract tests. Serializer and comparison harnesses derive capacity and dispatch from the report they load; no historical byte count, metric-key count, or latest-versus-CI row pairing defines the current report shape.
 The publication header reports the selected suite and exact case count. It does not print catalog-wide covered/total fractions, because touched and canonical runs deliberately select only the cases they own; the contract table below the header is the authoritative coverage statement.
 Fresh official reports use version 2 and flatten `repository_ref`, `repository_head_commit`, and `repository_tree` into the report root. Collection remains version 1 until an official entry point binds one clean, stable Git revision; version 2 cannot serialize with missing or malformed source fields. Historical version-1 reports continue to deserialize with empty provenance.
+When `--compare` is requested, missing baseline rows or gated regressions are an admission failure. The runner prints the comparison summary and returns before resolving default output paths or writing JSON, latest Markdown, dated Markdown, or paired-capture output, so a rejected candidate cannot replace prior evidence.
 
 ### Historical implementation evidence
 
@@ -156,6 +157,7 @@ Persisted report and evidence schemas are part of the performance contract becau
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
 
 ## Changelog
+- 2026-08-07: made comparison acceptance a pre-write admission gate so rejected candidates preserve every existing report output.
 - 2026-08-07: bound fresh official version-2 reports to a clean, named, stable Git ref/HEAD/tree while preserving version-1 historical report readability.
 
 - 2026-08-07: tiered deep touched-case child suites behind named ignored tests while retaining canonical inventory, baseline-write safety, persisted gates, one representative touched-case child route, and the zero-work retired-alias guard in ordinary workspace tests.

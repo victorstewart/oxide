@@ -2560,6 +2560,15 @@ fn run_suite(cli: Cli) -> Result<()>
       None
    };
 
+   print_summary(&report, comparison.as_ref());
+   if let Some(comp) = comparison.as_ref()
+   {
+      if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty()
+      {
+         bail!("performance comparison failed; existing report outputs were preserved");
+      }
+   }
+
    let json_out = if cli.write_baseline
    {
       Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_JSON)))
@@ -2588,16 +2597,6 @@ fn run_suite(cli: Cli) -> Result<()>
    if let Some(path) = markdown_out.as_ref()
    {
       write_markdown_outputs(path, &report, comparison.as_ref())?;
-   }
-
-   print_summary(&report, comparison.as_ref());
-
-   if let Some(comp) = comparison.as_ref()
-   {
-      if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty()
-      {
-         bail!("performance comparison failed; inspect the generated report and update the committed baseline only with review");
-      }
    }
 
    Ok(())
