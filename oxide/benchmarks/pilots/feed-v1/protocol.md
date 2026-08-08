@@ -1,203 +1,217 @@
-# Proposed Goal: One-Workload Oxide/UIKit Evidence Pilot
+# Final Goal: `feed-v1` Visual and Callback-Pacing Study
 
-## Prompt
+## Objective
 
-Determine whether Oxide is visually equivalent enough and display-link callback
-pacing is non-inferior to both idiomatic UIKit and hand-optimized UIKit for one
-fixed, production-like variable-height feed on one physical ProMotion iPhone.
-Callback pacing is a scheduling signal, not proof that either framework
-presented new pixels.
+On one physical arm64 ProMotion iPhone at native refresh, determine whether one
+frozen production-path Oxide feed:
 
-This is a one-workload evidence pilot, not a claim that either framework is
-globally faster. Finish with a truthful result or a precise blocker in one
-working day. Do not optimize Oxide during this goal.
+1. passes a predeclared visual-equivalence gate against the same feed in UIKit;
+2. has display-link callback pacing that is faster, non-inferior, slower, or
+   inconclusive relative to idiomatic UIKit; and
+3. has the same classification relative to reviewed optimized UIKit.
 
-### Trusted starting point
+This is evidence for one workload on one device, not a global framework verdict.
+A truthful `slower`, `inconclusive`, or `blocked` result completes the goal.
+Do not optimize any implementation, change a threshold, add samples, or repair
+the workload after the publication source is frozen.
+This study is intentionally partial relative to the broader scroll-performance
+contract: canonical Oxide/UIKit device baselines remain separate verification
+artifacts, not extra app surfaces or publication pages.
 
-Start from one reviewed reconstruction commit and name whether it preserves the
-0.1 public contract or is the explicit breaking-release candidate. The working
-tree must be clean and `HEAD` must resolve through a named branch. Persist that
-exact ref, commit object, and tree object with the hashes of both app bundles,
-the compiled UI-test runner, its embedded xctest, and the reducer. Existing
-comparison controllers, reports, thresholds, and
-generated projects are untrusted until individually justified. Reuse a piece
-only when it directly executes this workload and is smaller than replacing it.
+## Non-negotiable scope
 
-This reconstruction is the explicit breaking-release candidate, not a claim of
-0.1 source compatibility. It deliberately removes the former accessibility
-surface and requires `'static` renderer encoders so an injected app frame can
-own its backend encoder. The evidence manifest must identify the exact frozen
-candidate commit and tree; a passing pilot does not retroactively make it a
-0.1-compatible change.
+- Accessibility is outside this study and product contract. Do not add
+  accessibility APIs, roles, labels, actions, tests, gates, or claims.
+- Do not require or claim universal pixel identity. Exact RGB differences remain
+  diagnostics; the publication claim is only that the frozen geometry and
+  perceptual gates passed.
+- Use exactly two app surfaces: one shared UIKit feed whose fresh-process
+  configuration selects idiomatic or optimized implementation, and one Oxide
+  feed. Produce one logical aggregate publication report. Add no dashboard,
+  debug overlay, additional screen, second workload, style matrix, optimization
+  matrix, mutation flow, or launch benchmark.
+- Run only a Release arm64 device build on the named physical ProMotion iPhone.
+  Simulator, x86_64, 60 Hz, desktop, and mixed-device numbers are inadmissible.
+- The publication population is fixed below. There is no optional second block,
+  bootstrap, Monte Carlo method, resampling, or post-result retry population.
+- Any optimization trial must finish, be reviewed, and have all trial machinery
+  removed before the publication commit is frozen.
+- Every retained production optimization requires isolated, predeclared,
+  matched A/B evidence before source freeze; otherwise restore its control. The
+  publication population may never double as optimization-selection evidence.
 
-All comparison code belongs in a benchmark-only target. Production Oxide,
-UIKit hosts, renderer APIs, and default artifacts receive no scenario IDs,
-benchmark switches, report controllers, or competitor-specific behavior.
+## Frozen feed and implementations
 
-### Mandatory production-path preflight
+Use the content-addressed `feed-v1` fixture:
 
-Before implementing a fixture, app, controller, reducer, or device runner, name
-and source-audit the already-shipping Oxide app composition boundary, iOS host,
-collection surface, raw-input route, scroll physics, and frame scheduler that
-the treatment will exercise. A valid treatment may add only workload data,
-ordinary cell composition, and benchmark observation around those production
-boundaries.
+- 2,000 deterministic variable-height rows;
+- canonical SHA-256
+  `a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473`;
+- canonical byte count `717745`;
+- exact row identities, strings, heights, 2,001-entry height prefix, checker
+  bytes, font files and faces, colors, radii, shadow, clipping, and spacing;
+- `390 x 844 pt` feed surface at `3x`, zero safe-area inset;
+- content extent `237460 pt`, top offset `0 pt`, and bottom offset
+  `236616 pt`.
 
-Public low-level pieces are not enough by themselves. Do not invent a
-benchmark-owned app host, scroll/fling implementation, frame loop, direct
-draw-list runtime, or renderer submission path and label the result
-`oxide-production-api`. Do not add a benchmark scenario or selector to a shared
-production host to get around this rule. If the named production path does not
-exist or cannot accept this workload without production architecture work,
-record `blocked`, remove the surrogate, and stop before device measurement.
+Implement exactly:
 
-Amendment history:
+1. idiomatic UIKit: ordinary `UICollectionView`, UIKit labels/images/layout,
+   reuse, input, scrolling, and deceleration;
+2. optimized UIKit: the identical visible contract using only the reviewed
+   production-selected invalidation, reuse, and composition choices;
+3. Oxide: ordinary production app composition, collection, raw-input, scrolling,
+   inertia, host, scheduler, and renderer paths.
 
-- The production-path preflight and original frozen protocol were finalized
-  after an exploratory surrogate was source-audited and rejected, but before
-  any physical-device run or performance result was observed.
-- Two source-identical six-run physical-device smokes then showed that XCTest
-  velocity delivery was not an exact per-run ground truth: idiomatic UIKit's
-  forward travel differed by `93 pt` (`6.95%`) between those smokes. Neither
-  smoke produced a publication report, and no 54-run primary population had
-  begun. The replicated `5%` median / `10%` confidence travel-equivalence rule
-  below was frozen in a new source revision before any primary or full
-  publication run.
+The three variants must derive the same visible rows on demand from the compact
+recipe. Each fresh process may warm only the initial viewport naturally;
+offscreen text and images remain cold. No implementation may pre-scroll,
+pre-shape, pre-decode, pre-render, or retain a pre-expanded row-string table.
 
-### The only workload
+Before building the pilot, source-audit and name every Oxide production boundary
+above. Benchmark code may supply workload data and observation only. If a
+production boundary is absent, or the workload requires a benchmark-owned host,
+scroll implementation, frame loop, draw path, or renderer submission path,
+record `blocked`, remove the surrogate, and stop.
 
-Use a content-addressed fixture describing a 2,000-row variable-height feed.
-Freeze identical strings, locale, font files and faces, images, colors, radii,
-shadows, spacing, viewport, safe area, scale, row identities, exact row heights,
-the complete row-height prefix table and content extent, initial offset, and
-visible content for all three implementations.
+## Immutable source and build
 
-Implement exactly three variants:
+Freeze one reviewed commit on a named clean branch before any official launch.
+Record the branch, commit object, tree object, clean status, toolchain and SDK,
+build settings, and hashes of:
 
-1. normal production UIKit using `UICollectionView` and ordinary UIKit text,
-   image, layout, reuse, and input ownership;
-2. optimized UIKit using the same visible contract, with only legitimate
-   caching, invalidation, reuse, and composition tuning; and
-3. the established production Oxide app/collection/scroll/host path with no
-   benchmark-owned substitute for any of those layers.
+- all treatment, controller, reducer, visual-gate, contract, font, and asset
+  sources;
+- the UIKit and Oxide app bundles;
+- the UI-test runner and embedded xctest; and
+- the reducer executable.
 
-Run one forward and one reverse XCTest OS-level fling from frozen start states.
-Use the same gesture coordinates, duration, and velocity request. Persist actual
-travel distance. The unreplicated smoke flings prove delivery, inertia, and
-settlement but do not claim cross-treatment travel equivalence; that claim uses
-only the balanced primary population.
+Use those exact binaries for every smoke and primary launch. Verify that the
+source tree is clean and byte-identical after export. Production crates and
+hosts must contain no benchmark scenario IDs, competitor branches, report
+controllers, or publication-only switches.
 
-Use one cache state only: fresh-process, initial-viewport-resources-warm,
-offscreen-resources-cold. For each direction, launch a fresh process, load the
-fixture's complete frozen row-height/prefix table, mount directly at that
-direction's frozen start offset, load only naturally requested visible text and
-image resources, and reach the same app-owned ready-admission boundary. Reading
-the frozen geometry is workload input, not resource warming. Do not
-programmatically shape, decode, render, or scroll through offscreen content.
-Every treatment retains the compact deterministic recipe and height prefix, not
-a pre-expanded 2,000-row string table; it derives equivalent row strings only
-when the collection or renderer requests visible content. The six smoke
-treatment/direction tuples take one full-canvas screenshot before their gesture.
-The 54 primary tuples take no screenshots and begin the gesture immediately
-after ready admission, so every measured treatment has the same visible warmup
-and naturally encounters uncached offscreen resources during travel.
+Every record binds that frozen source branch, commit, and tree. Generated
+reports land only in evidence-only child commits whose parent is the source
+revision; those children may not change source, build, fixture, controller, or
+reducer files.
 
-Freeze that gesture before observing results: use the center x coordinate and
-drag from normalized y `0.82` to `0.18` for forward or `0.18` to `0.82` for
-reverse, with `0.05 s` press duration, XCTest gesture velocity raw value `2400`,
-and an app-owned settle deadline of `6 s`. Each direction starts in a fresh
-process with a unique completion nonce. The app synchronizes and closes its
-record, marks the run finished, and only then emits that nonce's Darwin
-completion notification; the controller waits at most `7 s` and never guesses
-settlement with a fixed sleep. The maximum content extent must agree within one
-physical pixel, each frozen start must agree within one physical pixel, and
-every run must travel at least `524 pt`, the direct `540.16 pt` drag span minus
-the frozen `16 pt` delivery tolerance. This floor proves nondegenerate delivery
-only. Every treatment must also persist `inertia_observed: true` from its actual
-transition into inertial scrolling; travel or duration can never be used to
-infer inertia. UIKit uses the collection view's deceleration-entry delegate
-callback, and Oxide uses its production scroll surface's transition into
-inertial motion.
+The run manifest must bind CoreDevice ID
+`1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659`, hardware identifier
+`00008150-001529C434F8401C`, model, OS version/build, maximum refresh rate,
+Xcode build, selected iPhoneOS SDK, Rust toolchain, and code-signing identity.
+Reject any mismatch before the first launch.
 
-For full-population travel equivalence, pair each optimized UIKit or Oxide
-primary run with idiomatic UIKit from the same session, pair index, and
-direction. For each treatment and direction, the absolute median of those nine
-relative travel deltas must be at most `5%`, and its exact two-sided median
-interval from ranks 2 and 8 must remain inside `[-10%, +10%]`. This interval
-has `96.09375%` achieved binomial coverage. The replicated gate
-rejects a systematic workload mismatch without treating one XCTest velocity
-delivery as exact ground truth.
+## Fixed interaction state
 
-The completion nonce is 1 through 128 ASCII alphanumeric-or-hyphen bytes. Both
-apps must reject the same invalid values before deriving a file or notification
-name.
+Every launch is a fresh process with a unique validated nonce. Forward starts at
+top; reverse starts at bottom. After the identical app-owned ready boundary:
 
-Do not add another screen, count, style, cache mode, launch row, or mutation row.
+- forward drags at center x from normalized y `0.82` to `0.18`;
+- reverse drags from `0.18` to `0.82`;
+- press duration is `0.05 s`;
+- XCTest velocity raw value is `2400`;
+- settlement deadline is `6 s`, followed by a `7 s` controller timeout.
 
-### Visual admission before classification
+The app closes its nonce-derived record before posting completion. Every run
+must travel at least `524 pt` in the requested direction and must record the
+real transition into inertia. A fixed sleep, travel distance, or duration may
+not infer settlement or inertia.
 
-The two frozen renderer states are `top` at content offset `0` and `bottom` at
-the exact maximum content offset. In the six smoke tuples, capture each state
-after layout settles and before its outbound gesture; a reverse-session process
-mounts directly at `bottom`. Those captures globally gate the unchanged,
-manifest-hashed app builds used by the smoke and primary populations. The
-maximum offset and each captured offset must agree across treatments within one
-physical pixel.
+Gestures must enter through public XCTest/XCUIElement OS-level delivery on the
+physical phone. Reject environment-triggered automation, direct app-event
+injection, synthetic state mutation, or UIKit-owned Oxide scrolling/inertia.
 
-The controller may collect raw timing samples in the same bounded run because
-settled travel and submitted geometry exist only after a gesture. Those samples
-remain quarantined: a blocked report must contain no aggregate or per-run
-timing rows, and the reducer must emit `blocked` unless the
-two frozen renderer states plus both gesture directions pass all applicable
-checks:
+## Visual admission
 
-- fixture, state, component count, visible content, viewport, scale, fonts,
-  assets, and geometry identities are exact;
-- each smoke attachment is the nonce-derived full `1320 x 2868` XCUIScreen
-  capture for its implementation/state/build;
-- manifest-owned component and clipping bounds match exactly or within a
-  predeclared one-physical-pixel raster tolerance;
-- a frozen full-frame perceptual comparison plus a localized tile guard passes;
-  and
-- hostile mutations of the real idiomatic-UIKit top capture prove the gate
-  rejects a missing row, sparse missing caption, wrong checker variant, missing
-  image, wrong color, shifted image, half-sized image, bad clipping, and a
-  localized corrupt tile.
+The official run begins with exactly six smoke launches: three treatments times
+forward/top and reverse/bottom. Capture two immediate nonce-derived full-screen
+`1320 x 2868` PNGs before each smoke gesture; the first is the admission image
+and the second proves same-renderer repeatability. Crop only the frozen
+`1170 x 2532` physical-pixel feed surface at the exact manifest-bound pixel
+origin. Normalize orientation, flatten alpha over the frozen background, and
+convert without resizing to opaque sRGB8 before comparison.
 
-The frozen raster gate operates only on the `390 x 844 pt`, `3x` feed surface,
-not device chrome. Cross-treatment admission uses idiomatic UIKit as the
-reference, full-surface luma SSIM
-`>= 0.96`, `48 x 48` physical-pixel tiles, and worst-tile RGB mean absolute
-channel error `<= 18`. Observed component rectangles use content-space physical
-pixels; clip rectangles use viewport-space physical pixels. Both tolerate at
-most one physical pixel per edge. These values must not change after a device
-result is observed.
+Before timing may be published, all six smoke tuples must pass:
 
-Keep exact cross-framework RGB differences in the report as diagnostics, but
-do not require universal byte equality. UIKit/Core Text and Oxide do not share
-one rasterizer, and cloning UIKit edge pixels is not a product requirement.
-Never loosen the visual gate after seeing performance results.
+- exact fixture, state, visible-content, component-count, font, asset, viewport,
+  scale, and build identities;
+- maximum extent and captured offsets within one physical pixel;
+- manifest component and clip edges within one physical pixel;
+- full-surface luma SSIM `>= 0.96` against idiomatic UIKit; and
+- worst `48 x 48` physical-pixel tile RGB mean absolute channel error `<= 18`.
 
-### Measurements that are allowed
+“Component count” means frozen manifest-visible components, not equality
+between UIKit view internals and Oxide node internals. Each immediate repeat
+capture must independently pass the same gate, and the two normalized crops
+must be byte-identical.
 
-Use the same app-owned display-link timestamp logger and the same frame-deadline
-formula in all three variants. For each gesture/session persist raw frame
-intervals, achieved cadence, p50/p95/p99/peak, missed-callback-deadline count,
-callback-gap hitch ratio, gesture duration, and physical travel distance. Treat
-p99 as descriptive at this bounded population size. Name every one of these
-values as display-link callback pacing. Do not call them presented-frame
-pacing, visible-frame pacing, or rendered FPS, because callback delivery does
-not prove new pixels reached the display.
+The frozen gate must have deterministic offline tests proving rejection of
+missing content, wrong text/image/color, shifted or half-sized geometry, bad
+clipping, and localized tile corruption. Never tune the gate after observing a
+device result. If admission fails, the aggregate report is `blocked` and must
+not expose per-run or aggregate pacing results.
 
-Each treatment preallocates the same 1,024-sample cap. Capacity exhaustion
-invalidates the run; no treatment may truncate its timing population.
+## Exact publication population
 
-Persist an aligned `targetTimestamp - timestamp` period for every interval.
-For interval `i` and target period `p`, missed callback deadlines are
-`max(round(i / p) - 1, 0)` and callback-gap hitch excess is `max(i - p, 0)`.
-Report the missed-callback-deadline ratio against total expected callbacks and
-callback-gap hitch excess in milliseconds per elapsed second. Never infer a
-fixed 60 Hz or 120 Hz deadline.
+After the six-run smoke prefix, run exactly 54 primary fresh-process launches:
+
+- sessions `0...2`;
+- pair indices `0...2` per session;
+- treatments ordered by rotation
+  `(session + pair) % 3` over
+  `[uikit-idiomatic, uikit-optimized, oxide]`; and
+- forward then reverse for each treatment.
+
+Thus every treatment has exactly 18 primary runs and occupies every order
+position equally. Primary launches take no screenshots. No invalid launch is
+silently replaced. Nine matched clusters are the smallest population that both
+balances all three treatment orders and yields a greater-than-95% exact median
+interval after excluding one extreme at each tail: ranks 2 and 8 cover
+`96.09375%`; eight clusters would cover only `92.96875%`.
+
+An admitted, fully completed run contains exactly 60 launches. On the first
+blocker, stop without replacement or continuation. A blocked report contains
+provenance, collected admission evidence, the blocker, and cleanup only; the
+54-row and raw-sample requirements apply only to an admitted complete
+population. The 20-minute bound is an operational runaway/thermal fuse, not a
+scientific classification threshold.
+
+Admit only a device reporting at least 120 Hz, Low Power Mode off, and thermal
+state nominal before and after every session. Thermal and Low Power Mode
+transition counters must remain zero. In every primary run, at least 95% of
+active-gesture target periods must lie in `7.5...9.2 ms`; never substitute a
+60 Hz result.
+
+## Symmetric admissible measurements
+
+Use the same app-owned display-link timestamp logger, 1,024-sample capacity, and
+deadline formula for all three treatments. Persist raw callback intervals and
+aligned `targetTimestamp - timestamp` periods. For interval `i` and target
+period `p`:
+
+- missed callback deadlines are `max(round(i / p) - 1, 0)`;
+- hitch excess is `max(i - p, 0)`.
+
+For every primary run report callback count, achieved cadence, interval
+p50/p95/p99/peak, missed count and ratio, hitch excess in milliseconds per
+elapsed second, gesture duration, signed/absolute travel, and inertia.
+
+Name these values only as display-link callback pacing. They are not presented
+frames, rendered FPS, displayed pixels, or photon latency. Do not publish
+input-to-visible latency. CPU, main-thread, resident-memory, GPU, or energy
+figures are allowed only when one collector observes the same boundary for all
+three treatments; otherwise emit `missing`. Never compare Oxide
+command-buffer timing with a UIKit/Core Animation scope.
+
+Use nearest-rank quantiles with one-based rank `ceil(q × n)`. Each
+treatment/session/pair is one independent cluster. Concatenate the two
+directional runs only to compute that cluster's descriptive p50 and p95, then
+use the median of the nine cluster p50s and p95s as the treatment aggregates.
+Only the nine matched cluster deltas enter interval classification; raw callback
+intervals are never independent trials. Aggregate missed-deadline ratio as
+total missed deadlines divided by total eligible deadlines, and aggregate
+hitch excess as total excess milliseconds divided by total elapsed seconds.
 
 Compute every callback p50, p95, and p99 with the one-based nearest-rank rule
 `rank = ceil(q * n)`. For each treatment/session/pair cluster, concatenate only
@@ -217,117 +231,74 @@ sample arrays or the 54-row table. Re-running the reducer over its own exact
 output paths must be byte-identical; those two output files are excluded from
 input discovery and byte accounting.
 
-Record main-thread CPU time, process CPU, and resident memory only when the same
-collector and boundary work for all variants. Record direct GPU time only when
-one existing collector observes an equivalent boundary on both Oxide and
-UIKit. Otherwise write `missing`; never compare Oxide command-buffer GPU time
-with a different UIKit/Core Animation scope.
+## Exact travel and pacing analysis
 
-Input receipt may be recorded as diagnostic attribution. Do not publish
-`input-to-visible`, `presented`, `displayed`, or photon latency: the current
-app-only paths do not expose one symmetric generation-bearing presentation
-boundary for custom Metal and UIKit. `CADisplayLink` timestamps and drawable
-deadlines are not presentation proof. A future latency study requires its own
-authorized measurement design.
+For travel admission, pair optimized UIKit and Oxide separately with idiomatic
+UIKit by session, pair index, and direction. Each treatment/direction therefore
+has nine relative travel deltas. Sort once. Require:
 
-Before and after every session, record `ProcessInfo.thermalState`, Low Power
-Mode, `UIScreen.maximumFramesPerSecond`, the configured display-link range, and
-the observed target-period distribution. Admit only sessions that start and end
-at thermal state `nominal`, keep Low Power Mode off, run on a display reporting
-at least 120 Hz, and keep at least 95% of active-gesture target periods between
-7.5 and 9.2 ms. Any state transition or failed bound blocks that session; do not
-silently substitute a 60 Hz run. Install transition observers before readiness,
-snapshot their monotonic counters immediately before the initial environment
-endpoint query that admits readiness, and persist `thermal_state_change_count`
-and `low_power_mode_change_count` through completion. Both counts must be zero;
-equal endpoint values cannot hide a transient change.
+- absolute median at most `5%`; and
+- exact two-sided median interval, one-based ranks 2 and 8, wholly inside
+  `[-10%, +10%]`.
 
-### Population and decision
+For pacing, combine forward and reverse callback intervals within each
+treatment/session/pair and compute that cluster's p95. For each comparator,
+form nine relative deltas `Oxide / comparator - 1`, where positive means
+Oxide is slower. Sort once; the median is rank 5 and the exact two-sided
+96.09375%-coverage interval is ranks 2 and 8.
 
-Use a balanced order so each implementation runs first, second, and third once
-per block. Run one smoke prefix, then exactly three sessions of three
-forward/reverse pairs per implementation. Those nine paired clusters are the
-maximum population; do not add a second block after observing the result.
+Aggregate p50/p95 use the nine clusters; guardrails use their summed 18 primary
+runs per treatment. Oxide's
+missed-deadline ratio must be at most the comparator plus `0.5` percentage
+points and at most `2%` absolute. Oxide hitch excess must be at most the
+comparator plus `2 ms/s` and at most `10 ms/s` absolute.
 
-Treat the nine session/gesture pairs as the independent population, not every
-callback as an independent trial. Compare Oxide separately with idiomatic UIKit
-and optimized UIKit:
+Classify Oxide separately against each UIKit comparator, in this precedence:
 
-- `faster`: Oxide callback-interval p50 and p95 are lower and the 95% interval
-  excludes zero in Oxide's favor;
-- `non-inferior`: the upper 95% bound is within +5% and the absolute
-  missed-callback-deadline and callback-hitch guardrails pass;
-- `slower`: the lower 95% bound exceeds +5% or an absolute guardrail fails;
-- `inconclusive`: neither decision is supported by the frozen nine-cluster population;
-- `blocked`: build, workload, travel, visual, thermal, or collector identity is
-  invalid.
+- `blocked`: any source, build, fixture, visual, travel, inertia, thermal,
+  refresh, population, collector, record, or cleanup admission is invalid;
+- `slower`: interval rank 2 exceeds `+5%`, or either pacing guardrail fails;
+- `faster`: aggregate p50 and p95 are both lower, interval rank 8 is below
+  zero, and both guardrails pass;
+- `non-inferior`: interval rank 8 is at most `+5%` and both guardrails pass;
+- `inconclusive`: none of the above.
 
-Use the exact two-sided binomial median interval for both travel equivalence and
-callback pacing. Sort the nine pair-level deltas once and use one-based ranks 2
-and 8, which conservatively achieve `96.09375%` coverage for the requested 95
-percent interval. The pacing decision interval applies to the median pair-level
-relative p95 delta, where positive means Oxide is slower. No random seed,
-Monte Carlo approximation, or resampling loop belongs in this frozen protocol.
-Treatment-level missed-deadline ratios divide summed misses by summed eligible
-deadlines across the 18 runs; treatment hitch excess divides summed excess by
-summed elapsed time. The missed-callback-deadline guardrail requires Oxide to be at most `0.5`
-percentage points above its comparator and at most `2%` absolute. The
-callback-hitch guardrail requires Oxide to be at most `2 ms/s` above its
-comparator and at most `10 ms/s` absolute. `faster` additionally requires both
-aggregate p50 and p95 to be lower; `non-inferior` requires the p95 interval upper
-bound to be at most `+5%`; `slower` applies when its lower bound exceeds `+5%` or
-either callback guardrail fails. Otherwise the result is `inconclusive`.
+Do not pool frames as independent trials and do not invent confidence from
+resampling. Report both comparator classifications even when they differ.
 
-A truthful `slower`, `inconclusive`, or `blocked` result completes this goal. It
-does not authorize more sampling, a new profiler, or a production rewrite.
+## One aggregate publication report
 
-### Hard limits
+Retain one immutable evidence root and produce one logical aggregate report:
+canonical JSON plus a deterministic Markdown rendering of that same JSON. For
+an admitted complete population, it must contain:
 
-- one working day;
-- 20 minutes of official physical-device runtime;
-- 10 minutes maximum per implementation across the primary population;
-- 512 MiB retained result root and 4 GiB external build root;
-- one bounded app/controller process at a time;
-- two identical environment/controller failures block the row;
-- no simulator numbers in the comparison; and
-- mandatory end-of-run cleanup of apps, processes, file descriptors, temporary
-  screenshots, result bundles, trace scratch, and build artifacts outside the
-  retained caps.
+- provenance and admission decisions;
+- all 54 deterministic primary rows and the raw callback samples they summarize
+  in canonical JSON;
+- the four directional travel analyses;
+- one Oxide-versus-idiomatic row and one Oxide-versus-optimized row;
+- every threshold, exact rank interval, missing field, and blocker; and
+- cleanup proof.
 
-The runner must prove Xcode test success, the exact verified attachment count,
-uninstallation of both measured apps and the resolved
-`com.oxide.feed-v1.controller.xctrunner`, and absence of its exact runner
-process. The XCTest export manifest is a bijection over exactly one nonce-derived
-PNG for each of the six smoke capture tuples. Full and smoke modes therefore
-both retain exactly six attachments; primary tuples retain none. App records for all
-six smoke and 54 primary runs must come from the matching retrieved app
-container and canonical nonce-derived filename. Exactly one cleanup proof and
-one evidence manifest may authorize a report, both at their frozen `raw/`
-paths.
-The cleanup proof may assert only state established before reduction, including
-that no reducer executable is retained inside the evidence root. The runner
-removes the external temporary reducer after reduction and fails its overall
-exit status if that final cleanup fails; the report must not claim that this
-post-reduction action already happened.
-The controller persists its total runtime and separate primary-population
-runtime for all three treatments in its own app container. The reducer enforces
-the 20-minute total and each 10-minute treatment cap from that signed-controller
-record; the runner separately fails an overlong Xcode test phase and proves the
-source snapshot is still clean and unchanged after export.
+Markdown is the sole compact human-facing results page: admissions, the two
+comparison rows, travel and pacing summaries, thresholds, missing fields,
+blockers, cleanup, and the canonical JSON path/hash. It is deterministically
+derived from JSON but does not duplicate raw sample arrays. Retain a sorted
+evidence manifest with relative path, byte count, and SHA-256 for every raw
+record and screenshot.
 
-### Deliverable
+Reducer reruns over the same evidence must be byte-identical, excluding its own
+two output paths from discovery. Do not create per-treatment publication
+reports or additional result screens.
 
-First commit the reviewed source on the named clean branch. The device runner
-binds evidence to that immutable source commit/tree; a later child commit may
-add the compact result package without pretending those result bytes existed in
-the source commit. The package contains the fixture and source/build/font/asset
-hashes; audited source for all three variants; the
-visual gate code/hash, adversarial results, captures, and bounded diffs; raw
-session/gesture/callback samples; collector and device state; p50/p95/p99/peak
-and confidence intervals; the four treatment/direction travel-equivalence
-medians, confidence intervals, frozen margins, and decisions; separate Oxide-versus-idiomatic and
-Oxide-versus-optimized classifications; all `missing` fields; and cleanup
-proof.
+## Cleanup and terminal behavior
+
+At the end, uninstall the UIKit app, Oxide app, and resolved controller runner;
+prove their exact processes are gone; close observers and files; and remove
+generated projects, derived data, temporary screenshots, result bundles, trace
+scratch, and external reducer/build artifacts not retained in the bounded
+evidence root. Record only cleanup facts already observed; a report may not
+claim post-reduction cleanup before it occurs.
 
 Retain a lexicographically sorted canonical-JSON inventory of every file below
 `raw/`, with its evidence-root-relative path, exact byte count, and SHA-256.
@@ -335,9 +306,20 @@ The terminal decision reports the idiomatic and optimized UIKit classifications
 in fixed order without collapsing a mixed pair into one global verdict. Any
 admission failure reports only `blocked` and no timing classification.
 
-### Explicit non-goals
+All build, controller, and evidence roots must be task-owned and external to the
+source tree. Before the official run, freeze maximum evidence bytes, file count,
+per-file bytes, and XCTest result-bundle bytes from a reviewed dry run plus
+bounded headroom. Check those fuses before each launch and stop on breach.
 
-No global framework verdict; no universal pixel identity; no launch benchmark;
-no text editing or keyboard; no Web, macOS, Android, camera, energy, external sensor,
-photon-latency, exhaustive matrix, density/calibration campaign, general
-benchmark controller, new profiler, or production optimization.
+If any source change or optimization becomes desirable after source freeze,
+finish this goal with the observed classification or `blocked`. A future
+change requires a separately authorized A/B proof and a completely new frozen
+publication run.
+
+## Explicit non-goals
+
+No global performance verdict, universal pixel identity, accessibility,
+additional workload, launch timing, text editing, keyboard, Web, macOS,
+Android, camera, energy proxy, external sensor, input-to-visible/photon latency,
+new profiler, exhaustive matrix, production optimization, or automatic
+follow-on work.
