@@ -15,9 +15,9 @@ A truthful `slower`, `inconclusive`, or `blocked` result completes the goal.
 Do not optimize any implementation, change a threshold, add samples, or repair
 the workload after the publication source is frozen.
 This study covers one representative flow. It is separate from the compact
-canonical Oxide/UIKit signal battery and from explicit touched-case or
-full-contract tiers; those remain verification artifacts, not extra app
-surfaces or publication pages.
+canonical Oxide/UIKit signal battery and from explicit touched-case tiers;
+those remain verification artifacts, not extra app surfaces or publication
+pages.
 
 ## Non-negotiable scope
 
