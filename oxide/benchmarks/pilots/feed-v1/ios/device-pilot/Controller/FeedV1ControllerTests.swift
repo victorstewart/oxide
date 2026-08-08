@@ -51,6 +51,130 @@ private struct FeedV1ControllerRuntimeRecord: Codable
    let uikitIdiomaticRuntimeSeconds: Double
    let uikitOptimizedRuntimeSeconds: Double
    let oxideRuntimeSeconds: Double
+   let sessionEnvironments: [FeedV1ControllerSessionEnvironment]
+}
+
+private struct FeedV1ControllerFrameRateRange: Codable
+{
+   let minimum: Double
+   let maximum: Double
+   let preferred: Double
+}
+
+private struct FeedV1ControllerEnvironmentState: Codable
+{
+   let thermalState: String
+   let lowPowerMode: Bool
+   let maximumFramesPerSecond: Int
+   let configuredFrameRate: FeedV1ControllerFrameRateRange
+}
+
+private struct FeedV1ControllerSessionEnvironment: Codable
+{
+   let sessionIndex: Int
+   let before: FeedV1ControllerEnvironmentState
+   let after: FeedV1ControllerEnvironmentState
+   let thermalStateChangeCount: Int
+   let lowPowerModeChangeCount: Int
+}
+
+private struct FeedV1ControllerEnvironmentTransitionSnapshot
+{
+   let thermalStateChangeCount: Int
+   let lowPowerModeChangeCount: Int
+}
+
+private final class FeedV1ControllerEnvironmentTransitionCounter: @unchecked Sendable
+{
+   private let lock = NSLock()
+   private var thermalStateChangeCount = 0
+   private var lowPowerModeChangeCount = 0
+
+   func recordThermalStateChange()
+   {
+      lock.lock()
+      thermalStateChangeCount += 1
+      lock.unlock()
+   }
+
+   func recordLowPowerModeChange()
+   {
+      lock.lock()
+      lowPowerModeChangeCount += 1
+      lock.unlock()
+   }
+
+   func snapshot() -> FeedV1ControllerEnvironmentTransitionSnapshot
+   {
+      lock.lock()
+      let snapshot = FeedV1ControllerEnvironmentTransitionSnapshot(
+         thermalStateChangeCount: thermalStateChangeCount,
+         lowPowerModeChangeCount: lowPowerModeChangeCount
+      )
+      lock.unlock()
+      return snapshot
+   }
+
+   func changes(since baseline: FeedV1ControllerEnvironmentTransitionSnapshot) -> FeedV1ControllerEnvironmentTransitionSnapshot
+   {
+      let current = snapshot()
+      return FeedV1ControllerEnvironmentTransitionSnapshot(
+         thermalStateChangeCount: current.thermalStateChangeCount - baseline.thermalStateChangeCount,
+         lowPowerModeChangeCount: current.lowPowerModeChangeCount - baseline.lowPowerModeChangeCount
+      )
+   }
+}
+
+private final class FeedV1ControllerEnvironmentMonitor
+{
+   private let counter = FeedV1ControllerEnvironmentTransitionCounter()
+   private var observers = [NSObjectProtocol]()
+
+   init()
+   {
+      let counter = counter
+      observers = [
+         NotificationCenter.default.addObserver(
+            forName: ProcessInfo.thermalStateDidChangeNotification,
+            object: nil,
+            queue: nil
+         ) { [counter] _ in
+            counter.recordThermalStateChange()
+         },
+         NotificationCenter.default.addObserver(
+            forName: Notification.Name.NSProcessInfoPowerStateDidChange,
+            object: nil,
+            queue: nil
+         ) { [counter] _ in
+            counter.recordLowPowerModeChange()
+         }
+      ]
+   }
+
+   deinit
+   {
+      for observer in observers
+      {
+         NotificationCenter.default.removeObserver(observer)
+      }
+   }
+
+   func snapshot() -> FeedV1ControllerEnvironmentTransitionSnapshot
+   {
+      counter.snapshot()
+   }
+
+   func changes(since baseline: FeedV1ControllerEnvironmentTransitionSnapshot) -> FeedV1ControllerEnvironmentTransitionSnapshot
+   {
+      counter.changes(since: baseline)
+   }
+}
+
+private final class FeedV1ControllerDisplayLinkTarget: NSObject
+{
+   @objc func tick(_ displayLink: CADisplayLink)
+   {
+   }
 }
 
 private final class FeedV1DarwinObserver
@@ -104,6 +228,7 @@ final class FeedV1ControllerTests: XCTestCase
    private let settleTimeout = 7.0
    private let officialRuntimeLimit = 20.0 * 60.0
    private var treatmentRuntime = [FeedV1Treatment: Double]()
+   private var sessionEnvironments = [FeedV1ControllerSessionEnvironment]()
 
    override func setUp()
    {
@@ -111,6 +236,7 @@ final class FeedV1ControllerTests: XCTestCase
       continueAfterFailure = false
       executionTimeAllowance = officialRuntimeLimit
       treatmentRuntime.removeAll(keepingCapacity: true)
+      sessionEnvironments.removeAll(keepingCapacity: true)
    }
 
    func testFeedV1PhysicalDevicePilot() throws
@@ -143,8 +269,13 @@ final class FeedV1ControllerTests: XCTestCase
          return
       }
 
+      sessionEnvironments.reserveCapacity(3)
+      let environmentMonitor = FeedV1ControllerEnvironmentMonitor()
       for sessionIndex in 0 ..< 3
       {
+         let transitionBaseline = environmentMonitor.snapshot()
+         let environmentBefore = try captureEnvironmentState()
+         try requireAdmissible(environmentBefore, label: "primary session \(sessionIndex) before")
          for pairIndex in 0 ..< 3
          {
             let rotation = (sessionIndex + pairIndex) % treatments.count
@@ -169,6 +300,17 @@ final class FeedV1ControllerTests: XCTestCase
                }
             }
          }
+         let environmentAfter = try captureEnvironmentState()
+         let transitions = environmentMonitor.changes(since: transitionBaseline)
+         let environment = FeedV1ControllerSessionEnvironment(
+            sessionIndex: sessionIndex,
+            before: environmentBefore,
+            after: environmentAfter,
+            thermalStateChangeCount: transitions.thermalStateChangeCount,
+            lowPowerModeChangeCount: transitions.lowPowerModeChangeCount
+         )
+         try requireAdmissible(environment)
+         sessionEnvironments.append(environment)
       }
       try persistRuntime(mode: mode, started: started)
    }
@@ -329,16 +471,119 @@ final class FeedV1ControllerTests: XCTestCase
       return data
    }
 
+   private func captureEnvironmentState() throws -> FeedV1ControllerEnvironmentState
+   {
+      try onMainThread
+      {
+         let screens = UIApplication.shared.connectedScenes.compactMap
+         {
+            ($0 as? UIWindowScene)?.screen
+         }
+         guard let screen = screens.first,
+               screens.allSatisfy({ $0 === screen }) else
+         {
+            throw controllerError("controller runner has no unambiguous contextual screen")
+         }
+         let target = FeedV1ControllerDisplayLinkTarget()
+         guard let displayLink = screen.displayLink(
+            withTarget: target,
+            selector: #selector(FeedV1ControllerDisplayLinkTarget.tick(_:))
+         ) else
+         {
+            throw controllerError("controller runner could not create a screen-specific display link")
+         }
+         defer
+         {
+            displayLink.invalidate()
+         }
+         displayLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 120.0,
+            maximum: 120.0,
+            preferred: 120.0
+         )
+         let range = displayLink.preferredFrameRateRange
+         guard let preferred = range.preferred else
+         {
+            throw controllerError("controller display-link range has no preferred rate")
+         }
+         return FeedV1ControllerEnvironmentState(
+            thermalState: thermalStateName(ProcessInfo.processInfo.thermalState),
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            maximumFramesPerSecond: screen.maximumFramesPerSecond,
+            configuredFrameRate: FeedV1ControllerFrameRateRange(
+               minimum: Double(range.minimum),
+               maximum: Double(range.maximum),
+               preferred: Double(preferred)
+            )
+         )
+      }
+   }
+
+   private func requireAdmissible(_ state: FeedV1ControllerEnvironmentState, label: String) throws
+   {
+      let range = state.configuredFrameRate
+      guard range.minimum.isFinite,
+            range.maximum.isFinite,
+            range.preferred.isFinite,
+            state.thermalState == "nominal",
+            !state.lowPowerMode,
+            state.maximumFramesPerSecond == 120,
+            range.minimum == 120.0,
+            range.maximum == 120.0,
+            range.preferred == 120.0 else
+      {
+         throw controllerError("\(label) is not nominal Low-Power-off exact native 120 Hz")
+      }
+   }
+
+   private func requireAdmissible(_ environment: FeedV1ControllerSessionEnvironment) throws
+   {
+      try requireAdmissible(environment.before, label: "primary session \(environment.sessionIndex) before")
+      try requireAdmissible(environment.after, label: "primary session \(environment.sessionIndex) after")
+      guard environment.thermalStateChangeCount == 0,
+            environment.lowPowerModeChangeCount == 0 else
+      {
+         throw controllerError("primary session \(environment.sessionIndex) observed a thermal or Low Power Mode transition")
+      }
+   }
+
+   private func onMainThread<T>(_ body: () throws -> T) rethrows -> T
+   {
+      if Thread.isMainThread
+      {
+         return try body()
+      }
+      return try DispatchQueue.main.sync(execute: body)
+   }
+
+   private func thermalStateName(_ state: ProcessInfo.ThermalState) -> String
+   {
+      switch state
+      {
+         case .nominal:
+            return "nominal"
+         case .fair:
+            return "fair"
+         case .serious:
+            return "serious"
+         case .critical:
+            return "critical"
+         @unknown default:
+            return "unknown"
+      }
+   }
+
    private func persistRuntime(mode: String, started: TimeInterval) throws
    {
       let record = FeedV1ControllerRuntimeRecord(
          schema: "oxide.feed-v1.controller-runtime",
-         schemaRevision: 1,
+         schemaRevision: 2,
          mode: mode,
          totalRuntimeSeconds: ProcessInfo.processInfo.systemUptime - started,
          uikitIdiomaticRuntimeSeconds: treatmentRuntime[.idiomatic, default: 0],
          uikitOptimizedRuntimeSeconds: treatmentRuntime[.optimized, default: 0],
-         oxideRuntimeSeconds: treatmentRuntime[.oxide, default: 0]
+         oxideRuntimeSeconds: treatmentRuntime[.oxide, default: 0],
+         sessionEnvironments: sessionEnvironments
       )
       let encoder = JSONEncoder()
       encoder.keyEncodingStrategy = .convertToSnakeCase

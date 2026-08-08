@@ -687,6 +687,13 @@ pub fn strict_validate_runner_json(bytes: &[u8]) -> Result<Option<String>, Strin
    validate_runner_proof(&proof)
 }
 
+pub fn strict_validate_controller_runtime_json(bytes: &[u8]) -> Result<(), String>
+{
+   let proof: ControllerRuntimeProof = serde_json::from_slice(bytes)
+      .map_err(|error| format!("strict controller runtime proof: {error}"))?;
+   validate_controller_runtime_proof(&proof).map(|_| ())
+}
+
 pub fn frozen_components(start_state: &str) -> Result<Vec<Component>, String>
 {
    frozen_visible_components(start_state)
@@ -2096,6 +2103,113 @@ struct ControllerRuntimeProof
    uikit_idiomatic_runtime_seconds: f64,
    uikit_optimized_runtime_seconds: f64,
    oxide_runtime_seconds: f64,
+   session_environments: Vec<ControllerSessionEnvironment>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ControllerSessionEnvironment
+{
+   session_index: u32,
+   before: EnvironmentState,
+   after: EnvironmentState,
+   thermal_state_change_count: u32,
+   low_power_mode_change_count: u32,
+}
+
+fn validate_controller_environment_state(state: &EnvironmentState, label: &str) -> Result<(), String>
+{
+   finite(&[
+      state.configured_frame_rate.minimum,
+      state.configured_frame_rate.maximum,
+      state.configured_frame_rate.preferred,
+   ], "controller session frame-rate range")?;
+   if state.thermal_state != "nominal"
+   {
+      return Err(format!("{label} thermal state is not nominal"));
+   }
+   if state.low_power_mode
+   {
+      return Err(format!("{label} has Low Power Mode enabled"));
+   }
+   if state.maximum_frames_per_second != 120
+   {
+      return Err(format!("{label} maximum refresh is not exactly 120 Hz"));
+   }
+   if state.configured_frame_rate.minimum != 120.0
+      || state.configured_frame_rate.maximum != 120.0
+      || state.configured_frame_rate.preferred != 120.0
+   {
+      return Err(format!("{label} configured frame-rate range is not exactly 120 Hz"));
+   }
+   Ok(())
+}
+
+fn validate_controller_session_environments(proof: &ControllerRuntimeProof) -> Result<(), String>
+{
+   if proof.mode == "smoke"
+   {
+      if !proof.session_environments.is_empty()
+      {
+         return Err("smoke controller runtime proof must have no session environments".to_string());
+      }
+      return Ok(());
+   }
+   if proof.mode != "primary"
+   {
+      return Err(format!("controller runtime proof has unknown mode {}", proof.mode));
+   }
+   if proof.session_environments.len() != 3
+   {
+      return Err("primary controller runtime proof must contain exactly three session environments".to_string());
+   }
+   for (expected_index, environment) in proof.session_environments.iter().enumerate()
+   {
+      if environment.session_index as usize != expected_index
+      {
+         return Err("primary controller session environments are missing, duplicated, or out of order".to_string());
+      }
+      if environment.thermal_state_change_count != 0 || environment.low_power_mode_change_count != 0
+      {
+         return Err(format!("primary session {expected_index} observed a thermal or Low Power Mode transition"));
+      }
+      validate_controller_environment_state(
+         &environment.before,
+         &format!("primary session {expected_index} before"),
+      )?;
+      validate_controller_environment_state(
+         &environment.after,
+         &format!("primary session {expected_index} after"),
+      )?;
+   }
+   Ok(())
+}
+
+fn validate_controller_runtime_proof(proof: &ControllerRuntimeProof) -> Result<[f64; 4], String>
+{
+   if proof.schema != "oxide.feed-v1.controller-runtime" || proof.schema_revision != 2
+   {
+      return Err("controller runtime proof schema identity mismatch".to_string());
+   }
+   validate_controller_session_environments(proof)?;
+   let runtimes = [
+      proof.total_runtime_seconds,
+      proof.uikit_idiomatic_runtime_seconds,
+      proof.uikit_optimized_runtime_seconds,
+      proof.oxide_runtime_seconds,
+   ];
+   finite(&runtimes, "controller runtime proof")?;
+   let treatment_total = runtimes[1] + runtimes[2] + runtimes[3];
+   if runtimes.iter().any(|runtime| *runtime <= 0.0)
+      || treatment_total > proof.total_runtime_seconds + 1.0
+   {
+      return Err("controller runtime proof violates the frozen runtime accounting".to_string());
+   }
+   if runtimes[0] > 20.0 * 60.0 || runtimes[1 ..].iter().any(|runtime| *runtime > 10.0 * 60.0)
+   {
+      return Err("controller runtime proof violates the frozen 20/10-minute limits".to_string());
+   }
+   Ok(runtimes)
 }
 
 fn validate_controller_runtimes(proofs: &[ControllerRuntimeProof], population: Population) -> Result<(), String>
@@ -2113,23 +2227,7 @@ fn validate_controller_runtimes(proofs: &[ControllerRuntimeProof], population: P
    let mut aggregate = [0.0; 4];
    for proof in proofs
    {
-      if proof.schema != "oxide.feed-v1.controller-runtime" || proof.schema_revision != 1
-      {
-         return Err("controller runtime proof schema identity mismatch".to_string());
-      }
-      let runtimes = [
-         proof.total_runtime_seconds,
-         proof.uikit_idiomatic_runtime_seconds,
-         proof.uikit_optimized_runtime_seconds,
-         proof.oxide_runtime_seconds,
-      ];
-      finite(&runtimes, "controller runtime proof")?;
-      let treatment_total = runtimes[1] + runtimes[2] + runtimes[3];
-      if runtimes.iter().any(|runtime| *runtime <= 0.0)
-         || treatment_total > proof.total_runtime_seconds + 1.0
-      {
-         return Err("controller runtime proof violates the frozen runtime accounting".to_string());
-      }
+      let runtimes = validate_controller_runtime_proof(proof)?;
       for index in 0 .. aggregate.len()
       {
          aggregate[index] += runtimes[index];

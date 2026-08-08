@@ -5,9 +5,9 @@ use std::process::Command;
 use oxide_feed_v1_reducer::{
    admit_smoke_prefix, callback_deadline_counts, exact_median_confidence_interval,
    frozen_components, frozen_order_index, nearest_rank_quantile, reduce,
-   strict_validate_failure_json, strict_validate_run_json, strict_validate_runner_json,
-   travel_equivalence_passes, verify_attachment_export, verify_no_attachment_export,
-   verify_smoke, visual_metrics, ReducePaths, RgbaImage,
+   strict_validate_controller_runtime_json, strict_validate_failure_json, strict_validate_run_json,
+   strict_validate_runner_json, travel_equivalence_passes, verify_attachment_export,
+   verify_no_attachment_export, verify_smoke, visual_metrics, ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -239,6 +239,82 @@ fn runner_proof_preserves_the_first_blocker_without_faking_test_failure() -> Res
    assert!(strict_validate_runner_json(
       &serde_json::to_vec(&skipped_smoke).map_err(|error| error.to_string())?
    )?.is_some());
+   Ok(())
+}
+
+#[test]
+fn controller_session_environment_proof_is_strict() -> Result<(), String>
+{
+   let controller = include_str!("../../ios/device-pilot/Controller/FeedV1ControllerTests.swift");
+   for contract in [
+      "FeedV1ControllerEnvironmentMonitor",
+      "let transitionBaseline = environmentMonitor.snapshot()",
+      "let environmentBefore = try captureEnvironmentState()",
+      "let environmentAfter = try captureEnvironmentState()",
+      "sessionEnvironments.append(environment)",
+      "schemaRevision: 2",
+      "sessionEnvironments: sessionEnvironments",
+      "screen.displayLink(",
+   ]
+   {
+      assert!(controller.contains(contract));
+   }
+   assert!(!controller.contains("UIScreen.main.maximumFramesPerSecond"));
+
+   let smoke = controller_runtime_json("smoke");
+   strict_validate_controller_runtime_json(
+      &serde_json::to_vec(&smoke).map_err(|error| error.to_string())?,
+   )?;
+   let primary = controller_runtime_json("primary");
+   strict_validate_controller_runtime_json(
+      &serde_json::to_vec(&primary).map_err(|error| error.to_string())?,
+   )?;
+
+   let mut missing = primary.clone();
+   missing.as_object_mut().ok_or_else(|| "primary proof is not an object".to_string())?
+      .remove("session_environments");
+   assert_controller_runtime_rejected(&missing, "missing field `session_environments`")?;
+
+   let mut unknown = primary.clone();
+   unknown["session_environments"][0]["unexpected"] = json!(true);
+   assert_controller_runtime_rejected(&unknown, "unknown field `unexpected`")?;
+
+   let mut smoke_nonempty = smoke;
+   smoke_nonempty["session_environments"] = primary["session_environments"].clone();
+   assert_controller_runtime_rejected(&smoke_nonempty, "smoke controller runtime proof must have no session environments")?;
+
+   let mut missing_session = primary.clone();
+   missing_session["session_environments"].as_array_mut()
+      .ok_or_else(|| "primary sessions are not an array".to_string())?.pop();
+   assert_controller_runtime_rejected(&missing_session, "exactly three session environments")?;
+
+   let mut duplicate_session = primary.clone();
+   duplicate_session["session_environments"][1]["session_index"] = json!(0);
+   assert_controller_runtime_rejected(&duplicate_session, "missing, duplicated, or out of order")?;
+
+   let mut transition = primary.clone();
+   transition["session_environments"][1]["thermal_state_change_count"] = json!(1);
+   assert_controller_runtime_rejected(&transition, "observed a thermal or Low Power Mode transition")?;
+
+   let mut thermal = primary.clone();
+   thermal["session_environments"][0]["before"]["thermal_state"] = json!("serious");
+   assert_controller_runtime_rejected(&thermal, "thermal state is not nominal")?;
+
+   let mut low_power = primary.clone();
+   low_power["session_environments"][0]["after"]["low_power_mode"] = json!(true);
+   assert_controller_runtime_rejected(&low_power, "has Low Power Mode enabled")?;
+
+   let mut maximum_refresh = primary.clone();
+   maximum_refresh["session_environments"][2]["after"]["maximum_frames_per_second"] = json!(121);
+   assert_controller_runtime_rejected(&maximum_refresh, "maximum refresh is not exactly 120 Hz")?;
+
+   let mut configured_refresh = primary.clone();
+   configured_refresh["session_environments"][2]["before"]["configured_frame_rate"]["minimum"] = json!(119.0);
+   assert_controller_runtime_rejected(&configured_refresh, "configured frame-rate range is not exactly 120 Hz")?;
+
+   let mut malformed_refresh = primary;
+   malformed_refresh["session_environments"][2]["before"]["configured_frame_rate"]["preferred"] = Value::Null;
+   assert_controller_runtime_rejected(&malformed_refresh, "invalid type")?;
    Ok(())
 }
 
@@ -1107,6 +1183,60 @@ fn full_reduction_rejects_systematic_primary_travel_mismatch() -> Result<(), Str
    Ok(())
 }
 
+fn controller_environment_state() -> Value
+{
+   json!({
+      "thermal_state": "nominal",
+      "low_power_mode": false,
+      "maximum_frames_per_second": 120,
+      "configured_frame_rate": {
+         "minimum": 120.0,
+         "maximum": 120.0,
+         "preferred": 120.0
+      }
+   })
+}
+
+fn controller_runtime_json(mode: &str) -> Value
+{
+   let session_environments: Vec<Value> = if mode == "primary"
+   {
+      (0 .. 3).map(|session_index| json!({
+         "session_index": session_index,
+         "before": controller_environment_state(),
+         "after": controller_environment_state(),
+         "thermal_state_change_count": 0,
+         "low_power_mode_change_count": 0
+      })).collect()
+   }
+   else
+   {
+      Vec::new()
+   };
+   json!({
+      "schema": "oxide.feed-v1.controller-runtime",
+      "schema_revision": 2,
+      "mode": mode,
+      "total_runtime_seconds": 0.2,
+      "uikit_idiomatic_runtime_seconds": 0.05,
+      "uikit_optimized_runtime_seconds": 0.05,
+      "oxide_runtime_seconds": 0.05,
+      "session_environments": session_environments
+   })
+}
+
+fn assert_controller_runtime_rejected(value: &Value, expected: &str) -> Result<(), String>
+{
+   let error = strict_validate_controller_runtime_json(
+      &serde_json::to_vec(value).map_err(|error| error.to_string())?,
+   ).unwrap_err();
+   if !error.contains(expected)
+   {
+      return Err(format!("controller runtime error `{error}` omitted `{expected}`"));
+   }
+   Ok(())
+}
+
 fn write_valid_smoke_root(root: &Path) -> Result<(), String>
 {
    write_valid_root(root, false)
@@ -1175,15 +1305,7 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
    let write_runtime = |mode: &str| -> Result<(), String> {
       fs::write(
          raw.join(format!("controller-documents/oxide-feed-v1-controller-runtime-{mode}.json")),
-         serde_json::to_vec(&json!({
-            "schema": "oxide.feed-v1.controller-runtime",
-            "schema_revision": 1,
-            "mode": mode,
-            "total_runtime_seconds": 0.2,
-            "uikit_idiomatic_runtime_seconds": 0.05,
-            "uikit_optimized_runtime_seconds": 0.05,
-            "oxide_runtime_seconds": 0.05
-         })).map_err(|error| error.to_string())?,
+         serde_json::to_vec(&controller_runtime_json(mode)).map_err(|error| error.to_string())?,
       ).map_err(|error| error.to_string())
    };
    write_runtime("smoke")?;
