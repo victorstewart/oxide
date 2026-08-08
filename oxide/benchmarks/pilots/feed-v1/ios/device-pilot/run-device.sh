@@ -656,7 +656,6 @@ verify_fixture_contracts()
    if ! xcrun swiftc -parse-as-library \
       -DFEED_V1_CONTRACT_CHECK_MAIN \
       "$FEED_ROOT/ios/FeedV1Contract.swift" \
-      "$FEED_ROOT/ios/FeedV1OptimizedUIKitConfiguration.swift" \
       "$FEED_ROOT/ios/FeedV1ContractCheckMain.swift" \
       -o "$swift_check" \
       >"$RAW_ROOT/swift-contract-build.log" 2>&1 \

@@ -23,6 +23,7 @@ Call graph:
 - `ordinary_builds_are_rlib_only_and_the_device_build_explicitly_requests_staticlib` prevents normal host builds and tests from aggregating the complete dependency graph into an unused static archive while requiring the arm64 device phase to request that archive explicitly.
 - `feed_crates_share_the_root_workspace_without_entering_default_builds` requires both pilot crates to use the root member/lock/profile graph while keeping them outside ordinary default-member work.
 - `complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work` keeps the all-row Swift/Rust proof in the authoritative runner and rejects reintroducing it into app construction.
+- `fixture_preflight_compiles_only_existing_swift_contract_sources` requires the host preflight to compile both current Swift contract sources and rejects the removed cache-trial configuration source.
 - `device_runner_binds_phone_toolchain_dependencies_and_signing` freezes the exact CoreDevice/hardware pair and requires structured evidence for arm64 toolchains, dependency resolution, resolved Release settings, and every signed product.
 - `device_runner_predeclares_resource_fuses_and_proves_every_process_absent` freezes build/evidence/file/result caps before launch and requires exact post-run absence for UIKit, Oxide, and the controller.
 - `frozen_app_starts_at_each_exact_contract_offset` covers both controller endpoints.
@@ -96,6 +97,7 @@ cargo test -p oxide-feed-v1-app --test lib_tests \
 
 ## Changelog
 
+- 2026-08-07: Removed the stale cache-trial Swift source from the host fixture preflight and added source-existence coverage.
 - 2026-08-07: Added a source boundary proving complete fixture derivation runs in paired host preflights rather than app startup.
 - 2026-08-07: Added a source boundary for exact phone, toolchain, dependency, build-setting, and signing provenance.
 - 2026-08-07: Added prelaunch resource-fuse and three-process cleanup source boundaries.

@@ -258,6 +258,19 @@ fn complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work()
 }
 
 #[test]
+fn fixture_preflight_compiles_only_existing_swift_contract_sources()
+{
+   let app_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   for source in ["FeedV1Contract.swift", "FeedV1ContractCheckMain.swift"]
+   {
+      assert!(app_root.join("../").join(source).is_file());
+      assert!(runner.contains(source));
+   }
+   assert!(!runner.contains("FeedV1OptimizedUIKitConfiguration.swift"));
+}
+
+#[test]
 fn device_runner_binds_phone_toolchain_dependencies_and_signing()
 {
    let runner = include_str!("../../device-pilot/run-device.sh");
