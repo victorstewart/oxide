@@ -188,7 +188,7 @@ struct Gesture
    settled: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct DisplaySample
 {
@@ -378,6 +378,7 @@ struct RunSummary
    missed_callback_deadline_ratio: f64,
    callback_hitch_ms_per_elapsed_second: f64,
    target_period_admission_ratio: f64,
+   callback_samples: Vec<DisplaySample>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -454,6 +455,128 @@ struct Comparison
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct StatisticalPolicy
+{
+   callback_quantile_method: &'static str,
+   callback_quantile_rank_formula: &'static str,
+   cluster_identity_fields: [&'static str; 3],
+   directions_per_cluster: usize,
+   clusters_per_treatment: usize,
+   treatment_aggregate_method: &'static str,
+   confidence_interval_method: &'static str,
+   confidence_target_coverage: f64,
+   confidence_achieved_coverage: f64,
+   confidence_sample_count: usize,
+   confidence_lower_rank: usize,
+   confidence_upper_rank: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AdmissionThresholdPolicy
+{
+   visual_ssim_minimum: f64,
+   visual_tile_side_px: u32,
+   visual_worst_tile_rgb_mae_maximum: f64,
+   component_edge_tolerance_px: i32,
+   maximum_frame_rate_minimum_hz: u32,
+   configured_frame_rate_hz: f64,
+   target_period_minimum_ms: f64,
+   target_period_maximum_ms: f64,
+   target_period_admission_ratio_minimum: f64,
+   minimum_travel_points: f64,
+   travel_median_absolute_relative_delta_maximum: f64,
+   travel_interval_absolute_bound_maximum: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ClassificationThresholdPolicy
+{
+   slower_interval_lower_bound_exclusive: f64,
+   faster_interval_upper_bound_exclusive: f64,
+   faster_requires_lower_aggregate_p50: bool,
+   faster_requires_lower_aggregate_p95: bool,
+   non_inferior_interval_upper_bound_inclusive: f64,
+   precedence: [&'static str; 4],
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct GuardrailPolicy
+{
+   missed_deadline_ratio_maximum_comparator_delta: f64,
+   missed_deadline_ratio_absolute_maximum: f64,
+   callback_hitch_ms_per_second_maximum_comparator_delta: f64,
+   callback_hitch_ms_per_second_absolute_maximum: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PublicationPolicy
+{
+   statistics: StatisticalPolicy,
+   admission_thresholds: AdmissionThresholdPolicy,
+   classification_thresholds: ClassificationThresholdPolicy,
+   guardrails: GuardrailPolicy,
+}
+
+impl PublicationPolicy
+{
+   fn frozen() -> Self
+   {
+      Self {
+         statistics: StatisticalPolicy {
+            callback_quantile_method: QUANTILE_METHOD,
+            callback_quantile_rank_formula: "ceil(q * n), one-based",
+            cluster_identity_fields: ["treatment", "session_index", "pair_index"],
+            directions_per_cluster: 2,
+            clusters_per_treatment: CONFIDENCE_PAIR_COUNT,
+            treatment_aggregate_method: "median-of-nine-cluster-quantiles",
+            confidence_interval_method: CONFIDENCE_INTERVAL_METHOD,
+            confidence_target_coverage: CONFIDENCE_TARGET_COVERAGE,
+            confidence_achieved_coverage: CONFIDENCE_ACHIEVED_COVERAGE,
+            confidence_sample_count: CONFIDENCE_PAIR_COUNT,
+            confidence_lower_rank: CONFIDENCE_LOWER_RANK,
+            confidence_upper_rank: CONFIDENCE_UPPER_RANK,
+         },
+         admission_thresholds: AdmissionThresholdPolicy {
+            visual_ssim_minimum: SSIM_THRESHOLD,
+            visual_tile_side_px: TILE_SIDE,
+            visual_worst_tile_rgb_mae_maximum: TILE_MAE_THRESHOLD,
+            component_edge_tolerance_px: COMPONENT_TOLERANCE_PX,
+            maximum_frame_rate_minimum_hz: 120,
+            configured_frame_rate_hz: 120.0,
+            target_period_minimum_ms: PERIOD_MIN_SECONDS * 1_000.0,
+            target_period_maximum_ms: PERIOD_MAX_SECONDS * 1_000.0,
+            target_period_admission_ratio_minimum: PERIOD_ADMISSION_RATIO,
+            minimum_travel_points: MINIMUM_TRAVEL_POINTS,
+            travel_median_absolute_relative_delta_maximum: TRAVEL_MEDIAN_EQUIVALENCE_MARGIN,
+            travel_interval_absolute_bound_maximum: TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN,
+         },
+         classification_thresholds: ClassificationThresholdPolicy {
+            slower_interval_lower_bound_exclusive: NON_INFERIOR_MARGIN,
+            faster_interval_upper_bound_exclusive: 0.0,
+            faster_requires_lower_aggregate_p50: true,
+            faster_requires_lower_aggregate_p95: true,
+            non_inferior_interval_upper_bound_inclusive: NON_INFERIOR_MARGIN,
+            precedence: ["slower", "faster", "non-inferior", "inconclusive"],
+         },
+         guardrails: GuardrailPolicy {
+            missed_deadline_ratio_maximum_comparator_delta: MISSED_GUARDRAIL_DELTA,
+            missed_deadline_ratio_absolute_maximum: MISSED_GUARDRAIL_ABSOLUTE,
+            callback_hitch_ms_per_second_maximum_comparator_delta: HITCH_GUARDRAIL_DELTA_MS_S,
+            callback_hitch_ms_per_second_absolute_maximum: HITCH_GUARDRAIL_ABSOLUTE_MS_S,
+         },
+      }
+   }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct EvidenceFile
+{
+   relative_path: String,
+   bytes: u64,
+   sha256: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct AdversarialResult
 {
    mutation: String,
@@ -498,6 +621,7 @@ struct Report
    device: Option<DeviceSummary>,
    status: String,
    decision: String,
+   policy: PublicationPolicy,
    blockers: Vec<String>,
    visual_gate_id: &'static str,
    visual_gate_spec_sha256: String,
@@ -512,6 +636,8 @@ struct Report
    comparisons: Vec<Comparison>,
    runs: Vec<RunSummary>,
    missing_metrics: Vec<&'static str>,
+   cleanup: CleanupEvidence,
+   evidence_inventory: Vec<EvidenceFile>,
    evidence_manifest_sha256: Option<String>,
    retained_input_bytes: u64,
    run_count_total: usize,
@@ -1640,7 +1766,21 @@ fn run_summary(run: &MeasuredRun) -> RunSummary
       missed_callback_deadline_ratio: run.metrics.missed_callback_deadline_ratio,
       callback_hitch_ms_per_elapsed_second: run.metrics.callback_hitch_ms_per_elapsed_second,
       target_period_admission_ratio: run.metrics.target_period_admission_ratio,
+      callback_samples: run.record.display_link.samples.clone(),
    }
+}
+
+fn two_comparator_decision(comparisons: &[Comparison]) -> Result<String, String>
+{
+   let idiomatic = comparisons.iter().find(|comparison| comparison.comparator == "uikit-idiomatic")
+      .ok_or_else(|| "missing idiomatic UIKit classification".to_string())?;
+   let optimized = comparisons.iter().find(|comparison| comparison.comparator == "uikit-optimized")
+      .ok_or_else(|| "missing optimized UIKit classification".to_string())?;
+   Ok(format!(
+      "uikit-idiomatic={};uikit-optimized={}",
+      idiomatic.classification,
+      optimized.classification
+   ))
 }
 
 fn cluster_quantile(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: u32, quantile: f64) -> Result<f64, String>
@@ -1667,7 +1807,7 @@ fn cluster_quantile(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: 
    nearest_rank_quantile(&intervals, quantile)
 }
 
-fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator: &str) -> Result<Comparison, String>
+fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator: &str, policy: &PublicationPolicy) -> Result<Comparison, String>
 {
    let oxide = summaries.iter().find(|summary| summary.treatment == "oxide")
       .ok_or_else(|| "missing Oxide treatment summary".to_string())?;
@@ -1688,25 +1828,33 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
       }
    }
    let (median_delta, confidence_interval) = exact_median_analysis(&deltas)?;
+   let thresholds = &policy.classification_thresholds;
+   let guardrails = &policy.guardrails;
    let missed_guardrail = oxide.missed_callback_deadline_ratio
-      <= native.missed_callback_deadline_ratio + MISSED_GUARDRAIL_DELTA
-      && oxide.missed_callback_deadline_ratio <= MISSED_GUARDRAIL_ABSOLUTE;
+      <= native.missed_callback_deadline_ratio + guardrails.missed_deadline_ratio_maximum_comparator_delta
+      && oxide.missed_callback_deadline_ratio <= guardrails.missed_deadline_ratio_absolute_maximum;
    let hitch_guardrail = oxide.callback_hitch_ms_per_elapsed_second
-      <= native.callback_hitch_ms_per_elapsed_second + HITCH_GUARDRAIL_DELTA_MS_S
-      && oxide.callback_hitch_ms_per_elapsed_second <= HITCH_GUARDRAIL_ABSOLUTE_MS_S;
-   let classification = if confidence_interval.bounds[0] > NON_INFERIOR_MARGIN
+      <= native.callback_hitch_ms_per_elapsed_second
+         + guardrails.callback_hitch_ms_per_second_maximum_comparator_delta
+      && oxide.callback_hitch_ms_per_elapsed_second
+         <= guardrails.callback_hitch_ms_per_second_absolute_maximum;
+   let aggregate_p50_passes = !thresholds.faster_requires_lower_aggregate_p50
+      || oxide.aggregate_interval_p50_ms < native.aggregate_interval_p50_ms;
+   let aggregate_p95_passes = !thresholds.faster_requires_lower_aggregate_p95
+      || oxide.aggregate_interval_p95_ms < native.aggregate_interval_p95_ms;
+   let classification = if confidence_interval.bounds[0] > thresholds.slower_interval_lower_bound_exclusive
       || !missed_guardrail
       || !hitch_guardrail
    {
       "slower"
    }
-   else if oxide.aggregate_interval_p50_ms < native.aggregate_interval_p50_ms
-      && oxide.aggregate_interval_p95_ms < native.aggregate_interval_p95_ms
-      && confidence_interval.bounds[1] < 0.0
+   else if aggregate_p50_passes
+      && aggregate_p95_passes
+      && confidence_interval.bounds[1] < thresholds.faster_interval_upper_bound_exclusive
    {
       "faster"
    }
-   else if confidence_interval.bounds[1] <= NON_INFERIOR_MARGIN
+   else if confidence_interval.bounds[1] <= thresholds.non_inferior_interval_upper_bound_inclusive
       && missed_guardrail
       && hitch_guardrail
    {
@@ -1831,7 +1979,7 @@ fn expected_order_index(phase: &str, session: u32, pair: u32, treatment: &str) -
    Ok((treatment_index + 3 - rotation) % 3)
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CleanupProof
 {
@@ -1858,7 +2006,14 @@ struct CleanupProof
    runtime_seconds: f64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
+struct CleanupEvidence
+{
+   admitted: bool,
+   proof: Option<CleanupProof>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ResourceLimits
 {
@@ -2067,6 +2222,41 @@ fn signing_identity_admitted(identity: &SigningIdentity) -> bool
       && is_git_object_id(&identity.cdhash)
 }
 
+fn cleanup_admitted(proof: &CleanupProof) -> bool
+{
+   proof.schema == "oxide.feed-v1.cleanup"
+      && proof.schema_revision == 3
+      && proof.test_succeeded
+      && proof.verified_attachment_count == ATTACHMENT_COUNT
+      && proof.apps_uninstalled
+      && proof.controller_uninstalled
+      && proof.uikit_process_absent
+      && proof.oxide_process_absent
+      && proof.controller_process_absent
+      && proof.prelaunch_fuses_admitted
+      && proof.resource_limits.external_build_bytes == MAX_BUILD_ROOT_BYTES
+      && proof.resource_limits.result_bundle_bytes == MAX_RESULT_BUNDLE_BYTES
+      && proof.resource_limits.retained_evidence_bytes == MAX_RETAINED_EVIDENCE_BYTES
+      && proof.resource_limits.retained_file_count == MAX_RETAINED_FILE_COUNT
+      && proof.resource_limits.retained_file_bytes == MAX_RETAINED_FILE_BYTES
+      && proof.source_snapshot_preserved
+      && proof.external_build_removed
+      && proof.result_bundle_removed
+      && proof.reducer_binary_absent_from_result_root
+      && proof.external_build_bytes > 0
+      && proof.external_build_bytes <= MAX_BUILD_ROOT_BYTES
+      && proof.result_bundle_bytes > 0
+      && proof.result_bundle_bytes <= MAX_RESULT_BUNDLE_BYTES
+      && proof.raw_evidence_bytes <= MAX_RETAINED_EVIDENCE_BYTES
+      && proof.retained_file_count > 0
+      && proof.retained_file_count <= MAX_RETAINED_FILE_COUNT
+      && proof.largest_retained_file_bytes > 0
+      && proof.largest_retained_file_bytes <= MAX_RETAINED_FILE_BYTES
+      && proof.runtime_seconds.is_finite()
+      && proof.runtime_seconds >= 0.0
+      && proof.runtime_seconds <= 20.0 * 60.0
+}
+
 fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, String>
 {
    if !paths.run_root.is_dir()
@@ -2086,6 +2276,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          .map_err(|error| format!("read retained metadata {}: {error}", path.display()))?.len();
       Ok::<u64, String>(maximum.max(bytes))
    })?;
+   let evidence_files = collect_raw_evidence_files(&paths.run_root, &files)?;
    let mut run_records = Vec::new();
    let mut failure_records = Vec::new();
    let mut blockers = Vec::new();
@@ -2479,47 +2670,23 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       }
    }
 
-   match cleanup
+   let cleanup = match cleanup
    {
       Some(proof) =>
       {
-         if proof.schema != "oxide.feed-v1.cleanup"
-            || proof.schema_revision != 3
-            || !proof.test_succeeded
-            || proof.verified_attachment_count != ATTACHMENT_COUNT
-            || !proof.apps_uninstalled
-            || !proof.controller_uninstalled
-            || !proof.uikit_process_absent
-            || !proof.oxide_process_absent
-            || !proof.controller_process_absent
-            || !proof.prelaunch_fuses_admitted
-            || proof.resource_limits.external_build_bytes != MAX_BUILD_ROOT_BYTES
-            || proof.resource_limits.result_bundle_bytes != MAX_RESULT_BUNDLE_BYTES
-            || proof.resource_limits.retained_evidence_bytes != MAX_RETAINED_EVIDENCE_BYTES
-            || proof.resource_limits.retained_file_count != MAX_RETAINED_FILE_COUNT
-            || proof.resource_limits.retained_file_bytes != MAX_RETAINED_FILE_BYTES
-            || !proof.source_snapshot_preserved
-            || !proof.external_build_removed
-            || !proof.result_bundle_removed
-            || !proof.reducer_binary_absent_from_result_root
-            || proof.external_build_bytes == 0
-            || proof.external_build_bytes > MAX_BUILD_ROOT_BYTES
-            || proof.result_bundle_bytes == 0
-            || proof.result_bundle_bytes > MAX_RESULT_BUNDLE_BYTES
-            || proof.raw_evidence_bytes > MAX_RETAINED_EVIDENCE_BYTES
-            || proof.retained_file_count == 0
-            || proof.retained_file_count > MAX_RETAINED_FILE_COUNT
-            || proof.largest_retained_file_bytes == 0
-            || proof.largest_retained_file_bytes > MAX_RETAINED_FILE_BYTES
-            || !proof.runtime_seconds.is_finite()
-            || proof.runtime_seconds < 0.0
-            || proof.runtime_seconds > 20.0 * 60.0
+         let admitted = cleanup_admitted(&proof);
+         if !admitted
          {
             blockers.push("cleanup/runtime/cap proof failed".to_string());
          }
+         CleanupEvidence { admitted, proof: Some(proof) }
       }
-      None => blockers.push("missing cleanup proof".to_string()),
-   }
+      None =>
+      {
+         blockers.push("missing cleanup proof".to_string());
+         CleanupEvidence { admitted: false, proof: None }
+      }
+   };
 
    if let (Some(device), Some(manifest)) = (&device, &evidence_manifest)
    {
@@ -2557,6 +2724,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    let mut summaries = Vec::new();
    let mut comparisons = Vec::new();
    let mut runs = Vec::new();
+   let policy = PublicationPolicy::frozen();
    if blockers.is_empty() && population == Population::Full
    {
       for treatment in ["uikit-idiomatic", "uikit-optimized", "oxide"]
@@ -2564,8 +2732,8 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          let selected: Vec<&MeasuredRun> = primary.iter().copied().filter(|run| run.record.run.treatment == treatment).collect();
          summaries.push(treatment_summary(&selected, treatment)?);
       }
-      comparisons.push(comparison(&primary, &summaries, "uikit-idiomatic")?);
-      comparisons.push(comparison(&primary, &summaries, "uikit-optimized")?);
+      comparisons.push(comparison(&primary, &summaries, "uikit-idiomatic", &policy)?);
+      comparisons.push(comparison(&primary, &summaries, "uikit-optimized", &policy)?);
       runs = primary.iter().map(|run| run_summary(run)).collect();
       runs.sort_by(|left, right| {
          left.session_index.cmp(&right.session_index)
@@ -2579,15 +2747,15 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    let status = if blockers.is_empty() { "complete" } else { "blocked" };
    let decision = if population == Population::Smoke
    {
-      "smoke-verification-only-no-publication"
+      "smoke-verification-only-no-publication".to_string()
    }
-   else if blockers.is_empty()
+   else if !blockers.is_empty()
    {
-      "single-workload-evidence-is-trustworthy-enough-for-a-separately-authorized-second-workload"
+      "blocked".to_string()
    }
    else
    {
-      "single-workload-evidence-is-not-admissible-and-does-not-justify-a-second-workload"
+      two_comparator_decision(&comparisons)?
    };
    let report = Report {
       schema: "oxide.feed-v1.report",
@@ -2596,7 +2764,8 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       fixture_byte_count: FIXTURE_BYTE_COUNT,
       device,
       status: status.to_string(),
-      decision: decision.to_string(),
+      decision,
+      policy,
       blockers,
       visual_gate_id: VISUAL_GATE_ID,
       visual_gate_spec_sha256: sha256_bytes(VISUAL_GATE_ID.as_bytes()),
@@ -2620,6 +2789,8 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          "symmetric direct GPU time",
          "direct energy",
       ],
+      cleanup,
+      evidence_inventory: evidence_files,
       evidence_manifest_sha256,
       retained_input_bytes,
       run_count_total: measured_runs.len(),
@@ -2628,9 +2799,50 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    Ok(report)
 }
 
+fn collect_raw_evidence_files(run_root: &Path, files: &[PathBuf]) -> Result<Vec<EvidenceFile>, String>
+{
+   let raw_root = run_root.join("raw");
+   let mut output = Vec::new();
+   for path in files.iter().filter(|path| path.starts_with(&raw_root))
+   {
+      output.push(EvidenceFile {
+         relative_path: relative_path_string(run_root, path)?,
+         bytes: fs::metadata(path)
+            .map_err(|error| format!("read evidence inventory metadata {}: {error}", path.display()))?.len(),
+         sha256: sha256_file(path)?,
+      });
+   }
+   output.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+   Ok(output)
+}
+
+fn output_excluded_raw_evidence_files(paths: &ReducePaths) -> Result<Vec<EvidenceFile>, String>
+{
+   let files: Vec<PathBuf> = collect_files(&paths.run_root)?.into_iter().filter(|path| {
+      !same_path(path, &paths.output_json) && !same_path(path, &paths.output_markdown)
+   }).collect();
+   collect_raw_evidence_files(&paths.run_root, &files)
+}
+
+fn relative_path_string(root: &Path, path: &Path) -> Result<String, String>
+{
+   let relative = path.strip_prefix(root)
+      .map_err(|_| format!("path {} is outside evidence root {}", path.display(), root.display()))?;
+   if relative.as_os_str().is_empty()
+   {
+      return Err("evidence-relative path is empty".to_string());
+   }
+   relative.to_str().map(str::to_string)
+      .ok_or_else(|| format!("evidence-relative path is not UTF-8: {}", relative.display()))
+}
+
 pub fn reduce(paths: &ReducePaths) -> Result<(), String>
 {
    let report = evaluate(paths, Population::Full)?;
+   if output_excluded_raw_evidence_files(paths)? != report.evidence_inventory
+   {
+      return Err("raw evidence changed during publication reduction".to_string());
+   }
    write_report(paths, &report)
 }
 
@@ -2654,19 +2866,24 @@ pub fn verify_smoke(run_root: &Path) -> Result<(), String>
 
 fn write_report(paths: &ReducePaths, report: &Report) -> Result<(), String>
 {
+   let canonical_json_path = relative_path_string(&paths.run_root, &paths.output_json)?;
    let mut json = serde_json::to_vec_pretty(report).map_err(|error| format!("serialize report: {error}"))?;
    json.push(b'\n');
+   let canonical_json_sha256 = sha256_bytes(&json);
    write_atomic(&paths.output_json, &json)?;
-   let markdown = render_markdown(report);
+   let markdown = render_markdown(report, &canonical_json_path, &canonical_json_sha256);
    write_atomic(&paths.output_markdown, markdown.as_bytes())
 }
 
-fn render_markdown(report: &Report) -> String
+fn render_markdown(report: &Report, canonical_json_path: &str, canonical_json_sha256: &str) -> String
 {
    let mut output = String::new();
    output.push_str("# feed-v1 physical-device evidence\n\n");
    output.push_str(&format!("- Status: `{}`\n", report.status));
    output.push_str(&format!("- Decision: `{}`\n", report.decision));
+   output.push_str(&format!(
+      "- Canonical JSON: `{canonical_json_path}` (SHA-256 `{canonical_json_sha256}`)\n"
+   ));
    output.push_str(&format!("- Fixture: `{}` ({} bytes)\n", report.fixture_sha256, report.fixture_byte_count));
    if let Some(device) = &report.device
    {
@@ -2690,6 +2907,39 @@ fn render_markdown(report: &Report) -> String
       report.repository_ref.as_deref().unwrap_or("missing"),
       report.repository_head_commit.as_deref().unwrap_or("missing"),
       report.repository_tree.as_deref().unwrap_or("missing")
+   ));
+   output.push_str("\n## Frozen policy\n\n");
+   output.push_str(&format!(
+      "- Callback quantiles: `{}` with `{}`.\n",
+      report.policy.statistics.callback_quantile_method,
+      report.policy.statistics.callback_quantile_rank_formula
+   ));
+   output.push_str(&format!(
+      "- Treatment aggregates: `{}` over {} clusters of {} directions.\n",
+      report.policy.statistics.treatment_aggregate_method,
+      report.policy.statistics.clusters_per_treatment,
+      report.policy.statistics.directions_per_cluster
+   ));
+   output.push_str(&format!(
+      "- Exact median interval: ranks {}-{} of {}, target {:.3}%, achieved {:.6}%.\n",
+      report.policy.statistics.confidence_lower_rank,
+      report.policy.statistics.confidence_upper_rank,
+      report.policy.statistics.confidence_sample_count,
+      report.policy.statistics.confidence_target_coverage * 100.0,
+      report.policy.statistics.confidence_achieved_coverage * 100.0
+   ));
+   output.push_str(&format!(
+      "- Classification: slower above +{:.1}% at the lower bound; faster below {:+.1}% at the upper bound with lower aggregate p50/p95; non-inferior at or below +{:.1}% at the upper bound.\n",
+      report.policy.classification_thresholds.slower_interval_lower_bound_exclusive * 100.0,
+      report.policy.classification_thresholds.faster_interval_upper_bound_exclusive * 100.0,
+      report.policy.classification_thresholds.non_inferior_interval_upper_bound_inclusive * 100.0
+   ));
+   output.push_str(&format!(
+      "- Guardrails: missed ratio <= comparator + {:.1} percentage points and <= {:.1}% absolute; hitch <= comparator + {:.1} ms/s and <= {:.1} ms/s absolute.\n",
+      report.policy.guardrails.missed_deadline_ratio_maximum_comparator_delta * 100.0,
+      report.policy.guardrails.missed_deadline_ratio_absolute_maximum * 100.0,
+      report.policy.guardrails.callback_hitch_ms_per_second_maximum_comparator_delta,
+      report.policy.guardrails.callback_hitch_ms_per_second_absolute_maximum
    ));
    if !report.blockers.is_empty()
    {
@@ -2783,42 +3033,6 @@ fn render_markdown(report: &Report) -> String
          ));
       }
    }
-   if !report.runs.is_empty()
-   {
-      output.push_str("\n## Per-run callback evidence\n\n");
-      output.push_str("| Phase | S/P/O | Treatment | Direction | Gesture s | Inertia | Env transitions T/P | Signed/absolute travel pt | Callbacks | Cadence Hz | p50/p95/p99/peak ms | Missed/Expected | Missed | Hitch ms/s | Target-period admission | Nonce |\n");
-      output.push_str("|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
-      for run in &report.runs
-      {
-         output.push_str(&format!(
-            "| {} | {}/{}/{} | {} | {} | {:.6} | {} | {}/{} | {:+.3}/{:.3} | {} | {:.3} | {:.3}/{:.3}/{:.3}/{:.3} | {}/{} | {:.3}% | {:.3} | {:.3}% | `{}` |\n",
-            run.phase,
-            run.session_index,
-            run.pair_index,
-            run.order_index,
-            run.treatment,
-            run.direction,
-            run.gesture_duration_seconds,
-            if run.inertia_observed { "yes" } else { "no" },
-            run.thermal_state_change_count,
-            run.low_power_mode_change_count,
-            run.signed_travel_points,
-            run.travel_distance_points,
-            run.callback_count,
-            run.achieved_cadence_hz,
-            run.interval_p50_ms,
-            run.interval_p95_ms,
-            run.interval_p99_ms,
-            run.interval_peak_ms,
-            run.missed_callback_deadlines,
-            run.expected_callbacks,
-            run.missed_callback_deadline_ratio * 100.0,
-            run.callback_hitch_ms_per_elapsed_second,
-            run.target_period_admission_ratio * 100.0,
-            run.nonce
-         ));
-      }
-   }
    output.push_str("\n## Evidence and limitations\n\n");
    output.push_str(&format!("- Visual-gate specification SHA-256: `{}`\n", report.visual_gate_spec_sha256));
    output.push_str(&format!(
@@ -2829,12 +3043,30 @@ fn render_markdown(report: &Report) -> String
       "- Evidence manifest SHA-256: `{}`\n",
       report.evidence_manifest_sha256.as_deref().unwrap_or("missing")
    ));
-   output.push_str(&format!("- Retained reducer input: {} bytes\n", report.retained_input_bytes));
    output.push_str(&format!(
-      "- Confidence interval: `{CONFIDENCE_INTERVAL_METHOD}`, ranks {CONFIDENCE_LOWER_RANK}-{CONFIDENCE_UPPER_RANK} of {CONFIDENCE_PAIR_COUNT}, target {:.3}%, achieved {:.6}%\n",
-      CONFIDENCE_TARGET_COVERAGE * 100.0,
-      CONFIDENCE_ACHIEVED_COVERAGE * 100.0
+      "- Raw evidence inventory: {} sorted files with byte counts and SHA-256 values in canonical JSON.\n",
+      report.evidence_inventory.len()
    ));
+   output.push_str(&format!(
+      "- Primary callback rows: {} with raw sample arrays in canonical JSON only.\n",
+      report.runs.len()
+   ));
+   output.push_str(&format!("- Retained reducer input: {} bytes\n", report.retained_input_bytes));
+   output.push_str("\n## Cleanup\n\n");
+   output.push_str(&format!("- Cleanup proof admitted: `{}`\n", report.cleanup.admitted));
+   if let Some(proof) = &report.cleanup.proof
+   {
+      output.push_str(&format!(
+         "- Runner observations: test succeeded `{}`, apps uninstalled `{}`, controller uninstalled `{}`, controller process absent `{}`, source preserved `{}`, build removed `{}`, result bundle removed `{}`.\n",
+         proof.test_succeeded,
+         proof.apps_uninstalled,
+         proof.controller_uninstalled,
+         proof.controller_process_absent,
+         proof.source_snapshot_preserved,
+         proof.external_build_removed,
+         proof.result_bundle_removed
+      ));
+   }
    output.push_str(&format!("- Missing metrics: {}\n", report.missing_metrics.join(", ")));
    output.push_str("\nThese figures are display-link callback pacing only. They make no presented-frame, visible-frame, or photon-latency claim.\n");
    output

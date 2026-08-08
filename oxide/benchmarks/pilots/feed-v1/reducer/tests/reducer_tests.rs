@@ -9,6 +9,7 @@ use oxide_feed_v1_reducer::{
    verify_smoke, visual_metrics, ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 fn valid_run_json() -> Result<Value, String>
 {
@@ -578,6 +579,7 @@ fn six_valid_smoke_tuples_pass_smoke_but_not_full_publication() -> Result<(), St
    let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
       .map_err(|error| error.to_string())?;
    assert_eq!(report["status"], "blocked");
+   assert_eq!(report["decision"], "blocked");
    assert!(report["comparisons"].as_array().is_some_and(Vec::is_empty));
    assert!(report["runs"].as_array().is_some_and(Vec::is_empty));
    assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
@@ -761,6 +763,10 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    let first_markdown = fs::read(&paths.output_markdown).map_err(|error| error.to_string())?;
    let report: Value = serde_json::from_slice(&first_json).map_err(|error| error.to_string())?;
    assert_eq!(report["status"], "complete");
+   assert_eq!(
+      report["decision"],
+      "uikit-idiomatic=non-inferior;uikit-optimized=slower"
+   );
    assert_eq!(report["schema_revision"], 5);
    assert_eq!(report["run_count_total"], 60);
    assert_eq!(report["run_count_primary"], 54);
@@ -798,15 +804,35 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
          && comparison.get("confidence_95_lower").is_none()
          && comparison.get("confidence_95_upper").is_none()
    }));
+   assert_eq!(
+      comparisons.iter().find(|comparison| comparison["comparator"] == "uikit-idiomatic")
+         .map(|comparison| &comparison["classification"]),
+      Some(&json!("non-inferior"))
+   );
+   assert_eq!(
+      comparisons.iter().find(|comparison| comparison["comparator"] == "uikit-optimized")
+         .map(|comparison| &comparison["classification"]),
+      Some(&json!("slower"))
+   );
+   assert_eq!(report["policy"]["statistics"]["callback_quantile_method"], "one-based-nearest-rank");
+   assert_eq!(report["policy"]["statistics"]["callback_quantile_rank_formula"], "ceil(q * n), one-based");
+   assert_eq!(report["policy"]["statistics"]["treatment_aggregate_method"], "median-of-nine-cluster-quantiles");
+   assert_eq!(report["policy"]["statistics"]["confidence_lower_rank"], 2);
+   assert_eq!(report["policy"]["statistics"]["confidence_upper_rank"], 8);
+   assert_eq!(report["policy"]["classification_thresholds"]["slower_interval_lower_bound_exclusive"], 0.05);
+   assert_eq!(report["policy"]["classification_thresholds"]["non_inferior_interval_upper_bound_inclusive"], 0.05);
+   assert_eq!(report["policy"]["guardrails"]["missed_deadline_ratio_maximum_comparator_delta"], 0.005);
+   assert_eq!(report["policy"]["guardrails"]["callback_hitch_ms_per_second_absolute_maximum"], 10.0);
    let treatments = report["treatments"].as_array()
       .ok_or_else(|| "report treatments are not an array".to_string())?;
    assert_eq!(treatments.len(), 3);
    assert!(treatments.iter().all(|treatment| {
+      let expected = if treatment["treatment"] == "uikit-optimized" { 7.52 } else { 8.0 };
       treatment["run_count"] == 18
          && treatment["cluster_count"] == 9
          && treatment["clusters"].as_array().is_some_and(|clusters| clusters.len() == 9)
-         && treatment["aggregate_interval_p50_ms"].as_f64().is_some_and(|value| (value - 8.0).abs() < 1e-6)
-         && treatment["aggregate_interval_p95_ms"].as_f64().is_some_and(|value| (value - 8.0).abs() < 1e-6)
+         && treatment["aggregate_interval_p50_ms"].as_f64().is_some_and(|value| (value - expected).abs() < 1e-6)
+         && treatment["aggregate_interval_p95_ms"].as_f64().is_some_and(|value| (value - expected).abs() < 1e-6)
    }));
    let runs = report["runs"].as_array().ok_or_else(|| "report runs are not an array".to_string())?;
    assert_eq!(runs.len(), 54);
@@ -819,12 +845,49 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
          && run["interval_p95_ms"].as_f64().is_some()
          && run["interval_p99_ms"].as_f64().is_some()
          && run["interval_peak_ms"].as_f64().is_some()
+         && run["callback_samples"].as_array().is_some_and(|samples| {
+            run["callback_count"].as_u64() == Some(samples.len() as u64)
+         })
    }));
+   let inventory = report["evidence_inventory"].as_array()
+      .ok_or_else(|| "report evidence inventory is not an array".to_string())?;
+   assert!(!inventory.is_empty());
+   assert!(inventory.windows(2).all(|pair| {
+      pair[0]["relative_path"].as_str() < pair[1]["relative_path"].as_str()
+   }));
+   assert_eq!(inventory.iter().filter(|file| {
+      file["relative_path"].as_str().is_some_and(|path| {
+         (path.starts_with("raw/uikit-documents/") || path.starts_with("raw/oxide-documents/"))
+            && path.ends_with(".json")
+      })
+   }).count(), 60);
+   assert_eq!(inventory.iter().filter(|file| {
+      file["relative_path"].as_str().is_some_and(|path| path.ends_with(".png"))
+   }).count(), 6);
+   assert!(inventory.iter().all(|file| {
+      file["relative_path"].as_str().is_some_and(|path| path.starts_with("raw/"))
+         && file["bytes"].as_u64().is_some_and(|bytes| bytes > 0)
+         && file["sha256"].as_str().is_some_and(|hash| hash.len() == 64)
+   }));
+   let manifest = fs::read(root.join("raw/evidence-manifest.json")).map_err(|error| error.to_string())?;
+   let manifest_sha256 = format!("{:x}", Sha256::digest(&manifest));
+   assert!(inventory.iter().any(|file| {
+      file["relative_path"] == "raw/evidence-manifest.json"
+         && file["bytes"] == manifest.len() as u64
+         && file["sha256"] == manifest_sha256
+   }));
+   assert_eq!(report["cleanup"]["admitted"], true);
+   assert_eq!(report["cleanup"]["proof"]["apps_uninstalled"], true);
    let markdown = String::from_utf8_lossy(&first_markdown);
+   let canonical_json_sha256 = format!("{:x}", Sha256::digest(&first_json));
    assert!(markdown.contains("## Travel equivalence"));
    assert!(markdown.contains("| oxide | forward | 9 |"));
-   assert!(markdown.contains("`exact-binomial-median`, ranks 2-8 of 9"));
-   assert!(markdown.contains("## Per-run callback evidence"));
+   assert!(markdown.contains("Exact median interval: ranks 2-8 of 9"));
+   assert!(markdown.contains(&format!(
+      "Canonical JSON: `latest.json` (SHA-256 `{canonical_json_sha256}`)"
+   )));
+   assert!(!markdown.contains("## Per-run callback evidence"));
+   assert!(!markdown.contains("callback_samples"));
 
    reduce(&paths)?;
    assert_eq!(first_json, fs::read(&paths.output_json).map_err(|error| error.to_string())?);
@@ -1201,7 +1264,10 @@ fn rewrite_primary_callback_profiles(root: &Path) -> Result<(), String>
          let pair = run["run"]["pair_index"].as_u64()
             .ok_or_else(|| "primary run has no pair index".to_string())?;
          let cluster = session * 3 + pair;
-         let interval = 0.0076 + cluster as f64 * 0.0001;
+         let treatment = run["run"]["treatment"].as_str()
+            .ok_or_else(|| "primary run has no treatment".to_string())?;
+         let treatment_multiplier = if treatment == "uikit-optimized" { 0.94 } else { 1.0 };
+         let interval = (0.0076 + cluster as f64 * 0.0001) * treatment_multiplier;
          let interval_count = if cluster == 0 { 100 } else { 1 };
          let mut timestamp = 100.0;
          let mut samples = Vec::with_capacity(interval_count + 1);

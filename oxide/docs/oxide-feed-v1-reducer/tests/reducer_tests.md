@@ -36,7 +36,7 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
 - `smoke_rejects_symlink_roots_entries_and_nonregular_files` proves Unix evidence discovery rejects root aliases, nested symlinks, and socket entries instead of silently omitting them.
 - `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root/process/fuse cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
-- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, gives one cluster many more raw callbacks than the other eight, verifies the treatment aggregates remain the median of nine cluster p50/p95 values, requires revision-5 exact-method/rank/coverage metadata plus all 54 primary timing/inertia summaries, rejects legacy bootstrap fields, and proves a second reduction over the exact same output paths is byte-identical.
+- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, gives one cluster many more raw callbacks than the other eight, and makes the optimized comparator intentionally faster so the fixed-order terminal decision must preserve a mixed `non-inferior`/`slower` pair. It verifies cluster aggregates, all 54 raw-sample rows, structured policy/cleanup, the sorted exact raw-file inventory, compact Markdown without raw rows, the canonical JSON path/hash, revision-5 exact interval metadata, and byte-identical repeat reduction.
 - `full_reduction_rejects_systematic_primary_travel_mismatch` proves a repeatable six-percent Oxide workload mismatch blocks both direction comparisons even though each confidence interval remains inside the wider ten-percent bound.
 
 ## Logic narrative
@@ -67,6 +67,9 @@ Tests are independent and use unique temporary directories. Each integration tes
 - The exact-interval test contains no RNG, resample budget, or randomized soak
   loop.
 - The full synthetic population contains exactly one 54-run primary block and nine paired clusters; no second block is generated.
+- The full report regression hashes one retained manifest independently, counts
+  all 60 app records and six screenshots in the sorted inventory, and verifies
+  Markdown contains neither the raw-sample field nor a per-run table.
 
 ## Feature flags and cfgs
 
@@ -85,6 +88,9 @@ Expected integration result: every focused integration case passes.
 
 - 2026-08-07: Added hostile cleanup mutations for prelaunch, build, result-bundle, evidence-file, and exact process-absence fuses.
 - 2026-08-07: Added strict revision-3 evidence provenance for the frozen phone, toolchains, dependency graph, resolved settings, and all signed products.
+- 2026-08-07: Added mixed-comparator terminal-decision, raw-sample retention,
+  structured-policy, cleanup-proof, evidence-inventory, and canonical-JSON hash
+  coverage while requiring compact aggregate-only Markdown.
 - 2026-08-07: Added direct nearest-rank boundary coverage and an unequal-size
   raw-callback population proving treatment p50/p95 are cluster medians rather
   than pooled callback quantiles.

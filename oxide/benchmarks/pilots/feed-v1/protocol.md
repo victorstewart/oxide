@@ -205,14 +205,17 @@ its forward and reverse intervals and compute its descriptive p50 and p95. The
 treatment p50 and p95 are the medians of the nine corresponding cluster values,
 not quantiles over pooled callback intervals.
 
-The admitted full JSON and Markdown reports contain one deterministic per-run
-row for the 54 primary gestures, including identity/order, direction, duration, signed
-and absolute travel, observed inertia, both environment-transition counts,
-callback count and cadence,
+The admitted canonical JSON contains one deterministic row for each of the 54
+primary gestures, including its raw callback timestamp/targetTimestamp samples,
+identity/order, direction, duration, signed and absolute travel, observed
+inertia, both environment-transition counts, callback count and cadence,
 p50/p95/p99/peak, missed and expected callback counts, missed ratio, hitch
-excess, and target-period admission ratio. Re-running the reducer over its own
-exact output paths must be byte-identical; those two output files are excluded
-from input discovery and byte accounting.
+excess, and target-period admission ratio. Markdown contains only aggregate
+admission, travel, treatment, comparator, policy, cleanup, and limitation
+summaries plus the canonical JSON path and SHA-256; it never duplicates raw
+sample arrays or the 54-row table. Re-running the reducer over its own exact
+output paths must be byte-identical; those two output files are excluded from
+input discovery and byte accounting.
 
 Record main-thread CPU time, process CPU, and resident memory only when the same
 collector and boundary work for all variants. Record direct GPU time only when
@@ -326,9 +329,11 @@ medians, confidence intervals, frozen margins, and decisions; separate Oxide-ver
 Oxide-versus-optimized classifications; all `missing` fields; and cleanup
 proof.
 
-End with one decision: whether this single workload is trustworthy enough to
-justify a separately authorized second workload. Do not start that second
-workload in this goal.
+Retain a lexicographically sorted canonical-JSON inventory of every file below
+`raw/`, with its evidence-root-relative path, exact byte count, and SHA-256.
+The terminal decision reports the idiomatic and optimized UIKit classifications
+in fixed order without collapsing a mixed pair into one global verdict. Any
+admission failure reports only `blocked` and no timing classification.
 
 ### Explicit non-goals
 

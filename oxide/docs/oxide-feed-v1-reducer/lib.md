@@ -14,7 +14,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 ## Entry points list
 
-- `reduce(&ReducePaths)` admits exactly six smoke diagnostics and one 54-run primary block, then atomically writes JSON and one dense Markdown report containing four travel-equivalence decisions and 54 primary timing rows.
+- `reduce(&ReducePaths)` admits exactly six smoke diagnostics and one 54-run primary block, then atomically writes canonical JSON with all primary rows/raw callback samples and one compact aggregate Markdown report bound to the JSON path and SHA-256.
 - `verify_smoke(run_root)` applies the six-run smoke gates without timing classification or report output.
 - `verify_attachment_export(root)` requires exactly six files, one manifest detail for the exact physical-device controller test, in-root canonical paths, unique names and file identities, and non-empty files.
 - `build_evidence_manifest(source_root, repository_root, uikit_app, oxide_app, controller_runner, controller_xctest, build_provenance, output)` requires a clean named Git `HEAD`; strictly admits the frozen device, toolchain, resolved-build, production-dependency, and signing provenance; and hashes the ref/commit/tree, strict `protocol.md` plus `ios/**` and `reducer/**` source allowlist, both built app bundles, both compiled controller products/executables, the executing reducer, and both frozen fonts.
@@ -29,22 +29,22 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 ## Logic narrative
 
-1. Recursively enumerate every retained evidence directory, rejecting a symlink root, nested symlinks, and non-regular filesystem entries rather than silently omitting them, while rejecting retained result bundles/tools/reducer binaries, more than 512 MiB, more than 512 files, or any file above 128 MiB. Names such as `.git`, `target`, and `build` receive no discovery exemption. Cleanup revision 3 additionally proves the prelaunch fuse pass, bounded external build/result bundle, and exact absence of both measured apps plus the controller. The runner separately removes its external temporary reducer after reduction and owns the final exit status.
+1. Recursively enumerate every retained evidence directory, rejecting a symlink root, nested symlinks, and non-regular filesystem entries rather than silently omitting them, while rejecting retained result bundles/tools/reducer binaries, more than 512 MiB, more than 512 files, or any file above 128 MiB. Names such as `.git`, `target`, and `build` receive no discovery exemption. Hash every retained regular file below `raw/` into a lexicographically sorted relative-path/byte-count/SHA-256 inventory, then rehash immediately before publication so an input mutation cannot leave the report bound to stale bytes. Cleanup revision 3 additionally proves the prelaunch fuse pass, bounded external build/result bundle, exact absence of both measured apps plus the controller, and absence of the reducer binary from the retained root. The runner separately removes its external temporary reducer after reduction and owns the final exit status.
 2. Parse success and failure records with unknown-field rejection. Require each nonce-derived app record under its treatment's retrieved documents tree, exactly one authority manifest and cleanup proof at their frozen paths, and the six nonce-derived smoke PNGs in the exact controller test's single-detail attachment manifest. Reject canonical-path and Unix hard-link aliases. Any app failure record blocks the population.
 3. Admit one booted physical 120 Hz iPhone with unchanged pre/post identity, unlocked preflight records, nominal thermal state, low-power mode off, zero thermal/power transition counts, and exact configured 120 Hz ranges. Require the controller's app-container runtime proof to remain within 20 minutes total and 10 minutes per treatment.
 4. Validate fixture identity, canvas, frozen geometry, direction, at least 524 points of travel, observed inertial entry, order, and the exact smoke or full tuple population. Smoke makes no unreplicated cross-treatment travel claim. Full mode forms nine balanced primary deltas for each candidate treatment and direction, then requires the median inside 5 percent and its exact rank-2-to-rank-8 interval inside 10 percent.
 5. Derive callback pacing from each preceding `targetTimestamp - timestamp`. Every sample must be finite and forward; at least 95 percent of observed target periods must lie in `7.5 .. 9.2 ms`. Per-run and per-cluster p50/p95/p99 values use one-based nearest-rank selection rather than interpolation.
 6. Require each smoke PNG to be the full `1320 x 2868` XCUIScreen capture, reject already-cropped input, extract `(75, 168) + 1170 x 2532`, and compare each Oxide/optimized surface with the matching idiomatic UIKit state. The six smoke visuals gate the manifest-hashed app builds used by the 54 primary timing runs; primary tuples add no screenshots, and there is no capture JSON or repeat gate.
 7. Require luma SSIM `>= 0.96`, worst non-overlapping 48-by-48 RGB mean absolute error `<= 18`, and rejection of all nine hostile visual mutations.
-8. Persist the four full-population travel-equivalence results with their pair counts, medians, exact interval metadata, frozen margins, and decisions. For an otherwise admitted full population only, emit the 54 primary per-run callback summaries, persist each treatment's nine two-direction cluster p50/p95 summaries, and use the median of those nine values as the treatment aggregates. Each comparison sorts its nine session/pair deltas once and selects exact ranks 2 and 8. The six smoke records remain diagnostic evidence; blocked/smoke evaluations contain no timing rows.
-9. Write JSON and one Markdown report through same-directory temporary files and atomic renames, excluding those exact output paths from future discovery so repeated reduction is byte-identical.
+8. Persist the four full-population travel-equivalence results with their pair counts, medians, exact interval metadata, frozen margins, and decisions. For an otherwise admitted full population only, retain the 54 primary raw-sample rows, persist each treatment's nine two-direction cluster p50/p95 summaries, and use the median of those nine values as the treatment aggregates. Each comparison sorts its nine session/pair deltas once and selects exact ranks 2 and 8. The canonical report serializes the complete statistical, admission-threshold, classification-threshold, and pacing-guardrail policy beside those results.
+9. A complete decision encodes the idiomatic and optimized UIKit classifications independently in fixed order; a blocked population reports only `blocked`. Canonical JSON retains the raw rows, observed cleanup proof, and sorted raw-file inventory. Compact Markdown links itself to the canonical JSON bytes by relative path and hash. Both files use same-directory temporary writes and atomic renames, excluding only their declared output paths from repeat discovery.
 
 ## Preconditions and postconditions
 
 - Inputs use fixture SHA-256 `a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473` and the frozen `440 x 956 pt @3x` canvas.
 - Smoke admission requires exactly six treatment/direction tuples and produces no report.
 - Smoke and full evidence each retain exactly six full-screen smoke PNG attachments and no controller capture records.
-- Publication requires six diagnostic smoke records plus exactly one primary block: 54 runs arranged as three sessions, three pairs per session, three treatments, and two directions, yielding nine paired clusters. The publication tables contain only those 54 primary runs.
+- Publication requires six diagnostic smoke records plus exactly one primary block: 54 runs arranged as three sessions, three pairs per session, three treatments, and two directions, yielding nine paired clusters. Canonical JSON contains those 54 primary rows and their raw callback samples; compact Markdown contains no per-run table.
 - A successful full reduction produces revision-5 JSON and Markdown with status `complete`, including the four auditable travel-equivalence decisions; a blocked population produces no timing classification. Historical revision-3 and revision-4 reports remain unchanged.
 
 ## Edge cases and failure modes
@@ -58,6 +58,10 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 ## Concurrency and memory behavior
 
 - Reduction is deterministic and single-process; it creates no worker pool and launches no app.
+- Raw evidence hashing is linear in retained bytes and runs in two bounded
+  passes so the pre-analysis inventory can be checked immediately before write;
+  it adds no measured app work and keeps only one digest state plus one compact
+  inventory entry per file.
 - Visual evaluation is linear in the cropped RGBA surfaces. Exact-population admission runs before expensive screenshot and hostile-mutation work. Hostile images are constructed, measured, and dropped one at a time instead of retaining all nine full surfaces together.
 - Each of the six nine-cluster confidence intervals sorts nine values once and
   selects ranks 2 and 8. The exact binomial method achieves 96.09375 percent
@@ -72,6 +76,8 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 - Worst-tile and exact RGB error share one tile traversal, and the idiomatic reference rows use their mathematical identity result instead of rescanning a surface against itself.
 - Dense near-duplicate device work is avoided: smoke is six tuples, while the 54 primary tuples exist only for the publication-grade clustered comparison.
 - Reports label display-link observations as callback pacing, never presented-frame or photon latency.
+- Mixed comparator outcomes remain mixed in both JSON rows and the fixed-order
+  terminal decision; the reducer never synthesizes a global framework verdict.
 
 ## Feature flags and cfgs
 
@@ -92,6 +98,10 @@ cargo test --locked -p oxide-feed-v1-reducer
 
 - 2026-08-07: Added cleanup revision 3 with predeclared build/result/evidence/file fuses and exact three-process absence.
 - 2026-08-07: Bound evidence revision 3 to the exact phone, OS/toolchains, resolved Release settings, production Cargo graph, and signed product identities.
+- 2026-08-07: Retained raw callback samples, frozen structured policy, observed
+  cleanup proof, and sorted raw-file hashes in canonical JSON; reduced Markdown
+  to aggregate results with the JSON path/hash and replaced obsolete follow-on
+  language with fixed-order dual-comparator classifications.
 - 2026-08-07: Made all publication callback quantiles one-based nearest-rank,
   changed treatment p50/p95 to medians of nine cluster summaries, and based
   faster classification on those aggregates in revision-5 reports.
