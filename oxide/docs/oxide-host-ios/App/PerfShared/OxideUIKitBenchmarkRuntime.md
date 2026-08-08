@@ -21,6 +21,7 @@
 
 ## Logic narrative
 - The runtime chooses a benchmark case, drives UIKit or Oxide host paths, samples host stats, validates visible output, and serializes report rows.
+- Frame-cadence summaries include the exact benchmark test name. This lets the Rust device runner reuse cadence captured during a batched XCTest pass without relying on line order or launching the same workload again.
 - UIKit launch tests wait on the app window and lifecycle handshakes; the launch root and ready label carry no accessibility-only test identifiers, and benchmark setup does not configure a platform motion preference.
 - `OxideHostStats` must match the Rust `#[repr(C)]` layout exactly because Rust writes the whole struct through the Swift out-pointer.
 - The 2026-06-22 change adds the host idle/submission tail fields to the Swift mirror so the out-parameter size matches Rust and does not overwrite adjacent Swift stack storage.
@@ -49,8 +50,10 @@
 
 ## Testing and benchmarks
 - Mirror guard coverage is provided by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
+- `OxideHostPerfTests` verifies that console and direct encoder cadence payloads preserve their benchmark test name.
 
 ## Changelog
+- 2026-08-07: added exact test identity to frame-cadence summaries so batched device evidence can be reused without cross-test attribution.
 - 2026-08-06: removed launch-only accessibility identifiers, switched XCTest readiness to the application window, and removed benchmark dependence on platform motion preferences.
 - 2026-07-15: added dedicated idiomatic and optimized 1,000-image region-grid parity paths; the optimized path precomposes the immutable grid and scrolls one layer instead of redrawing visible images at every phase.
 - 2026-06-22: added missing host idle/submission tail fields to the Swift `OxideHostStats` mirror and documented the benchmark ABI contract.

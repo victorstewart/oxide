@@ -30,9 +30,10 @@ use xtask::{
     parse_apple_development_team_from_security_output, parse_available_ios_sim_destination,
     parse_devicectl_display_backlight_active, parse_devicectl_lock_state_text,
     parse_oxide_app_host_debug_summary, parse_oxide_benchmark_metadata,
-    parse_oxide_camera_contract_summary, parse_oxide_frame_cadence_summary,
-    parse_oxide_memory_summary, parse_oxide_stage_summary, parse_oxide_static_idle_summary,
-    parse_oxide_tick_ring, parse_provisioning_profile_team_identifier,
+    parse_oxide_camera_contract_summary, parse_oxide_frame_cadence_summaries_by_test,
+    parse_oxide_frame_cadence_summary, parse_oxide_memory_summary, parse_oxide_stage_summary,
+    parse_oxide_static_idle_summary, parse_oxide_tick_ring,
+    parse_provisioning_profile_team_identifier,
     parse_react_native_device_report_json, parse_uikit_report_json, parse_xctrace_summary_window,
     parse_xctrace_tables, parse_xctrace_toc_tables,
     perf_frame_capture_relative_source_for_test_name, perf_report_matches_case_ids,
@@ -1064,7 +1065,7 @@ fn parse_oxide_memory_summary_maps_memory_metrics() {
 fn parse_oxide_frame_cadence_summary_maps_hitch_and_missed_frames() {
     let stdout = concat!(
         "OXIDE_READY testSpinnerSpin\n",
-        "OXIDE_FRAME_CADENCE_SUMMARY {\"metrics\":{\"frame_interval_ms\":{\"unit\":\"ms\",\"min\":8.0,\"max\":20.0,\"mean\":10.0,\"median\":8.3,\"p95\":18.0,\"p99\":20.0,\"samples\":12},\"frame_budget_ms\":{\"unit\":\"ms\",\"min\":8.3,\"max\":8.3,\"mean\":8.3,\"median\":8.3,\"p95\":8.3,\"p99\":8.3,\"samples\":13},\"hitch_ms_per_s\":{\"unit\":\"ms/s\",\"min\":3.5,\"max\":3.5,\"mean\":3.5,\"median\":3.5,\"p95\":3.5,\"p99\":3.5,\"samples\":1},\"missed_frames\":{\"unit\":\"frames\",\"min\":2.0,\"max\":2.0,\"mean\":2.0,\"median\":2.0,\"p95\":2.0,\"p99\":2.0,\"samples\":1},\"missed_frames_per_s\":{\"unit\":\"frames/s\",\"min\":4.0,\"max\":4.0,\"mean\":4.0,\"median\":4.0,\"p95\":4.0,\"p99\":4.0,\"samples\":1}}}\n",
+        "OXIDE_FRAME_CADENCE_SUMMARY {\"testName\":\"testSpinnerSpin\",\"metrics\":{\"frame_interval_ms\":{\"unit\":\"ms\",\"min\":8.0,\"max\":20.0,\"mean\":10.0,\"median\":8.3,\"p95\":18.0,\"p99\":20.0,\"samples\":12},\"frame_budget_ms\":{\"unit\":\"ms\",\"min\":8.3,\"max\":8.3,\"mean\":8.3,\"median\":8.3,\"p95\":8.3,\"p99\":8.3,\"samples\":13},\"hitch_ms_per_s\":{\"unit\":\"ms/s\",\"min\":3.5,\"max\":3.5,\"mean\":3.5,\"median\":3.5,\"p95\":3.5,\"p99\":3.5,\"samples\":1},\"missed_frames\":{\"unit\":\"frames\",\"min\":2.0,\"max\":2.0,\"mean\":2.0,\"median\":2.0,\"p95\":2.0,\"p99\":2.0,\"samples\":1},\"missed_frames_per_s\":{\"unit\":\"frames/s\",\"min\":4.0,\"max\":4.0,\"mean\":4.0,\"median\":4.0,\"p95\":4.0,\"p99\":4.0,\"samples\":1}}}\n",
         "OXIDE_COMPLETE testSpinnerSpin\n"
     );
 
@@ -1076,6 +1077,26 @@ fn parse_oxide_frame_cadence_summary_maps_hitch_and_missed_frames() {
     assert_eq!(cadence["frame_interval_ms"].p99, 20.0);
     assert_eq!(cadence["frame_budget_ms"].samples, 13);
     assert_eq!(cadence["hitch_ms_per_s"].source, UIKitMetricSource::DeviceConsoleFrameCadence);
+}
+
+#[test]
+fn parse_oxide_frame_cadence_summaries_keeps_exact_test_ownership()
+{
+   let stdout = concat!(
+      "OXIDE_FRAME_CADENCE_SUMMARY {\"testName\":\"testLabelEncode\",\"metrics\":{\"frame_interval_ms\":{\"unit\":\"ms\",\"median\":8.3}}}\n",
+      "OXIDE_FRAME_CADENCE_SUMMARY {\"testName\":\"testImageDecode\",\"metrics\":{\"frame_interval_ms\":{\"unit\":\"ms\",\"median\":16.7}}}\n",
+   );
+
+   let cadence_by_test = parse_oxide_frame_cadence_summaries_by_test(stdout)
+      .expect("parse exact-test cadence summaries");
+
+   assert_eq!(cadence_by_test.len(), 2);
+   assert_eq!(cadence_by_test["testLabelEncode"]["frame_interval_ms"].median, 8.3);
+   assert_eq!(cadence_by_test["testImageDecode"]["frame_interval_ms"].median, 16.7);
+   assert_eq!(
+      cadence_by_test["testLabelEncode"]["frame_interval_ms"].source,
+      UIKitMetricSource::DeviceConsoleFrameCadence,
+   );
 }
 
 #[test]

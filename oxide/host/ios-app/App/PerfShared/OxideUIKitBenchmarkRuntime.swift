@@ -1078,6 +1078,7 @@ private struct OxideMemorySummaryPayload: Codable
 
 private struct OxideFrameCadenceSummaryPayload: Codable
 {
+    let testName: String
     let metrics: [String: OxideStageMetricSummary]
 }
 
@@ -1249,10 +1250,13 @@ func encodeOxideMemorySummaryLine(
 }
 
 func encodeOxideFrameCadenceSummaryLine(
+    testName: String,
     metrics: [String: OxideStageMetricSummary]
 ) -> String?
 {
-    guard let data = try? JSONEncoder().encode(OxideFrameCadenceSummaryPayload(metrics: metrics)),
+    guard let data = try? JSONEncoder().encode(
+        OxideFrameCadenceSummaryPayload(testName: testName, metrics: metrics)
+    ),
           let json = String(data: data, encoding: .utf8)
     else
     {
@@ -1298,7 +1302,7 @@ final class PerfFrameCadenceProbe: NSObject
         displayLink = link
     }
 
-    func endSummaryLine() -> String?
+    func endSummaryLine(testName: String) -> String?
     {
         displayLink?.invalidate()
         displayLink = nil
@@ -1316,7 +1320,7 @@ final class PerfFrameCadenceProbe: NSObject
             "missed_frames": singleCadenceSummary(missedFrames, unit: "frames"),
             "missed_frames_per_s": singleCadenceSummary(missedFrames / elapsedSeconds, unit: "frames/s"),
         ]
-        return encodeOxideFrameCadenceSummaryLine(metrics: metrics)
+        return encodeOxideFrameCadenceSummaryLine(testName: testName, metrics: metrics)
     }
 
     @objc
@@ -2149,7 +2153,7 @@ func runConsoleMeasuredBenchmarkPassesWithCadence(
     return (
         samples.workloadMs,
         samples.residentBytes,
-        cadenceProbe.endSummaryLine()
+        cadenceProbe.endSummaryLine(testName: benchmark.testName)
     )
 }
 

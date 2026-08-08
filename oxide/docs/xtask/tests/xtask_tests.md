@@ -45,7 +45,7 @@ Call flow:
 - Resumable-root stamp tests prove only an exact full evidence identity retains checkpoints; changes to source, toolchain, configuration, artifact, device OS, stage, ordered cases, trace duration, environment, report label, or power input clear them while preserving DerivedData, and legacy build-only stamps fail closed.
 - `standalone_device_comparison_failures_precede_all_report_outputs()`: freezes pre-write comparison admission and final source recapture for UIKit, React Native, and Oxide JSON/latest/datestamp writers.
 - `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes arm64-only device and Simulator settings in the Oxide host and React Native camera benchmark projects and requires every scripted Rust build to honor the workspace lockfile.
-- UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
+- UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, exact-test cadence ownership, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
 - Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, pre-write promotion gates, and committed-baseline status.
 - Trace tests exercise table/schema discovery, duration windows, signpost regions, CPU hotspots, GPU summaries, energy conversion, and unit normalization.
@@ -60,7 +60,7 @@ featureless `cargo test` pass while requiring the all-target `cargo check`
 replacement. It validates orchestration without recursively launching the
 workspace suite from inside an integration test.
 
-Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. The canonical-selector tests treat row count as a consequence of five matched comparisons: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
+Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. Cadence fixtures carry their originating XCTest method and prove that adjacent batched summaries remain mapped to that exact test instead of being attributed by output order. The canonical-selector tests treat row count as a consequence of five matched comparisons: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 

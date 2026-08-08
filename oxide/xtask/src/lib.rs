@@ -1958,7 +1958,7 @@ pub enum UIKitMetricFallbackMode {
     CompositorInclusiveGpuIntervals,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct UIKitMetricSummary {
     pub unit: String,
@@ -2072,6 +2072,7 @@ struct UIKitMetricsBatchRun {
     case_ids: BTreeSet<String>,
     parsed_cases: BTreeMap<String, UIKitPerfCase>,
     benchmark_metadata: BTreeMap<String, OxideBenchmarkMetadataPayload>,
+    frame_cadence_by_test: BTreeMap<String, BTreeMap<String, UIKitMetricSummary>>,
     skipped_case_notes: BTreeMap<String, String>,
 }
 
@@ -3819,7 +3820,12 @@ fn build_uikit_device_case(
             }
         }
     }
-    if let Some(stdout) = launch_stdout.as_deref() {
+    if launch_stdout
+        .as_deref()
+        .map(|stdout| stdout.contains(OXIDE_FRAME_CADENCE_SUMMARY_PREFIX))
+        .unwrap_or(false)
+    {
+        let stdout = launch_stdout.as_deref().unwrap_or_default();
         match parse_oxide_frame_cadence_summary(stdout) {
             Ok(cadence_metrics) => {
                 notes.push(String::from(
@@ -3833,6 +3839,18 @@ fn build_uikit_device_case(
                 notes.push(format!("Frame cadence status: {}", err));
             }
         }
+    } else if let Some(cadence_metrics) = batch_run.frame_cadence_by_test.get(spec.test_name) {
+        notes.push(String::from(
+            "Frame cadence source: exact-test CADisplayLink summary emitted by the batched XCTest metrics pass.",
+        ));
+        for (name, metric) in cadence_metrics {
+            metrics.insert(name.clone(), metric.clone());
+        }
+    } else if launch_stdout.is_some() {
+        notes.push(format!(
+            "Frame cadence status: missing `{}` marker in device console output",
+            OXIDE_FRAME_CADENCE_SUMMARY_PREFIX
+        ));
     }
     if uikit_device_trace_artifact_exists(&metal_run.trace_path) {
         let renamed_signposts = relabel_xctest_device_signpost_metrics(&mut metrics);
@@ -6826,6 +6844,7 @@ fn capture_uikit_device_report(
             )?
         };
         if trace_enabled
+            && !metrics_batch.frame_cadence_by_test.contains_key(spec.test_name)
             && fs::read_to_string(&gpu_run.launch_stdout_path)
                 .map(|stdout| !stdout.contains(OXIDE_FRAME_CADENCE_SUMMARY_PREFIX))
                 .unwrap_or(true)
@@ -7975,6 +7994,7 @@ fn run_uikit_device_metrics_batch(
     ensure_uikit_device_interactive_ready(root, &device)?;
     let mut metrics_json_fragments = Vec::new();
     let mut benchmark_metadata = BTreeMap::new();
+    let mut frame_cadence_by_test = BTreeMap::new();
     let mut skipped_case_notes = BTreeMap::new();
     let metric_shards = prepare_uikit_metrics_shards(specs, refresh_mode);
     let shard_count = metric_shards.len();
@@ -8120,6 +8140,10 @@ fn run_uikit_device_metrics_batch(
             &mut benchmark_metadata,
             parse_oxide_benchmark_metadata(&stdout)?,
         )?;
+        merge_frame_cadence_summaries(
+            &mut frame_cadence_by_test,
+            parse_oxide_frame_cadence_summaries_by_test(&stdout)?,
+        )?;
         if shard.specs.len() == 1
             && metrics_json.trim() == "[]"
             && uikit_case_uses_ui_test_target(shard.specs[0])
@@ -8190,7 +8214,13 @@ fn run_uikit_device_metrics_batch(
         parsed_cases.insert(case.id.clone(), case);
     }
 
-    Ok(UIKitMetricsBatchRun { case_ids, parsed_cases, benchmark_metadata, skipped_case_notes })
+    Ok(UIKitMetricsBatchRun {
+        case_ids,
+        parsed_cases,
+        benchmark_metadata,
+        frame_cadence_by_test,
+        skipped_case_notes,
+    })
 }
 
 pub fn missing_uikit_metrics_case_ids(
@@ -12981,7 +13011,9 @@ struct OxideMemorySummaryPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OxideFrameCadenceSummaryPayload {
+    test_name: String,
     metrics: BTreeMap<String, UIKitMetricSummary>,
 }
 
@@ -13250,9 +13282,44 @@ pub fn parse_oxide_frame_cadence_summary(
     stdout: &str,
 ) -> Result<BTreeMap<String, UIKitMetricSummary>> {
     let summaries = parse_all_oxide_frame_cadence_summaries(stdout)?;
-    summaries.into_iter().last().with_context(|| {
+    summaries.into_iter().last().map(|payload| payload.metrics).with_context(|| {
         format!("missing `{}` marker in device console output", OXIDE_FRAME_CADENCE_SUMMARY_PREFIX)
     })
+}
+
+pub fn parse_oxide_frame_cadence_summaries_by_test(
+    stdout: &str,
+) -> Result<BTreeMap<String, BTreeMap<String, UIKitMetricSummary>>> {
+    let mut summaries_by_test = BTreeMap::new();
+    for payload in parse_all_oxide_frame_cadence_summaries(stdout)? {
+        if payload.test_name.is_empty() {
+            bail!("frame cadence summary has an empty test name");
+        }
+        if let Some(existing) = summaries_by_test.get(&payload.test_name) {
+            if existing != &payload.metrics {
+                bail!("conflicting frame cadence summaries for `{}`", payload.test_name);
+            }
+            continue;
+        }
+        summaries_by_test.insert(payload.test_name, payload.metrics);
+    }
+    Ok(summaries_by_test)
+}
+
+fn merge_frame_cadence_summaries(
+    into: &mut BTreeMap<String, BTreeMap<String, UIKitMetricSummary>>,
+    next: BTreeMap<String, BTreeMap<String, UIKitMetricSummary>>,
+) -> Result<()> {
+    for (test_name, metrics) in next {
+        if let Some(existing) = into.get(&test_name) {
+            if existing != &metrics {
+                bail!("conflicting frame cadence summaries for `{}` across shards", test_name);
+            }
+            continue;
+        }
+        into.insert(test_name, metrics);
+    }
+    Ok(())
 }
 
 fn parse_all_oxide_memory_summaries(
@@ -13279,17 +13346,20 @@ fn parse_all_oxide_memory_summaries(
 
 fn parse_all_oxide_frame_cadence_summaries(
     stdout: &str,
-) -> Result<Vec<BTreeMap<String, UIKitMetricSummary>>> {
+) -> Result<Vec<OxideFrameCadenceSummaryPayload>> {
     let mut payloads = Vec::new();
     for line in stdout.lines() {
         if let Some(index) = line.find(OXIDE_FRAME_CADENCE_SUMMARY_PREFIX) {
             let payload_json =
                 line[(index + OXIDE_FRAME_CADENCE_SUMMARY_PREFIX.len())..].trim().to_string();
-            let payload: OxideFrameCadenceSummaryPayload = serde_json::from_str(&payload_json)
+            let mut payload: OxideFrameCadenceSummaryPayload = serde_json::from_str(&payload_json)
                 .with_context(|| "parsing Oxide frame cadence summary json")?;
-            let mut metrics = payload.metrics;
-            set_metric_metadata(&mut metrics, UIKitMetricSource::DeviceConsoleFrameCadence, &[]);
-            payloads.push(metrics);
+            set_metric_metadata(
+                &mut payload.metrics,
+                UIKitMetricSource::DeviceConsoleFrameCadence,
+                &[],
+            );
+            payloads.push(payload);
         }
     }
     Ok(payloads)

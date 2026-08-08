@@ -419,6 +419,10 @@ final class OxideHostPerfTests: XCTestCase
         XCTAssertTrue(
             samples.frameCadenceSummaryLine?.contains(oxideFrameCadenceSummaryPrefix) == true
         )
+        XCTAssertTrue(
+            samples.frameCadenceSummaryLine?.contains("\"testName\":\"testConsoleCadenceProbe\"")
+                == true
+        )
     }
 
     private func measureBenchmark(_ benchmark: OxideUIKitBenchmark)
@@ -461,7 +465,7 @@ final class OxideHostPerfTests: XCTestCase
         {
             runMeasuredBenchmarkPass(benchmark)
         }
-        if let cadenceLine = cadenceProbe.endSummaryLine()
+        if let cadenceLine = cadenceProbe.endSummaryLine(testName: benchmark.testName)
         {
             emitConsoleLine(cadenceLine)
         }
@@ -547,6 +551,7 @@ final class OxideHostPerfTests: XCTestCase
             samples: 1
         )
         let line = encodeOxideFrameCadenceSummaryLine(
+            testName: "testFrameCadenceSummaryLineEncodesHitchAndMissedMetrics",
             metrics: [
                 "missed_frames": summary,
                 "hitch_ms_per_s": OxideStageMetricSummary(
@@ -564,6 +569,11 @@ final class OxideHostPerfTests: XCTestCase
 
         XCTAssertNotNil(line)
         XCTAssertTrue(line!.contains(oxideFrameCadenceSummaryPrefix))
+        XCTAssertTrue(
+            line!.contains(
+                "\"testName\":\"testFrameCadenceSummaryLineEncodesHitchAndMissedMetrics\""
+            )
+        )
         XCTAssertTrue(line!.contains("missed_frames"))
         XCTAssertTrue(line!.contains("hitch_ms_per_s"))
     }
