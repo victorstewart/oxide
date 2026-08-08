@@ -5,9 +5,9 @@ use std::process::Command;
 use oxide_feed_v1_reducer::{
    admit_smoke_prefix, callback_deadline_counts, exact_median_confidence_interval,
    frozen_components, frozen_order_index, nearest_rank_quantile, reduce,
-   strict_validate_failure_json, strict_validate_run_json, travel_equivalence_passes,
-   verify_attachment_export, verify_no_attachment_export, verify_smoke, visual_metrics,
-   ReducePaths, RgbaImage,
+   strict_validate_failure_json, strict_validate_run_json, strict_validate_runner_json,
+   travel_equivalence_passes, verify_attachment_export, verify_no_attachment_export,
+   verify_smoke, visual_metrics, ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -182,6 +182,63 @@ fn exact_nine_cluster_interval_freezes_ranks_and_coverage() -> Result<(), String
    let mut nonfinite = deltas;
    nonfinite[4] = f64::NAN;
    assert!(exact_median_confidence_interval(&nonfinite).is_err());
+   Ok(())
+}
+
+#[test]
+fn runner_proof_preserves_the_first_blocker_without_faking_test_failure() -> Result<(), String>
+{
+   let complete = json!({
+      "schema": "oxide.feed-v1.runner",
+      "schema_revision": 1,
+      "mode": "full",
+      "status": "complete",
+      "first_failure_stage": null,
+      "first_failure_reason": null,
+      "smoke_admitted": true,
+      "phases": [
+         { "phase": "smoke", "started": true, "succeeded": true },
+         { "phase": "primary", "started": true, "succeeded": true }
+      ]
+   });
+   assert_eq!(strict_validate_runner_json(
+      &serde_json::to_vec(&complete).map_err(|error| error.to_string())?
+   )?, None);
+
+   let mut blocked = complete.clone();
+   blocked["status"] = json!("blocked");
+   blocked["first_failure_stage"] = json!("primary-attachments");
+   blocked["first_failure_reason"] = json!("the primary result bundle did not prove zero attachments");
+   assert_eq!(strict_validate_runner_json(
+      &serde_json::to_vec(&blocked).map_err(|error| error.to_string())?
+   )?, Some("runner blocked at primary-attachments: the primary result bundle did not prove zero attachments".to_string()));
+
+   let mut contradiction = complete.clone();
+   contradiction["first_failure_stage"] = json!("cleanup");
+   contradiction["first_failure_reason"] = json!("failed");
+   assert!(strict_validate_runner_json(
+      &serde_json::to_vec(&contradiction).map_err(|error| error.to_string())?
+   ).is_err());
+   blocked["first_failure_reason"] = Value::Null;
+   assert!(strict_validate_runner_json(
+      &serde_json::to_vec(&blocked).map_err(|error| error.to_string())?
+   ).is_err());
+   blocked["unexpected"] = json!(true);
+   assert!(strict_validate_runner_json(
+      &serde_json::to_vec(&blocked).map_err(|error| error.to_string())?
+   ).is_err());
+
+   let mut skipped_smoke = complete;
+   skipped_smoke["status"] = json!("blocked");
+   skipped_smoke["first_failure_stage"] = json!("smoke-test");
+   skipped_smoke["first_failure_reason"] = json!("smoke failed");
+   skipped_smoke["smoke_admitted"] = json!(false);
+   skipped_smoke["phases"][0]["succeeded"] = json!(false);
+   skipped_smoke["phases"][1]["started"] = json!(false);
+   skipped_smoke["phases"][1]["succeeded"] = json!(false);
+   assert!(strict_validate_runner_json(
+      &serde_json::to_vec(&skipped_smoke).map_err(|error| error.to_string())?
+   )?.is_some());
    Ok(())
 }
 
@@ -614,9 +671,13 @@ fn six_valid_smoke_tuples_pass_smoke_but_not_full_publication() -> Result<(), St
    verify_attachment_export(&root.join("raw/attachments"))?;
    let cleanup_path = root.join("raw/cleanup.json");
    let cleanup = fs::read(&cleanup_path).map_err(|error| error.to_string())?;
+   let runner_path = root.join("raw/runner.json");
+   let runner = fs::read(&runner_path).map_err(|error| error.to_string())?;
    fs::remove_file(&cleanup_path).map_err(|error| error.to_string())?;
+   fs::remove_file(&runner_path).map_err(|error| error.to_string())?;
    admit_smoke_prefix(&root)?;
    fs::write(&cleanup_path, cleanup).map_err(|error| error.to_string())?;
+   fs::write(&runner_path, runner).map_err(|error| error.to_string())?;
    verify_smoke(&root)?;
    rewrite_travel(
       &root.join("raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o1-uikit-optimized-forward-test.json"),
@@ -1094,6 +1155,27 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
    {
       write_runtime("primary")?;
    }
+   let phases = if full
+   {
+      json!([
+         { "phase": "smoke", "started": true, "succeeded": true },
+         { "phase": "primary", "started": true, "succeeded": true }
+      ])
+   }
+   else
+   {
+      json!([{ "phase": "smoke", "started": true, "succeeded": true }])
+   };
+   fs::write(raw.join("runner.json"), serde_json::to_vec(&json!({
+      "schema": "oxide.feed-v1.runner",
+      "schema_revision": 1,
+      "mode": if full { "full" } else { "smoke" },
+      "status": "complete",
+      "first_failure_stage": null,
+      "first_failure_reason": null,
+      "smoke_admitted": if full { Some(true) } else { None },
+      "phases": phases
+   })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
 
    let top_png = smoke_png("top")?;
    let bottom_png = smoke_png("bottom")?;

@@ -680,6 +680,13 @@ pub fn strict_validate_failure_json(bytes: &[u8]) -> Result<(), String>
    validate_fixture(&record.fixture)
 }
 
+pub fn strict_validate_runner_json(bytes: &[u8]) -> Result<Option<String>, String>
+{
+   let proof: RunnerProof = serde_json::from_slice(bytes)
+      .map_err(|error| format!("strict runner proof: {error}"))?;
+   validate_runner_proof(&proof)
+}
+
 pub fn frozen_components(start_state: &str) -> Result<Vec<Component>, String>
 {
    frozen_visible_components(start_state)
@@ -2037,6 +2044,29 @@ struct CleanupProof
    runtime_seconds: f64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunnerProof
+{
+   schema: String,
+   schema_revision: u32,
+   mode: String,
+   status: String,
+   first_failure_stage: Option<String>,
+   first_failure_reason: Option<String>,
+   smoke_admitted: Option<bool>,
+   phases: Vec<RunnerPhaseProof>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunnerPhaseProof
+{
+   phase: String,
+   started: bool,
+   succeeded: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct CleanupEvidence
 {
@@ -2315,6 +2345,60 @@ fn cleanup_admitted(proof: &CleanupProof) -> bool
       && proof.runtime_seconds <= 20.0 * 60.0
 }
 
+fn validate_runner_proof(proof: &RunnerProof) -> Result<Option<String>, String>
+{
+   if proof.schema != "oxide.feed-v1.runner"
+      || proof.schema_revision != 1
+      || !matches!(proof.mode.as_str(), "smoke" | "full")
+      || !matches!(proof.status.as_str(), "complete" | "blocked")
+   {
+      return Err("runner proof identity mismatch".to_string());
+   }
+   let expected_phases: BTreeSet<&str> = match proof.mode.as_str()
+   {
+      "full" => ["smoke", "primary"].into_iter().collect(),
+      "smoke" => ["smoke"].into_iter().collect(),
+      _ => unreachable!(),
+   };
+   let observed_phases: BTreeSet<&str> = proof.phases.iter().map(|phase| phase.phase.as_str()).collect();
+   if proof.phases.len() != expected_phases.len()
+      || observed_phases != expected_phases
+      || (proof.mode == "full" && proof.smoke_admitted.is_none())
+      || (proof.mode == "smoke" && proof.smoke_admitted.is_some())
+      || proof.phases.iter().any(|phase| phase.succeeded && !phase.started)
+   {
+      return Err("runner proof phase population mismatch".to_string());
+   }
+   if proof.mode == "full"
+   {
+      let smoke = proof.phases.iter().find(|phase| phase.phase == "smoke")
+         .ok_or_else(|| "runner proof has no smoke phase".to_string())?;
+      let primary = proof.phases.iter().find(|phase| phase.phase == "primary")
+         .ok_or_else(|| "runner proof has no primary phase".to_string())?;
+      if (proof.smoke_admitted == Some(true) && !smoke.succeeded)
+         || (primary.started && proof.smoke_admitted != Some(true))
+      {
+         return Err("runner proof contradicts smoke admission order".to_string());
+      }
+   }
+   if proof.status == "complete"
+   {
+      if proof.first_failure_stage.is_some()
+         || proof.first_failure_reason.is_some()
+         || proof.phases.iter().any(|phase| !phase.started || !phase.succeeded)
+         || (proof.mode == "full" && proof.smoke_admitted != Some(true))
+      {
+         return Err("complete runner proof contradicts its phase outcomes".to_string());
+      }
+      return Ok(None);
+   }
+   let stage = proof.first_failure_stage.as_deref().filter(|value| !value.is_empty())
+      .ok_or_else(|| "blocked runner proof has no first failure stage".to_string())?;
+   let reason = proof.first_failure_reason.as_deref().filter(|value| !value.is_empty())
+      .ok_or_else(|| "blocked runner proof has no first failure reason".to_string())?;
+   Ok(Some(format!("runner blocked at {stage}: {reason}")))
+}
+
 fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, device_after_name: &str) -> Result<Report, String>
 {
    if !paths.run_root.is_dir()
@@ -2348,6 +2432,7 @@ fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, 
       }
    };
    let mut cleanup: Option<CleanupProof> = None;
+   let mut runner_proof: Option<RunnerProof> = None;
    let mut controller_runtimes = Vec::new();
    let mut evidence_manifest: Option<EvidenceManifest> = None;
    let mut evidence_manifest_path: Option<PathBuf> = None;
@@ -2456,6 +2541,21 @@ fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, 
             }
             Err(error) => blockers.push(format!("strict cleanup schema {}: {error}", path.display())),
          },
+         Some("oxide.feed-v1.runner") => match serde_json::from_value::<RunnerProof>(value)
+         {
+            Ok(proof) =>
+            {
+               if !same_path(path, &paths.run_root.join("raw/runner.json"))
+               {
+                  blockers.push(format!("runner proof has a noncanonical source: {}", path.display()));
+               }
+               if runner_proof.replace(proof).is_some()
+               {
+                  blockers.push("multiple runner proofs".to_string());
+               }
+            }
+            Err(error) => blockers.push(format!("strict runner proof {}: {error}", path.display())),
+         },
          Some("oxide.feed-v1.controller-runtime") => match serde_json::from_value::<ControllerRuntimeProof>(value)
          {
             Ok(proof) =>
@@ -2545,6 +2645,26 @@ fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, 
          failure.stage,
          failure.message
       ));
+   }
+
+   if population == Population::Full || require_cleanup
+   {
+      match runner_proof
+      {
+         Some(proof) if (population == Population::Full && proof.mode == "full")
+            || (population == Population::Smoke && proof.mode == "smoke") => match validate_runner_proof(&proof)
+         {
+            Ok(Some(blocker)) => blockers.push(blocker),
+            Ok(None) => {}
+            Err(error) => blockers.push(error),
+         },
+         Some(_) => blockers.push("runner proof mode does not match the requested population".to_string()),
+         None => blockers.push("missing runner proof".to_string()),
+      }
+   }
+   else if runner_proof.is_some()
+   {
+      blockers.push("smoke admission must precede runner proof creation".to_string());
    }
 
    if let Err(error) = validate_controller_runtimes(&controller_runtimes, population)

@@ -141,7 +141,10 @@ REDUCER_REMOVED=false
 TEST_SUCCEEDED=false
 SMOKE_TEST_SUCCEEDED=false
 SMOKE_ADMITTED=false
+PRIMARY_STARTED=false
 PRIMARY_TEST_SUCCEEDED=false
+FIRST_FAILURE_STAGE=""
+FIRST_FAILURE_REASON=""
 VERIFIED_ATTACHMENT_COUNT=0
 TEST_STATUS=1
 BUILD_ROOT_BYTES=0
@@ -149,6 +152,15 @@ RESULT_BUNDLE_BYTES=0
 RETAINED_FILE_COUNT=0
 LARGEST_RETAINED_FILE_BYTES=0
 START_SECONDS="$(date +%s)"
+
+record_failure()
+{
+   if [[ -z "$FIRST_FAILURE_STAGE" ]]
+   then
+      FIRST_FAILURE_STAGE="$1"
+      FIRST_FAILURE_REASON="$2"
+   fi
+}
 
 cleanup_backstop()
 {
@@ -984,6 +996,8 @@ then
    if [[ $TEST_STATUS -eq 0 ]]
    then
       SMOKE_TEST_SUCCEEDED=true
+   else
+      record_failure smoke-test "smoke XCTest failed"
    fi
    if [[ -d "$SMOKE_RESULT_BUNDLE" ]] \
       && xcrun xcresulttool export attachments --path "$SMOKE_RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
@@ -994,6 +1008,7 @@ then
       VERIFIED_ATTACHMENT_COUNT=$EXPECTED_ATTACHMENTS
    else
       echo "smoke result-bundle attachment export or verification failed" >&2
+      record_failure smoke-attachments "smoke result-bundle attachment verification failed"
       TEST_STATUS=1
    fi
    SMOKE_RESULT_REMOVED=false
@@ -1002,6 +1017,7 @@ then
       SMOKE_RESULT_REMOVED=true
    else
       echo "smoke result bundle could not be removed from retained evidence" >&2
+      record_failure smoke-result-cleanup "the smoke result bundle remained in retained evidence"
       TEST_STATUS=1
    fi
    SMOKE_EXPORT_OK=true
@@ -1026,6 +1042,7 @@ then
    if [[ "$SMOKE_EXPORT_OK" != "true" ]]
    then
       echo "smoke evidence export failed" >&2
+      record_failure smoke-export "the smoke app, controller, or device endpoint evidence could not be exported"
       TEST_STATUS=1
    fi
    if [[ $TEST_STATUS -eq 0 ]]
@@ -1033,10 +1050,12 @@ then
       if ! verify_evidence_manifest_snapshot before-primary
       then
          echo "build or source identity changed before primary admission" >&2
+         record_failure pre-primary-identity "the manifest-bound source or binaries changed after smoke"
          TEST_STATUS=1
       elif ! "$REDUCER" admit-smoke-prefix "$RESULT_ROOT" >"$RAW_ROOT/smoke-admission.log" 2>&1
       then
          echo "smoke admission blocked; primary population will not start" >&2
+         record_failure smoke-admission "the frozen smoke reducer gate blocked"
          TEST_STATUS=1
       else
          SMOKE_ADMITTED=true
@@ -1048,6 +1067,7 @@ then
    then
       if ! require_unlocked_device "$RAW_ROOT/lock-before-primary.json"
       then
+         record_failure primary-lock "the device was locked before the primary population"
          TEST_STATUS=1
       else
          PRIMARY_RESULT_BUNDLE="$RAW_ROOT/feed-v1-primary.xcresult"
@@ -1055,13 +1075,17 @@ then
          if [[ $PRIMARY_ALLOWANCE -le 0 ]]
          then
             echo "global 20-minute fuse expired before primary" >&2
+            record_failure primary-runtime-cap "the global 20-minute fuse expired before primary"
             TEST_STATUS=1
          else
+            PRIMARY_STARTED=true
             run_controller_test FeedV1Pilot "$PRIMARY_RESULT_BUNDLE" "$RAW_ROOT/test-primary.log" "$PRIMARY_ALLOWANCE"
             TEST_STATUS=$?
             if [[ $TEST_STATUS -eq 0 ]]
             then
                PRIMARY_TEST_SUCCEEDED=true
+            else
+               record_failure primary-test "primary XCTest failed or exceeded the remaining global runtime"
             fi
          fi
          PRIMARY_ATTACHMENT_ROOT="$BUILD_ROOT/primary-attachments"
@@ -1075,6 +1099,7 @@ then
             :
          else
             echo "primary result bundle did not prove an attachment-free population" >&2
+            record_failure primary-attachments "the primary result bundle did not prove zero attachments"
             TEST_STATUS=1
          fi
          if move_result_bundle "$PRIMARY_RESULT_BUNDLE" feed-v1-primary
@@ -1082,6 +1107,7 @@ then
             PRIMARY_RESULT_REMOVED=true
          else
             echo "primary result bundle could not be removed from retained evidence" >&2
+            record_failure primary-result-cleanup "the primary result bundle remained in retained evidence"
             TEST_STATUS=1
          fi
 
@@ -1109,11 +1135,13 @@ then
          if [[ "$PRIMARY_EXPORT_OK" != "true" ]]
          then
             echo "primary evidence export or smoke/primary merge failed" >&2
+            record_failure primary-export "primary app or controller evidence could not be merged without conflict"
             TEST_STATUS=1
          fi
          if [[ ! -f "$RAW_ROOT/controller-documents/oxide-feed-v1-controller-runtime-primary.json" ]]
          then
             echo "primary controller runtime proof is missing" >&2
+            record_failure primary-runtime "the primary controller runtime proof is missing"
             TEST_STATUS=1
          fi
       fi
@@ -1133,6 +1161,8 @@ else
    if [[ $TEST_STATUS -eq 0 ]]
    then
       TEST_SUCCEEDED=true
+   else
+      record_failure "$MODE-test" "$MODE XCTest failed"
    fi
    if [[ -d "$RESULT_BUNDLE" ]] \
       && xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
@@ -1143,6 +1173,7 @@ else
       VERIFIED_ATTACHMENT_COUNT=$EXPECTED_ATTACHMENTS
    else
       echo "result-bundle attachment export or verification failed" >&2
+      record_failure "$MODE-attachments" "$MODE result-bundle attachment verification failed"
       TEST_STATUS=1
    fi
    if move_result_bundle "$RESULT_BUNDLE" "feed-v1-$MODE"
@@ -1150,6 +1181,7 @@ else
       RESULT_BUNDLE_REMOVED=true
    else
       echo "result bundle could not be removed from retained evidence" >&2
+      record_failure "$MODE-result-cleanup" "$MODE result bundle remained in retained evidence"
       TEST_STATUS=1
    fi
    if ! copy_documents com.oxide.feed-v1.uikit "$RAW_ROOT/uikit-documents" "$RAW_ROOT/copy-uikit.json" \
@@ -1157,6 +1189,7 @@ else
       || ! copy_documents "$CONTROLLER_BUNDLE_ID" "$RAW_ROOT/controller-documents" "$RAW_ROOT/copy-controller.json"
    then
       echo "$MODE evidence export failed" >&2
+      record_failure "$MODE-export" "$MODE app or controller evidence export failed"
       TEST_STATUS=1
    fi
 fi
@@ -1164,6 +1197,7 @@ TEST_ENDED="$(date +%s)"
 if ! verify_evidence_manifest_snapshot after-test
 then
    echo "build or source identity changed during device testing" >&2
+   record_failure post-test-identity "the manifest-bound source or binaries changed during device testing"
    TEST_STATUS=1
 fi
 if [[ -e "$RAW_ROOT/device-after.json" ]] \
@@ -1171,6 +1205,7 @@ if [[ -e "$RAW_ROOT/device-after.json" ]] \
       --json-output "$RAW_ROOT/device-after.json" --quiet
 then
    echo "final physical-device endpoint capture failed or was not exclusive" >&2
+   record_failure final-device-endpoint "the final physical-device endpoint was missing, stale, or could not be captured"
    TEST_STATUS=1
 fi
 
@@ -1178,6 +1213,7 @@ if verify_source_snapshot "device test and evidence export"
 then
    SOURCE_SNAPSHOT_PRESERVED=true
 else
+   record_failure source-snapshot "the Git source snapshot changed during device testing"
    TEST_STATUS=1
 fi
 
@@ -1185,22 +1221,37 @@ if remove_existing_app com.oxide.feed-v1.uikit uikit postclean \
    && remove_existing_app com.oxide.feed-v1.oxide oxide postclean
 then
    APPS_UNINSTALLED=true
+else
+   record_failure app-cleanup "one or both measured apps could not be uninstalled"
+   TEST_STATUS=1
 fi
 if remove_device_processes postclean uikit FeedV1UIKit
 then
    UIKIT_PROCESS_ABSENT=true
+else
+   record_failure uikit-process-cleanup "the UIKit process survived cleanup"
+   TEST_STATUS=1
 fi
 if remove_device_processes postclean oxide FeedV1Oxide
 then
    OXIDE_PROCESS_ABSENT=true
+else
+   record_failure oxide-process-cleanup "the Oxide process survived cleanup"
+   TEST_STATUS=1
 fi
 if remove_controller_processes postclean
 then
    CONTROLLER_PROCESS_ABSENT=true
+else
+   record_failure controller-process-cleanup "the controller process survived cleanup"
+   TEST_STATUS=1
 fi
 if remove_existing_app "$CONTROLLER_BUNDLE_ID" controller postclean
 then
    CONTROLLER_UNINSTALLED=true
+else
+   record_failure controller-cleanup "the controller runner could not be uninstalled"
+   TEST_STATUS=1
 fi
 
 if measure_tree "$BUILD_ROOT"
@@ -1210,6 +1261,7 @@ fi
 if [[ "$BUILD_ROOT_BYTES" -eq 0 || "$BUILD_ROOT_BYTES" -gt "$MAX_BUILD_ROOT_BYTES" ]]
 then
    echo "external build root exceeded its predeclared $MAX_BUILD_ROOT_BYTES-byte fuse" >&2
+   record_failure build-cap "the external build root exceeded its predeclared byte fuse"
    TEST_STATUS=1
 fi
 if [[ "$BUILD_ROOT" == /tmp/oxide-feed-v1-build.* && -d "$BUILD_ROOT" ]]
@@ -1219,24 +1271,69 @@ fi
 if [[ ! -e "$BUILD_ROOT" ]]
 then
    BUILD_REMOVED=true
+else
+   record_failure build-cleanup "the external build root survived cleanup"
+   TEST_STATUS=1
 fi
 
 RUNTIME_SECONDS=$((TEST_ENDED - TEST_STARTED))
 if [[ "$RUNTIME_SECONDS" -gt 1200 ]]
 then
    echo "official physical-device runtime exceeded 20 minutes" >&2
+   record_failure runtime-cap "the measured device workflow exceeded 20 minutes"
    TEST_STATUS=1
 fi
 if [[ "$SOURCE_SNAPSHOT_PRESERVED" != "true" ]] \
    || ! verify_source_snapshot "final reduction"
 then
    SOURCE_SNAPSHOT_PRESERVED=false
+   record_failure final-source-snapshot "the source snapshot was not preserved through final reduction"
    TEST_STATUS=1
 fi
 if ! check_retained_evidence_fuses
 then
+   record_failure retained-evidence-cap "retained evidence exceeded a predeclared resource fuse"
    TEST_STATUS=1
 fi
+if [[ "$MODE" == "full" ]]
+then
+   SMOKE_ADMITTED_JSON=$SMOKE_ADMITTED
+   RUNNER_PHASES_JSON="[
+    { \"phase\": \"smoke\", \"started\": true, \"succeeded\": $SMOKE_TEST_SUCCEEDED },
+    { \"phase\": \"primary\", \"started\": $PRIMARY_STARTED, \"succeeded\": $PRIMARY_TEST_SUCCEEDED }
+  ]"
+else
+   SMOKE_ADMITTED_JSON=null
+   RUNNER_PHASES_JSON="[
+    { \"phase\": \"smoke\", \"started\": true, \"succeeded\": $TEST_SUCCEEDED }
+  ]"
+fi
+if [[ $TEST_STATUS -ne 0 && -z "$FIRST_FAILURE_STAGE" ]]
+then
+   record_failure runner "an unclassified runner stage failed"
+fi
+if [[ $TEST_STATUS -eq 0 ]]
+then
+   RUNNER_STATUS=complete
+   FAILURE_STAGE_JSON=null
+   FAILURE_REASON_JSON=null
+else
+   RUNNER_STATUS=blocked
+   FAILURE_STAGE_JSON="\"$FIRST_FAILURE_STAGE\""
+   FAILURE_REASON_JSON="\"$FIRST_FAILURE_REASON\""
+fi
+cat >"$RAW_ROOT/runner.json" <<EOF
+{
+  "schema": "oxide.feed-v1.runner",
+  "schema_revision": 1,
+  "mode": "$MODE",
+  "status": "$RUNNER_STATUS",
+  "first_failure_stage": $FAILURE_STAGE_JSON,
+  "first_failure_reason": $FAILURE_REASON_JSON,
+  "smoke_admitted": $SMOKE_ADMITTED_JSON,
+  "phases": $RUNNER_PHASES_JSON
+}
+EOF
 RAW_EVIDENCE_BYTES="$(du -sk "$RAW_ROOT" | awk '{print $1 * 1024}')"
 cat >"$RAW_ROOT/cleanup.json" <<EOF
 {
