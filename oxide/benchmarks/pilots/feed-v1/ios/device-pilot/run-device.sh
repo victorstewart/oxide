@@ -408,12 +408,54 @@ remove_existing_app()
    fi
 }
 
+verify_fixture_contracts()
+{
+   local swift_check="$BUILD_ROOT/feed-v1-swift-contract-check"
+   local swift_log="$RAW_ROOT/swift-contract-check.log"
+   local rust_log="$RAW_ROOT/rust-contract-check.log"
+   if ! xcrun swiftc -parse-as-library \
+      -DFEED_V1_CONTRACT_CHECK_MAIN \
+      "$FEED_ROOT/ios/FeedV1Contract.swift" \
+      "$FEED_ROOT/ios/FeedV1OptimizedUIKitConfiguration.swift" \
+      "$FEED_ROOT/ios/FeedV1ContractCheckMain.swift" \
+      -o "$swift_check" \
+      >"$RAW_ROOT/swift-contract-build.log" 2>&1 \
+      || ! "$swift_check" >"$swift_log" 2>&1
+   then
+      echo "Swift canonical fixture preflight failed" >&2
+      return 1
+   fi
+   for expected in \
+      "canonical_sha256=a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473" \
+      "canonical_byte_count=717745" \
+      "content_extent_points=237460" \
+      "maximum_content_offset_points=236616"
+   do
+      if ! grep -Fqx "$expected" "$swift_log"
+      then
+         echo "Swift canonical fixture preflight omitted $expected" >&2
+         return 1
+      fi
+   done
+   if ! CARGO_TARGET_DIR="$BUILD_ROOT/contract-rust-target" cargo test --locked \
+      --manifest-path "$FEED_ROOT/ios/oxide-feed-app/Cargo.toml" \
+      --test contract_tests -- \
+      rust_recipe_reproduces_the_complete_swift_canonical_identity --exact \
+      >"$rust_log" 2>&1
+   then
+      echo "Rust canonical fixture preflight failed" >&2
+      return 1
+   fi
+   verify_source_snapshot "canonical fixture preflight"
+}
+
 trap cleanup_backstop EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 export FEED_V1_SOURCE_ROOT="$SCRIPT_DIR"
-if ! mkdir -p "$GENERATED_PROJECT_ROOT" \
+if ! verify_fixture_contracts \
+   || ! mkdir -p "$GENERATED_PROJECT_ROOT" \
    || ! xcodegen generate \
       --spec "$SCRIPT_DIR/project.yml" \
       --project "$GENERATED_PROJECT_ROOT" \

@@ -14,7 +14,7 @@ This module is the Rust reconstruction of the frozen Swift feed-v1 fixture. It g
 Call graph:
 
 - `FeedFixture::new` -> `RowRecipe::at` -> `mix32` -> height prefix
-- startup admission -> `canonical_fixture_identity` -> every canonical field/row/checker/prefix -> `CanonicalHasher` -> byte count + SHA-256
+- runner Rust host preflight -> `canonical_fixture_identity` -> every canonical field/row/checker/prefix -> `CanonicalHasher` -> byte count + SHA-256
 - visible rendering -> `FeedFixture::visible_row_range` -> `RowRecipe` string/height/checker accessors
 - ready admission/reducer evidence -> `FeedFixture::component_rect_physical_pixels`
 - checker upload -> `checker_rgba_bytes` -> frozen palette/tile/phase recipe
@@ -46,7 +46,7 @@ Call graph:
 
 `FeedFixture::new` evaluates all 2,000 heights once and stores a 2,001-element inclusive prefix. Endpoint extent is the last prefix entry. Visible-range lookup binary-searches the first intersecting row and linearly advances only across the small viewport tail. Component rectangles combine the prefix Y coordinate with fixed row-local geometry and convert once to 3x physical pixels.
 
-`canonical_fixture_identity` is the sole Rust encoder of the Swift canonical order. It streams length-prefixed strings, little-endian integers, colors, font identities, all checker bytes, every row/component field, the supplied fixture prefix, and endpoint geometry into one SHA-256 state while counting the same bytes. Startup admission compares both the count and digest; tests call this production function instead of carrying a second encoder that could drift.
+`canonical_fixture_identity` is the sole Rust encoder of the Swift canonical order. It streams length-prefixed strings, little-endian integers, colors, font identities, all checker bytes, every row/component field, the supplied fixture prefix, and endpoint geometry into one SHA-256 state while counting the same bytes. The authoritative runner invokes its exact integration test before building device apps; runtime construction deliberately omits the pass so offscreen content remains cold. Tests call this production function instead of carrying a second encoder that could drift.
 
 `checker_rgba_bytes` maps the low three variant bits to one of eight palettes, the next two to tile size, and the high bit to phase. It fills every source texel and forces opaque alpha. Baseline helpers scale Asap ascender/descender font units; caption leading is split around the glyph box because UIKit positions a fixed-height paragraph line while Oxide positions glyph baselines.
 
@@ -58,7 +58,7 @@ Call graph:
 - Every successful checker fill writes exactly `CHECKER_RGBA_BYTE_COUNT` bytes with alpha 255.
 - `component_rect_physical_pixels` returns only the six names in `COMPONENT_KINDS` and uses content coordinates, not viewport coordinates.
 - String writers clear their destination first and leave a complete deterministic value.
-- A usable fixture must stream exactly `EXPECTED_CANONICAL_BYTE_COUNT` bytes and produce `EXPECTED_CANONICAL_SHA256`; app startup fails closed otherwise.
+- Before a device build, the runner's Rust host check must stream exactly `EXPECTED_CANONICAL_BYTE_COUNT` bytes and produce `EXPECTED_CANONICAL_SHA256`.
 
 ## Edge cases and failure modes
 
@@ -79,7 +79,7 @@ Constants and recipes are immutable and require no synchronization. `RowRecipe`,
 - Prefix construction is `O(ROW_COUNT)` once; first-visible lookup is `O(log ROW_COUNT)` and viewport enumeration is `O(visible rows)`.
 - Caller-owned text buffers and checker bytes avoid temporary per-frame objects.
 - Geometry is integer-first and converts to float only where the renderer needs point coordinates, preserving repeatability and avoiding cumulative rounding drift.
-- Complete identity verification is one bounded `O(717,745 bytes)` startup pass before ready admission. It does not run on measured frames.
+- Complete identity verification is one bounded `O(717,745 bytes)` host-preflight pass before device build. It never runs in a measured app process.
 
 ## Feature flags and cfgs
 
@@ -102,6 +102,7 @@ assert_eq!(fixture.row_height_points(42), Some(row.height_points()));
 
 ## Changelog
 
+- 2026-08-07: Moved complete-stream admission from app startup to the runner's authoritative Rust host preflight.
 - 2026-08-06: Made one allocation-bounded production streamer own Rust canonical serialization and fail startup unless its complete count and SHA match Swift.
 - 2026-08-06: Added mapped documentation and external integration coverage for the complete public fixture API.
 - 2026-08-06: Added the independent deterministic feed-v1 recipe, exact geometry, image bytes, colors, fonts, schemas, and canonical identity.

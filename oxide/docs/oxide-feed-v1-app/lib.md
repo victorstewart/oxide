@@ -33,7 +33,7 @@ Call graph:
 
 ## Logic narrative
 
-1. Construction parses the treatment, endpoint, phase, nonce, and sampling indices, builds the 2,001-entry height prefix, registers the embedded Asap fonts, and preallocates all frame and observation scratch. Before ready admission, it streams the complete 717,745-byte canonical fixture through SHA-256 and fails unless both the observed byte count and digest match the frozen Swift identity. Phase and indices affect record identity only; smoke and primary runs share identical scene and interaction behavior.
+1. The authoritative device runner first executes independent Swift and Rust host checks against the frozen source snapshot; both derive and verify the complete 717,745-byte canonical fixture. Runtime construction then parses the treatment, endpoint, phase, nonce, and sampling indices, builds only the 2,001-entry height prefix, registers the embedded Asap fonts, and preallocates frame and observation scratch. Offscreen row strings remain cold until collection virtualization requests them. Phase and indices affect record identity only; smoke and primary runs share identical scene and interaction behavior.
 2. Every composition starts text collection with `begin_frame_at_scale(frame.scale)`, emits visible glyph commands, and calls `finish_frame` through `RuntimeTextUploader` before the prepared draw list is published. That frame scope coalesces glyph-atlas publication instead of uploading each glyph mutation independently. The cold mount composes the visible viewport, admits the static collection content extent once, and schedules one natural warm frame. The warm mount freezes actual visible component geometry and then waits for the exact frame's successful-submit acknowledgement.
 3. Ready admission first snapshots cumulative thermal/low-power transition counters, then samples device/display-link state and posts the nonce-scoped ready notification. Counter-first ordering closes the gap in which a transient state change and return could otherwise disappear before the baseline.
 4. A raw touch inside the feed becomes `TouchPending`. Only the first move that crosses Rust-owned drag slop starts measurement, records the gesture timestamp/offset, and requests continuous frames.
@@ -46,7 +46,7 @@ Call graph:
 
 - The host canvas is exactly `440 x 956 pt @3x`; the feed viewport is `390 x 844 pt` at `(25, 56)`.
 - The deterministic prefix must end at `237460 pt`; top starts at zero and bottom at `236616 pt`.
-- The complete runtime-generated canonical identity must match the frozen Swift byte count and SHA-256; matching only prefix geometry is insufficient.
+- Both authoritative host checks must reproduce the frozen canonical byte count and SHA-256 before either device app is built; matching only prefix geometry is insufficient.
 - The two embedded fonts must retain their frozen byte counts. Checker images use exact RGBA8 source bytes and nearest sampling.
 - UIKit supplies raw OS events only. Gesture state, offsets, inertia, draw commands, and settlement remain Oxide-owned.
 - The pilot retains six diagnostic smoke records and exactly one 54-run primary block; publication timing rows come only from the 54 primary records.
@@ -60,7 +60,7 @@ Call graph:
 
 ## Edge cases and failure modes
 
-- Missing/foreign environment values, an unsafe nonce, negative/non-numeric indices, or an incomplete/mismatched complete canonical identity fail at launch.
+- A failed Swift or Rust canonical preflight stops the runner before device build or launch. Missing/foreign runtime environment values, an unsafe nonce, or negative/non-numeric indices fail at launch.
 - A touch outside the surface is ignored; a tap that never crosses drag slop returns to `Ready` and produces no measurement.
 - Touch cancellation, no real inertial phase, failure to settle within six seconds, fewer than two callbacks, or bounded-array exhaustion marks the gesture non-measurable.
 - A viewport, content extent, visible component, font, or sampled-image mismatch fails closed instead of producing a faster but visually different result.
@@ -70,7 +70,7 @@ Call graph:
 
 ## Concurrency and memory behavior
 
-`FeedV1App` is owned and driven on the host app thread; it does not create threads or locks. Prepared draw-list storage, damage, callback samples, visible-component arrays, strings, checker bytes/handles, collection caches, and text state are retained by the app. `RuntimeTextUploader` preserves the renderer's complete A8 atlas lifecycle by forwarding create, update, append, and release operations to the host uploader. Borrowed `PreparedFrame` data cannot outlive the app. Startup canonical verification reuses bounded scratch and never stores the complete canonical byte stream. The host transition counters are atomics, but this crate only takes coherent cumulative snapshots through the C ABI.
+`FeedV1App` is owned and driven on the host app thread; it does not create threads or locks. Prepared draw-list storage, damage, callback samples, visible-component arrays, strings, checker bytes/handles, collection caches, and text state are retained by the app. `RuntimeTextUploader` preserves the renderer's complete A8 atlas lifecycle by forwarding create, update, append, and release operations to the host uploader. Borrowed `PreparedFrame` data cannot outlive the app. Runtime construction retains prefix geometry but performs no full-feed canonical pass. The host transition counters are atomics, but this crate only takes coherent cumulative snapshots through the C ABI.
 
 ## Performance notes
 
@@ -80,7 +80,7 @@ Call graph:
 - `CollectionView` visits visible rows only. Each row retains a cheap out-of-range guard, but no measured-frame fixture-vs-recipe height recheck remains.
 - Checker source scratch is fixed at 576 bytes; upload handles are cached by 64 deterministic variants. Observation uses fixed arrays of 1,024 callbacks and 96 visible components.
 - The app samples environment counters only at ready and completion, outside per-frame draw encoding.
-- Full canonical hashing runs once during construction, outside the measured gesture and frame path.
+- Full canonical hashing runs only in the runner's pre-build host check, never in app construction or a measured process.
 
 ## Feature flags and cfgs
 
@@ -89,7 +89,7 @@ The app defines no crate features. The library compiles on the native host for d
 ## Testing and benchmarks
 
 - [`tests/lib_tests.md`](tests/lib_tests.md) drives the public `App` and diagnostic APIs through mount, raw touch, rendering, retry, completion, and failure paths.
-- [`tests/contract_tests.md`](tests/contract_tests.md) exercises the same production canonical streamer used by startup and freezes the deterministic recipe.
+- [`tests/contract_tests.md`](tests/contract_tests.md) exercises the production canonical streamer used by the runner's Rust host preflight and freezes the deterministic recipe.
 - [`tests/observation_tests.md`](tests/observation_tests.md) validates exact success/failure JSON, geometry translation, transition fields, and nonce rejection.
 - The physical-device harness remains the authoritative proof for UIKit/Oxide visual comparison and native-refresh callback pacing. Host-side tests do not claim device performance.
 
@@ -120,6 +120,7 @@ assert_eq!(status.callback_sample_count, 0);
 
 ## Changelog
 
+- 2026-08-07: Moved complete canonical derivation from every app startup into paired authoritative pre-build host checks so offscreen row content remains runtime-cold.
 - 2026-08-07: Joined the non-default root workspace graph and replaced the nested lock/profile boundary with root-owned resolution and target reuse.
 - 2026-08-07: Made ordinary host builds rlib-only and moved static-archive emission to the explicit arm64 device build.
 - 2026-08-07: Scoped text collection/publication to each rendered frame and preserved append/release operations through the runtime A8 uploader adapter.

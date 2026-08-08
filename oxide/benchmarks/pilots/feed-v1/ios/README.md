@@ -9,10 +9,10 @@ orchestration. None of these files belong in a production host target.
 ## Frozen fixture
 
 `FeedV1Contract.materialize()` returns a fixture that retains only the
-deterministic recipe's 2,001-entry height prefix and canonical identity. Startup
-admission derives the 2,000 rows sequentially for canonical verification and
-then discards their materialized strings. It rejects any output whose complete
-canonical SHA-256 is not:
+deterministic recipe's 2,001-entry height prefix and the frozen canonical
+identity. Before building either device app, the authoritative runner executes
+independent Swift and Rust host checks that derive all 2,000 rows and reject any
+output whose complete canonical SHA-256 is not:
 
 ```text
 a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473
@@ -21,7 +21,10 @@ a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473
 The canonical stream is exactly `717745` bytes. Integers are unsigned 32-bit
 little-endian values, strings are a 32-bit little-endian byte length followed
 by UTF-8, and checker payloads are raw RGBA8 bytes in declared variant order.
-`canonicalBytesForAudit()` reproduces that stream after hash admission.
+`canonicalBytesForAudit()` reproduces that stream after audit admission. Device
+runtime construction does not derive offscreen strings or hash the canonical
+stream; each treatment generates row content only when its collection requests
+that row.
 
 The hash covers every generated ID and string, all 2,000 integer row heights,
 the complete 2,001-entry prefix table, the final content extent, every checker

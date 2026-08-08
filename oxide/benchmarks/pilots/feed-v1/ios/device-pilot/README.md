@@ -37,7 +37,11 @@ mode selects `smoke`. Official output requires a
 physical 120 Hz iPhone; the project does not declare a Simulator platform or
 architecture. The result root must be a new directory outside the Git worktree.
 Before creating it or touching the phone, the runner requires a clean named Git
-branch and captures `HEAD` and `HEAD^{tree}`. Before installation, the runner
+branch and captures `HEAD` and `HEAD^{tree}`. It then runs the Swift contract
+executable and the exact Rust canonical identity test against that frozen source
+before generating or building either device app. This keeps full 2,000-row
+derivation out of measured app startup while preserving independent byte-exact
+proof. Before installation, the runner
 admits both built products only when each executable is exactly arm64, each
 processed plist is iPhoneOS-only and arm64-required, and both freeze
 full-screen portrait presentation with the status bar hidden. It also requires

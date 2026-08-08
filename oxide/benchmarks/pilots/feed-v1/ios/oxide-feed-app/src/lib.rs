@@ -324,11 +324,6 @@ impl FeedV1App
          {
             Some(String::from("feed-v1 prefix geometry does not match the frozen extent"))
          }
-         else if !contract::canonical_fixture_identity(&fixture)
-            .is_some_and(contract::CanonicalFixtureIdentity::is_expected)
-         {
-            Some(String::from("feed-v1 canonical fixture identity does not match the frozen Swift contract"))
-         }
          else if REGULAR_FONT_BYTES.len() != contract::REGULAR_FONT_BYTE_COUNT as usize
             || BOLD_FONT_BYTES.len() != contract::BOLD_FONT_BYTE_COUNT as usize
          {

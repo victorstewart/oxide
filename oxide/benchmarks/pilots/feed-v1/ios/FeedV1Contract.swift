@@ -282,6 +282,15 @@ public enum FeedV1Contract
 
    public static func materialize() throws -> FeedV1Fixture
    {
+      FeedV1Fixture(
+         rowHeightPrefixPoints: try rowHeightPrefixPoints(),
+         canonicalSHA256: expectedCanonicalSHA256,
+         canonicalByteCount: expectedCanonicalByteCount
+      )
+   }
+
+   static func materializeForAudit() throws -> FeedV1Fixture
+   {
       let fixture = try materializeUnchecked()
       guard fixture.canonicalByteCount == expectedCanonicalByteCount else
       {
@@ -302,20 +311,7 @@ public enum FeedV1Contract
 
    static func materializeUnchecked() throws -> FeedV1Fixture
    {
-      var prefix = [Int]()
-      prefix.reserveCapacity(rowCount + 1)
-      prefix.append(0)
-
-      for index in 0 ..< rowCount
-      {
-         prefix.append(prefix[index] + FeedV1Recipe.rowHeightPoints(at: index))
-      }
-
-      guard prefix.count == rowCount + 1 else
-      {
-         throw FeedV1ContractError.invariant("prefix table length is not row count plus one")
-      }
-
+      let prefix = try rowHeightPrefixPoints()
       let canonicalBytes = FeedV1CanonicalEncoder.encode(prefix: prefix)
       let canonicalSHA256 = FeedV1Hash.sha256Hex(canonicalBytes)
       return FeedV1Fixture(
@@ -336,8 +332,26 @@ public enum FeedV1Contract
 
    public static func canonicalBytesForAudit() throws -> Data
    {
-      let fixture = try materialize()
+      let fixture = try materializeForAudit()
       return FeedV1CanonicalEncoder.encode(prefix: fixture.rowHeightPrefixPoints)
+   }
+
+   private static func rowHeightPrefixPoints() throws -> [Int]
+   {
+      var prefix = [Int]()
+      prefix.reserveCapacity(rowCount + 1)
+      prefix.append(0)
+
+      for index in 0 ..< rowCount
+      {
+         prefix.append(prefix[index] + FeedV1Recipe.rowHeightPoints(at: index))
+      }
+
+      guard prefix.count == rowCount + 1 else
+      {
+         throw FeedV1ContractError.invariant("prefix table length is not row count plus one")
+      }
+      return prefix
    }
 }
 

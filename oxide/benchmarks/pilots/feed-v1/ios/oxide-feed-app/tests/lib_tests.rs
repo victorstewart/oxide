@@ -246,6 +246,18 @@ fn feed_crates_share_the_root_workspace_without_entering_default_builds()
 }
 
 #[test]
+fn complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work()
+{
+   let app = include_str!("../src/lib.rs");
+   assert!(!app.contains("canonical_fixture_identity(&fixture)"));
+
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   assert!(runner.contains("FeedV1ContractCheckMain.swift"));
+   assert!(runner.contains("rust_recipe_reproduces_the_complete_swift_canonical_identity"));
+   assert!(runner.contains("--locked"));
+}
+
+#[test]
 fn frozen_app_starts_at_each_exact_contract_offset()
 {
    let _lock = lock_environment();

@@ -26,7 +26,7 @@ Call graph:
 
 ## Logic narrative
 
-The identity test deliberately calls the production `canonical_fixture_identity` function rather than retaining a test-only encoder. That makes runtime admission and the Swift parity assertion depend on one canonical order and removes a duplicate implementation that could drift. Separate focused tests localize failures to row/prefix, checker, payload-size, or typography causes rather than reporting only one digest mismatch.
+The identity test deliberately calls the production `canonical_fixture_identity` function rather than retaining a test-only encoder. The authoritative runner invokes this exact test before building either device app, while an independent Swift host check verifies the other implementation of the same canonical order. Separate focused tests localize failures to row/prefix, checker, payload-size, or typography causes rather than reporting only one digest mismatch.
 
 The font helper walks the TTF table directory, locates `head` and `hhea`, and reads big-endian units-per-em, ascender, and descender. It does not trust constants copied beside the test.
 
@@ -50,7 +50,7 @@ Tests share only immutable font bytes and constants. The identity call owns boun
 
 ## Performance notes
 
-The complete identity test intentionally performs one bounded 2,000-row pass; there are no repeated soak loops. The app performs the same bounded pass once at startup, outside measured frame and gesture work.
+The complete identity test intentionally performs one bounded 2,000-row pass; there are no repeated soak loops. Device apps do not perform that pass and derive offscreen row content only when requested.
 
 ## Feature flags and cfgs
 
@@ -74,6 +74,7 @@ cargo test -p oxide-feed-v1-app --test contract_tests rust_recipe_reproduces
 
 ## Changelog
 
+- 2026-08-07: Made this exact focused test the runner's pre-build Rust fixture admission instead of repeating canonical derivation in every app process.
 - 2026-08-07: Switched focused commands to the shared root workspace graph.
 - 2026-08-06: Reused the production canonical streamer and deleted the duplicate test-only byte builder.
 - 2026-08-06: Moved complete identity, row, checker, payload, and real-font coverage out of source into a mapped integration suite.

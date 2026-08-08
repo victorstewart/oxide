@@ -10,9 +10,13 @@ enum FeedV1ContractCheckMain
       let first = try FeedV1Contract.materializeUnchecked()
       let second = try FeedV1Contract.materializeUnchecked()
 #else
-      let first = try FeedV1Contract.materialize()
-      let second = try FeedV1Contract.materialize()
+      let first = try FeedV1Contract.materializeForAudit()
+      let second = try FeedV1Contract.materializeForAudit()
 #endif
+      let runtime = try FeedV1Contract.materialize()
+      try require(runtime.rowHeightPrefixPoints == first.rowHeightPrefixPoints, "runtime prefix differs from the audited prefix")
+      try require(runtime.canonicalSHA256 == FeedV1Contract.expectedCanonicalSHA256, "runtime fixture does not carry the audited canonical hash")
+      try require(runtime.canonicalByteCount == FeedV1Contract.expectedCanonicalByteCount, "runtime fixture does not carry the audited canonical byte length")
       try require(first.rowHeightPrefixPoints == second.rowHeightPrefixPoints, "repeat materialization changed prefix geometry")
       try require(first.canonicalSHA256 == second.canonicalSHA256, "repeat materialization changed the canonical hash")
       try require(first.canonicalByteCount == second.canonicalByteCount, "repeat materialization changed canonical byte length")
