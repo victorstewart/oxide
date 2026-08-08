@@ -1376,10 +1376,16 @@ else
    REDUCE_STATUS=$?
    if [[ $REDUCE_STATUS -eq 0 ]]
    then
-      if ! REPORT_STATUS="$(/usr/bin/plutil -extract status raw -o - "$RESULT_ROOT/latest.json")" \
-         || [[ "$REPORT_STATUS" != "complete" ]]
+      if [[ $TEST_STATUS -eq 0 ]]
       then
-         echo "reducer report is not complete" >&2
+         EXPECTED_REPORT_STATUS=complete
+      else
+         EXPECTED_REPORT_STATUS=blocked
+      fi
+      if ! REPORT_STATUS="$(/usr/bin/plutil -extract status raw -o - "$RESULT_ROOT/latest.json")" \
+         || [[ "$REPORT_STATUS" != "$EXPECTED_REPORT_STATUS" ]]
+      then
+         echo "reducer report status does not match the runner outcome" >&2
          REDUCE_STATUS=1
       fi
    fi

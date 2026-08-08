@@ -2142,6 +2142,21 @@ fn validate_controller_runtimes(proofs: &[ControllerRuntimeProof], population: P
    Ok(())
 }
 
+fn controller_proof_snapshot(run_root: &Path) -> Result<BTreeMap<String, String>, String>
+{
+   let root = run_root.join("raw/controller-documents");
+   let mut snapshot = BTreeMap::new();
+   for mode in ["smoke", "primary"]
+   {
+      let path = root.join(format!("oxide-feed-v1-controller-runtime-{mode}.json"));
+      if path.exists()
+      {
+         snapshot.insert(mode.to_string(), sha256_file(&path)?);
+      }
+   }
+   Ok(snapshot)
+}
+
 fn required_json_string(value: &serde_json::Value, pointer: &str, field: &str) -> Result<String, String>
 {
    value.pointer(pointer).and_then(serde_json::Value::as_str)
@@ -2711,11 +2726,10 @@ fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, 
    let travel_validation = validate_travel(&measured_runs, population);
    blockers.extend(travel_validation.blockers);
    let travel_equivalence = travel_validation.results;
-   let population_admitted = blockers.is_empty();
 
    let mut visual_treatments = Vec::new();
    let mut adversarial_results = Vec::new();
-   if population_admitted
+   if !smoke_runs.is_empty()
    {
       let mut canonical_images: BTreeMap<(String, String, String), RgbaImage> = BTreeMap::new();
       for run in &smoke_runs
@@ -3045,8 +3059,22 @@ fn relative_path_string(root: &Path, path: &Path) -> Result<String, String>
 
 pub fn reduce(paths: &ReducePaths) -> Result<(), String>
 {
-   let report = evaluate(paths, Population::Full, true, "device-after.json")?;
-   if output_excluded_raw_evidence_files(paths)? != report.evidence_inventory
+   let controller_before = controller_proof_snapshot(&paths.run_root)?;
+   let mut report = evaluate(paths, Population::Full, true, "device-after.json")?;
+   let controller_after = controller_proof_snapshot(&paths.run_root)?;
+   if controller_before != controller_after
+   {
+      report.status = "blocked".to_string();
+      report.decision = "blocked".to_string();
+      report.blockers.push("controller runtime proofs changed during publication reduction".to_string());
+      report.blockers.sort();
+      report.blockers.dedup();
+      report.treatments.clear();
+      report.comparisons.clear();
+      report.runs.clear();
+      report.evidence_inventory = output_excluded_raw_evidence_files(paths)?;
+   }
+   else if output_excluded_raw_evidence_files(paths)? != report.evidence_inventory
    {
       return Err("raw evidence changed during publication reduction".to_string());
    }

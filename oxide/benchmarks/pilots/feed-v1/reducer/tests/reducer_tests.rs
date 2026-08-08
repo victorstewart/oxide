@@ -1024,6 +1024,42 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
 }
 
 #[test]
+fn blocked_primary_retains_smoke_admission_without_pacing_results() -> Result<(), String>
+{
+   let root = temporary_root("blocked-primary-retains-smoke")?;
+   write_valid_full_root(&root)?;
+   let runner_path = root.join("raw/runner.json");
+   let mut runner: Value = serde_json::from_slice(
+      &fs::read(&runner_path).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   runner["status"] = json!("blocked");
+   runner["first_failure_stage"] = json!("primary-attachments");
+   runner["first_failure_reason"] = json!("the primary result bundle did not prove zero attachments");
+   fs::write(&runner_path, serde_json::to_vec(&runner).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   let paths = ReducePaths {
+      run_root: root.clone(),
+      output_json: root.join("latest.json"),
+      output_markdown: root.join("latest.md"),
+   };
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(
+      &fs::read(&paths.output_json).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   assert_eq!(report["status"], "blocked");
+   assert_eq!(report["visual_treatments"].as_array().map(Vec::len), Some(12));
+   assert!(report["adversarial_results"].as_array().is_some_and(|values| !values.is_empty()));
+   assert!(report["runs"].as_array().is_some_and(Vec::is_empty));
+   assert!(report["treatments"].as_array().is_some_and(Vec::is_empty));
+   assert!(report["comparisons"].as_array().is_some_and(Vec::is_empty));
+   assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
+      blocker.as_str().is_some_and(|text| text.contains("runner blocked at primary-attachments"))
+   })));
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
 fn full_reduction_rejects_systematic_primary_travel_mismatch() -> Result<(), String>
 {
    let root = temporary_root("full-travel-mismatch")?;
