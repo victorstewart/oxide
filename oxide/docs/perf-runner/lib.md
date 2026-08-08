@@ -49,6 +49,9 @@ silently expanding into every registered permutation.
 - `oxide_perf_runner::assert_report_repository_provenance(version, repository) -> anyhow::Result<()>`
   - Keeps historical version-1 reports readable without source fields while requiring every version-2 serialization to carry a complete, well-formed provenance triple.
   - Main callers: report serializers, loaders, and Markdown writers.
+- `oxide_perf_runner::promote_files_atomically(outputs) -> anyhow::Result<()>`
+  - Stages and syncs a related output set, journals its install, rolls back an interrupted install, and finishes cleanup after a committed install.
+  - Main callers: canonical workspace and paired physical-device baseline publication.
 - `oxide_perf_runner::assert_contract_coverage(contract: &ContractCoverageReport) -> anyhow::Result<()>`
   - Enforces stable contract coverage status values and rejects implemented rows whose notes still describe unresolved gaps.
   - Main callers: suite execution and report tests.
@@ -102,6 +105,7 @@ The canonical workspace report is serialized to JSON and Markdown, compared by g
 The publication header reports the selected suite and exact case count. It does not print catalog-wide covered/total fractions, because touched and canonical runs deliberately select only the cases they own; the contract table below the header is the authoritative coverage statement.
 Fresh official reports use version 2 and flatten `repository_ref`, `repository_head_commit`, and `repository_tree` into the report root. Collection remains version 1 until an official entry point binds one clean, stable Git revision; version 2 cannot serialize with missing or malformed source fields. Historical version-1 reports continue to deserialize with empty provenance.
 When `--compare` is requested, missing baseline rows or gated regressions are an admission failure. The runner prints the comparison summary and returns before resolving default output paths or writing JSON, latest Markdown, dated Markdown, or paired-capture output, so a rejected candidate cannot replace prior evidence.
+Canonical `--write-baseline` publication renders and validates JSON, latest Markdown, and optional dated Markdown before changing any destination. Those outputs are then staged beside their targets and promoted under a synced recovery journal; an interrupted install rolls back to the prior complete set, while diagnostic output paths retain their direct writers.
 
 ### Historical implementation evidence
 
@@ -140,6 +144,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 - Postconditions:
   - A successful suite run produces a complete `PerfReport` with coverage accounting.
   - Baseline comparisons either report no gated regressions or fail with explicit mismatches.
+  - Canonical baseline publication leaves either the complete previous output set or the complete replacement set after recovery.
 - Invariants maintained:
   - Every persisted case carries contract metadata alongside latency distributions.
   - Frame rows cannot pass the selected-suite contract without frame distribution and pacing metrics.
@@ -157,6 +162,7 @@ Persisted report and evidence schemas are part of the performance contract becau
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
 
 ## Changelog
+- 2026-08-07: made canonical workspace and paired-device report publication a staged, recoverable multi-file promotion.
 - 2026-08-07: made comparison acceptance a pre-write admission gate so rejected candidates preserve every existing report output.
 - 2026-08-07: bound fresh official version-2 reports to a clean, named, stable Git ref/HEAD/tree while preserving version-1 historical report readability.
 

@@ -1052,6 +1052,8 @@ fn comparison_rejection_precedes_report_output_resolution_and_writes()
    for output in [
       "let json_out =",
       "let markdown_out =",
+      "workspace_baseline_outputs(",
+      "promote_files_atomically(&outputs)",
       "write_report_json(path, &report)",
       "write_markdown_outputs(path, &report",
       "session.write(path, &report.cases",
@@ -1060,6 +1062,29 @@ fn comparison_rejection_precedes_report_output_resolution_and_writes()
       let output = body.find(output).unwrap_or_else(|| panic!("missing output path `{output}`"));
       assert!(rejection < output, "comparison rejection follows `{output}`");
    }
+}
+
+#[test]
+fn canonical_workspace_reports_use_one_atomic_promotion()
+{
+   let source = include_str!("../src/lib.rs");
+   let body = source
+      .split_once("fn run_suite(cli: Cli)")
+      .and_then(|(_, tail)| tail.split_once("pub fn collect_suite_report"))
+      .map(|(body, _)| body)
+      .expect("run-suite source body");
+   let baseline_branch = body
+      .split_once("if cli.write_baseline")
+      .map(|(_, tail)| tail)
+      .expect("baseline publication branch");
+   let prepare = baseline_branch
+      .find("workspace_baseline_outputs(")
+      .expect("workspace baseline preparation");
+   let promote = baseline_branch
+      .find("promote_files_atomically(&outputs)")
+      .expect("workspace atomic promotion");
+
+   assert!(prepare < promote);
 }
 
 #[test]

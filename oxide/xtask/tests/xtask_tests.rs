@@ -3084,20 +3084,48 @@ fn compare_device_promotion_validates_before_committed_baseline_writes()
    let oxide_failure = body
       .find("Oxide device performance comparison failed")
       .expect("Oxide comparison failure gate");
-   let uikit_write = body
-      .find("DEFAULT_UIKIT_DEVICE_BASELINE_JSON")
-      .expect("UIKit committed baseline write");
-   let oxide_write = body
-      .find("DEFAULT_OXIDE_DEVICE_BASELINE_JSON")
-      .expect("Oxide committed baseline write");
+   let prepare = body
+      .find("paired_device_baseline_outputs(")
+      .expect("paired baseline preparation");
+   let promote = body
+      .find("promote_files_atomically(&outputs)")
+      .expect("atomic paired baseline promotion");
 
    for gate in [uikit_contract, oxide_contract, uikit_failure, oxide_failure]
    {
-      assert!(gate < uikit_write);
-      assert!(gate < oxide_write);
+      assert!(gate < prepare);
+      assert!(gate < promote);
    }
+   assert!(prepare < promote);
    assert!(!body.contains("proof-status"));
    assert!(!body.contains("family_proof_passed"));
+}
+
+#[test]
+fn paired_device_promotion_prepares_all_six_canonical_outputs()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let body = source
+      .split_once("fn paired_device_baseline_outputs(")
+      .and_then(|(_, tail)| tail.split_once("fn device_dated_markdown_path("))
+      .map(|(body, _)| body)
+      .expect("paired baseline output builder");
+
+   for required in [
+      "serialize_uikit_report_json(uikit_report)",
+      "render_uikit_device_markdown(uikit_report, uikit_comparison)",
+      "serialize_oxide_device_report_json(oxide_report)",
+      "render_oxide_device_report_markdown(oxide_report, oxide_comparison)",
+      "DEFAULT_UIKIT_DEVICE_BASELINE_JSON",
+      "DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN",
+      "device_dated_markdown_path(&uikit_latest",
+      "DEFAULT_OXIDE_DEVICE_BASELINE_JSON",
+      "DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN",
+      "device_dated_markdown_path(&oxide_latest",
+   ]
+   {
+      assert!(body.contains(required), "missing paired output preparation `{required}`");
+   }
 }
 
 #[test]

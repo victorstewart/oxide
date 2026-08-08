@@ -16,9 +16,9 @@ use oxide_ui_core as ui;
 use serde::{Deserialize, Serialize};
 use std::boxed::Box;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::hint::black_box;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +30,8 @@ mod architecture_matrix;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
+const FILE_PROMOTION_JOURNAL: &str = ".oxide-report-promotion.json";
+const FILE_PROMOTION_NEXT_JOURNAL: &str = ".oxide-report-promotion.next.json";
 const DEFAULT_MARKDOWN_RENDER_BENCH_ITERS: usize = 256;
 const DEFAULT_JSON_RENDER_BENCH_ITERS: usize = 256;
 const DEFAULT_SAMPLE_SUMMARY_BENCH_ITERS: usize = 262_144;
@@ -54,6 +56,7 @@ const PERF_SCROLL_TRACE_START_NS: u64 = 1_000_000_000;
 const FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS: u64 = 1_024;
 const GPU_SCENE_OWNED_BY_ANIMATION_BATTERY: &str = "anim_timeline";
 static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
+static FILE_PROMOTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const CANONICAL_CASE_IDS: &[&str] = &[
    "cpu.authoring.app.prepared_frame",
@@ -2590,13 +2593,30 @@ fn run_suite(cli: Cli) -> Result<()>
    {
       repository.ensure_unchanged(&repository_root)?;
    }
-   if let Some(path) = json_out.as_ref()
+   if cli.write_baseline
+   {
+      let outputs = workspace_baseline_outputs(
+         json_out.as_deref().expect("baseline JSON output"),
+         markdown_out.as_deref().expect("baseline markdown output"),
+         &report,
+         comparison.as_ref(),
+      )?;
+      if let Some(repository) = repository.as_ref()
+      {
+         repository.ensure_unchanged(&repository_root)?;
+      }
+      promote_files_atomically(&outputs)?;
+   }
+   else if let Some(path) = json_out.as_ref()
    {
       write_report_json(path, &report)?;
    }
-   if let Some(path) = markdown_out.as_ref()
+   if !cli.write_baseline
    {
-      write_markdown_outputs(path, &report, comparison.as_ref())?;
+      if let Some(path) = markdown_out.as_ref()
+      {
+         write_markdown_outputs(path, &report, comparison.as_ref())?;
+      }
    }
 
    Ok(())
@@ -10179,6 +10199,419 @@ fn push_missing_metric(case: &PerfCaseResult, key: &str, missing: &mut Vec<Strin
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FilePromotionState
+{
+   Installing,
+   Committed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FilePromotionEntry
+{
+   target: PathBuf,
+   staged: PathBuf,
+   backup: PathBuf,
+   target_existed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FilePromotionJournal
+{
+   schema: u32,
+   transaction: String,
+   state: FilePromotionState,
+   entries: Vec<FilePromotionEntry>,
+}
+
+struct PreparedFilePromotion
+{
+   journal_path: PathBuf,
+   journal: FilePromotionJournal,
+}
+
+/// Replaces a related set of files as one recoverable publication transaction.
+///
+/// Every body is first written and synced beside its destination. Existing
+/// destinations remain recoverable until a synced journal records that the
+/// complete set was installed. A later invocation rolls back an interrupted
+/// install or finishes cleanup after a committed install before starting new
+/// work.
+pub fn promote_files_atomically(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()>
+{
+   prepare_file_promotion(outputs)?.commit()
+}
+
+fn prepare_file_promotion(outputs: &[(PathBuf, Vec<u8>)]) -> Result<PreparedFilePromotion>
+{
+   ensure!(!outputs.is_empty(), "file promotion requires at least one output");
+   let first_parent = promotion_parent(&outputs[0].0)?;
+   let journal_path = first_parent.join(FILE_PROMOTION_JOURNAL);
+   recover_file_promotion(&journal_path)?;
+
+   let transaction = format!(
+      "{}-{}",
+      std::process::id(),
+      FILE_PROMOTION_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+   );
+   let mut targets = BTreeSet::new();
+   let mut entries = Vec::with_capacity(outputs.len());
+   for (index, (path, _)) in outputs.iter().enumerate()
+   {
+      let parent = promotion_parent(path)?;
+      let file_name = path
+         .file_name()
+         .with_context(|| format!("promotion output has no file name: {}", path.display()))?;
+      let target = parent.join(file_name);
+      ensure!(
+         targets.insert(target.clone()),
+         "file promotion contains duplicate output {}",
+         target.display(),
+      );
+      let target_existed = match fs::symlink_metadata(&target)
+      {
+         Ok(metadata) =>
+         {
+            ensure!(
+               metadata.file_type().is_file(),
+               "file promotion target is not a regular file: {}",
+               target.display(),
+            );
+            true
+         }
+         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+         Err(error) => return Err(error).with_context(|| format!("inspecting {}", target.display())),
+      };
+      entries.push(FilePromotionEntry {
+         staged: promotion_artifact_path(&parent, &transaction, index, "staged"),
+         backup: promotion_artifact_path(&parent, &transaction, index, "backup"),
+         target,
+         target_existed,
+      });
+   }
+
+   let promotion = PreparedFilePromotion {
+      journal_path,
+      journal: FilePromotionJournal {
+         schema: 1,
+         transaction,
+         state: FilePromotionState::Installing,
+         entries,
+      },
+   };
+   promotion.write_initial_journal()?;
+   for (entry, (_, body)) in promotion.journal.entries.iter().zip(outputs)
+   {
+      if let Err(error) = write_staged_promotion_file(&entry.staged, body)
+      {
+         return promotion.rollback_after(error);
+      }
+   }
+   if let Err(error) = sync_promotion_parents(&promotion.journal.entries)
+   {
+      return promotion.rollback_after(error);
+   }
+   Ok(promotion)
+}
+
+impl PreparedFilePromotion
+{
+   fn commit(mut self) -> Result<()>
+   {
+      for entry in &self.journal.entries
+      {
+         if let Err(error) = install_promotion_entry(entry)
+         {
+            return self.rollback_after(error);
+         }
+      }
+      if let Err(error) = self.mark_committed()
+      {
+         return self.rollback_after(error);
+      }
+      self.cleanup_committed()
+   }
+
+   fn write_initial_journal(&self) -> Result<()>
+   {
+      validate_file_promotion_journal(&self.journal_path, &self.journal)?;
+      let body = serde_json::to_vec_pretty(&self.journal)
+         .context("serializing file-promotion journal")?;
+      let mut file = OpenOptions::new()
+         .create_new(true)
+         .write(true)
+         .open(&self.journal_path)
+         .with_context(|| format!("creating {}", self.journal_path.display()))?;
+      file.write_all(&body)
+         .with_context(|| format!("writing {}", self.journal_path.display()))?;
+      file.sync_all()
+         .with_context(|| format!("syncing {}", self.journal_path.display()))?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn mark_committed(&mut self) -> Result<()>
+   {
+      self.journal.state = FilePromotionState::Committed;
+      let next_path = self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL);
+      remove_promotion_file_if_exists(&next_path)?;
+      let body = serde_json::to_vec_pretty(&self.journal)
+         .context("serializing committed file-promotion journal")?;
+      let mut file = OpenOptions::new()
+         .create_new(true)
+         .write(true)
+         .open(&next_path)
+         .with_context(|| format!("creating {}", next_path.display()))?;
+      file.write_all(&body)
+         .with_context(|| format!("writing {}", next_path.display()))?;
+      file.sync_all()
+         .with_context(|| format!("syncing {}", next_path.display()))?;
+      fs::rename(&next_path, &self.journal_path).with_context(|| {
+         format!(
+            "committing file-promotion journal {}",
+            self.journal_path.display(),
+         )
+      })?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn rollback_after<T>(self, error: anyhow::Error) -> Result<T>
+   {
+      match self.rollback_installing()
+      {
+         Ok(()) => Err(error),
+         Err(rollback_error) => bail!(
+            "{:#}; file-promotion rollback also failed: {:#}",
+            error,
+            rollback_error,
+         ),
+      }
+   }
+
+   fn rollback_installing(&self) -> Result<()>
+   {
+      for entry in self.journal.entries.iter().rev()
+      {
+         if promotion_path_exists(&entry.backup)?
+         {
+            remove_promotion_file_if_exists(&entry.target)?;
+            fs::rename(&entry.backup, &entry.target).with_context(|| {
+               format!(
+                  "restoring {} from {}",
+                  entry.target.display(),
+                  entry.backup.display(),
+               )
+            })?;
+         }
+         else if !entry.target_existed
+            && !promotion_path_exists(&entry.staged)?
+            && promotion_path_exists(&entry.target)?
+         {
+            remove_promotion_file_if_exists(&entry.target)?;
+         }
+         remove_promotion_file_if_exists(&entry.staged)?;
+      }
+      sync_promotion_parents(&self.journal.entries)?;
+      remove_promotion_file_if_exists(
+         &self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL),
+      )?;
+      remove_promotion_file_if_exists(&self.journal_path)?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn cleanup_committed(&self) -> Result<()>
+   {
+      for entry in &self.journal.entries
+      {
+         remove_promotion_file_if_exists(&entry.staged)?;
+         remove_promotion_file_if_exists(&entry.backup)?;
+      }
+      sync_promotion_parents(&self.journal.entries)?;
+      remove_promotion_file_if_exists(
+         &self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL),
+      )?;
+      remove_promotion_file_if_exists(&self.journal_path)?;
+      sync_parent_directory(&self.journal_path)
+   }
+}
+
+fn recover_file_promotion(journal_path: &Path) -> Result<()>
+{
+   let next_path = journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL);
+   if !promotion_path_exists(journal_path)?
+   {
+      remove_promotion_file_if_exists(&next_path)?;
+      return Ok(());
+   }
+   let body = fs::read(journal_path)
+      .with_context(|| format!("reading interrupted promotion {}", journal_path.display()))?;
+   let journal: FilePromotionJournal = serde_json::from_slice(&body)
+      .with_context(|| format!("parsing interrupted promotion {}", journal_path.display()))?;
+   validate_file_promotion_journal(journal_path, &journal)?;
+   let promotion = PreparedFilePromotion {
+      journal_path: journal_path.to_path_buf(),
+      journal,
+   };
+   match promotion.journal.state
+   {
+      FilePromotionState::Installing => promotion.rollback_installing(),
+      FilePromotionState::Committed => promotion.cleanup_committed(),
+   }
+}
+
+fn validate_file_promotion_journal(journal_path: &Path, journal: &FilePromotionJournal) -> Result<()>
+{
+   ensure!(journal.schema == 1, "unsupported file-promotion journal schema {}", journal.schema);
+   ensure!(!journal.entries.is_empty(), "file-promotion journal has no entries");
+   ensure!(
+      journal.transaction.split('-').all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+      "invalid file-promotion transaction `{}`",
+      journal.transaction,
+   );
+   let expected_journal = journal.entries[0]
+      .target
+      .parent()
+      .context("file-promotion target has no parent")?
+      .join(FILE_PROMOTION_JOURNAL);
+   ensure!(
+      journal_path == expected_journal,
+      "file-promotion journal path does not match its first target",
+   );
+   let mut targets = BTreeSet::new();
+   for (index, entry) in journal.entries.iter().enumerate()
+   {
+      let parent = entry.target.parent().context("file-promotion target has no parent")?;
+      ensure!(entry.target.is_absolute(), "file-promotion target is not absolute");
+      ensure!(targets.insert(entry.target.clone()), "file-promotion journal repeats a target");
+      ensure!(
+         entry.staged == promotion_artifact_path(parent, &journal.transaction, index, "staged")
+            && entry.backup == promotion_artifact_path(parent, &journal.transaction, index, "backup"),
+         "file-promotion journal contains invalid artifact paths",
+      );
+   }
+   Ok(())
+}
+
+fn promotion_parent(path: &Path) -> Result<PathBuf>
+{
+   let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+   fs::create_dir_all(parent)
+      .with_context(|| format!("creating promotion output directory {}", parent.display()))?;
+   fs::canonicalize(parent)
+      .with_context(|| format!("resolving promotion output directory {}", parent.display()))
+}
+
+fn promotion_artifact_path(parent: &Path, transaction: &str, index: usize, suffix: &str) -> PathBuf
+{
+   parent.join(format!(".oxide-report-promotion-{transaction}-{index}.{suffix}"))
+}
+
+fn write_staged_promotion_file(path: &Path, body: &[u8]) -> Result<()>
+{
+   let mut file = OpenOptions::new()
+      .create_new(true)
+      .write(true)
+      .open(path)
+      .with_context(|| format!("creating staged promotion output {}", path.display()))?;
+   file.write_all(body)
+      .with_context(|| format!("writing staged promotion output {}", path.display()))?;
+   file.sync_all()
+      .with_context(|| format!("syncing staged promotion output {}", path.display()))
+}
+
+fn install_promotion_entry(entry: &FilePromotionEntry) -> Result<()>
+{
+   if entry.target_existed
+   {
+      fs::rename(&entry.target, &entry.backup).with_context(|| {
+         format!(
+            "backing up {} to {}",
+            entry.target.display(),
+            entry.backup.display(),
+         )
+      })?;
+   }
+   fs::rename(&entry.staged, &entry.target).with_context(|| {
+      format!(
+         "installing staged output {} at {}",
+         entry.staged.display(),
+         entry.target.display(),
+      )
+   })?;
+   sync_parent_directory(&entry.target)
+}
+
+fn sync_promotion_parents(entries: &[FilePromotionEntry]) -> Result<()>
+{
+   let parents = entries
+      .iter()
+      .filter_map(|entry| entry.target.parent().map(Path::to_path_buf))
+      .collect::<BTreeSet<_>>();
+   for parent in parents
+   {
+      File::open(&parent)
+         .with_context(|| format!("opening promotion directory {}", parent.display()))?
+         .sync_all()
+         .with_context(|| format!("syncing promotion directory {}", parent.display()))?;
+   }
+   Ok(())
+}
+
+fn sync_parent_directory(path: &Path) -> Result<()>
+{
+   let parent = path.parent().context("promotion path has no parent directory")?;
+   File::open(parent)
+      .with_context(|| format!("opening promotion directory {}", parent.display()))?
+      .sync_all()
+      .with_context(|| format!("syncing promotion directory {}", parent.display()))
+}
+
+fn promotion_path_exists(path: &Path) -> Result<bool>
+{
+   match fs::symlink_metadata(path)
+   {
+      Ok(_) => Ok(true),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+      Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+   }
+}
+
+fn remove_promotion_file_if_exists(path: &Path) -> Result<()>
+{
+   let metadata = match fs::symlink_metadata(path)
+   {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+      Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+   };
+   ensure!(!metadata.file_type().is_dir(), "refusing to remove promotion directory {}", path.display());
+   fs::remove_file(path).with_context(|| format!("removing promotion file {}", path.display()))
+}
+
+fn workspace_baseline_outputs(json_path: &Path, markdown_path: &Path, report: &PerfReport, comparison: Option<&PerfComparison>) -> Result<Vec<(PathBuf, Vec<u8>)>>
+{
+   assert_report_repository_provenance(report.version, &report.repository)
+      .context("validating perf report repository provenance before baseline promotion")?;
+   let json = serialize_report_json(report)?;
+   let markdown = render_markdown(report, comparison).into_bytes();
+   let mut outputs = vec![
+      (json_path.to_path_buf(), json),
+      (markdown_path.to_path_buf(), markdown.clone()),
+   ];
+   if let Some(label) = report.generated_label.as_deref()
+   {
+      if let Some(parent) = markdown_path.parent()
+      {
+         let dated_path = parent.join(format!("{label}.md"));
+         if dated_path != markdown_path
+         {
+            outputs.push((dated_path, markdown));
+         }
+      }
+   }
+   Ok(outputs)
+}
+
 fn load_report(path: &Path) -> Result<PerfReport> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let report: PerfReport =
@@ -11352,4 +11785,138 @@ fn run_legacy_scene(
         renderer.submit(token).context("submitting legacy Metal frame")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod file_promotion_tests
+{
+   use super::*;
+
+   fn temporary_promotion_root(label: &str) -> PathBuf
+   {
+      let nonce = std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)
+         .expect("system clock before epoch")
+         .as_nanos();
+      std::env::temp_dir().join(format!(
+         "oxide-report-promotion-{label}-{}-{nonce}",
+         std::process::id(),
+      ))
+   }
+
+   fn assert_each_output_failure_preserves_sentinels(label: &str, output_count: usize)
+   {
+      for failure_index in 0..output_count
+      {
+         let root = temporary_promotion_root(&format!("{label}-{failure_index}"));
+         fs::create_dir_all(&root).expect("create promotion test root");
+         let mut outputs = Vec::new();
+         let mut sentinels = Vec::new();
+         for index in 0..output_count
+         {
+            let path = root.join(format!("output-{index}"));
+            let sentinel = format!("sentinel-{index}").into_bytes();
+            fs::write(&path, &sentinel).expect("write promotion sentinel");
+            outputs.push((path, format!("replacement-{index}").into_bytes()));
+            sentinels.push(sentinel);
+         }
+
+         let promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+         fs::remove_file(&promotion.journal.entries[failure_index].staged)
+            .expect("inject staged-output failure");
+         let error = promotion.commit().expect_err("injected promotion failure");
+         assert!(error.to_string().contains("installing staged output"));
+         for ((path, _), sentinel) in outputs.iter().zip(&sentinels)
+         {
+            assert_eq!(fs::read(path).expect("read preserved sentinel"), *sentinel);
+         }
+         assert!(!root.join(FILE_PROMOTION_JOURNAL).exists());
+         assert!(!root.join(FILE_PROMOTION_NEXT_JOURNAL).exists());
+         assert!(
+            fs::read_dir(&root)
+               .expect("read promotion test root")
+               .all(|entry| !entry
+                  .expect("read promotion test entry")
+                  .file_name()
+                  .to_string_lossy()
+                  .starts_with(".oxide-report-promotion-")),
+         );
+         fs::remove_dir_all(&root).expect("remove promotion test root");
+      }
+   }
+
+   #[test]
+   fn workspace_promotion_rolls_back_failure_at_each_output()
+   {
+      assert_each_output_failure_preserves_sentinels("workspace", 3);
+   }
+
+   #[test]
+   fn paired_device_promotion_rolls_back_failure_at_each_output()
+   {
+      assert_each_output_failure_preserves_sentinels("paired-device", 6);
+   }
+
+   #[test]
+   fn promotion_recovers_an_interrupted_install_before_replacing_outputs()
+   {
+      let root = temporary_promotion_root("recovery");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let target = root.join("latest.json");
+      fs::write(&target, b"sentinel").expect("write promotion sentinel");
+      let first = vec![(target.clone(), b"interrupted".to_vec())];
+      let promotion = prepare_file_promotion(&first).expect("prepare interrupted promotion");
+      let entry = promotion.journal.entries[0].clone();
+      fs::rename(&entry.target, &entry.backup).expect("simulate target backup");
+      fs::rename(&entry.staged, &entry.target).expect("simulate staged install");
+      drop(promotion);
+
+      let second = vec![(target.clone(), b"recovered".to_vec())];
+      promote_files_atomically(&second).expect("recover and replace output");
+      assert_eq!(fs::read(&target).expect("read recovered output"), b"recovered");
+      assert!(!root.join(FILE_PROMOTION_JOURNAL).exists());
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
+
+   #[test]
+   fn promotion_rollback_removes_newly_created_outputs()
+   {
+      let root = temporary_promotion_root("new-output-rollback");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let new_target = root.join("dated.md");
+      let sentinel_target = root.join("latest.md");
+      fs::write(&sentinel_target, b"sentinel").expect("write promotion sentinel");
+      let outputs = vec![
+         (new_target.clone(), b"new dated report".to_vec()),
+         (sentinel_target.clone(), b"new latest report".to_vec()),
+      ];
+      let promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+      fs::remove_file(&promotion.journal.entries[1].staged)
+         .expect("inject staged-output failure");
+      promotion.commit().expect_err("injected promotion failure");
+
+      assert!(!new_target.exists());
+      assert_eq!(fs::read(&sentinel_target).expect("read sentinel"), b"sentinel");
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
+
+   #[test]
+   fn promotion_recovery_keeps_a_committed_output_set()
+   {
+      let root = temporary_promotion_root("committed-recovery");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let target = root.join("latest.json");
+      fs::write(&target, b"sentinel").expect("write promotion sentinel");
+      let outputs = vec![(target.clone(), b"committed".to_vec())];
+      let mut promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+      install_promotion_entry(&promotion.journal.entries[0]).expect("install output");
+      promotion.mark_committed().expect("commit promotion journal");
+      let journal_path = promotion.journal_path.clone();
+      drop(promotion);
+
+      recover_file_promotion(&journal_path).expect("recover committed promotion");
+      assert_eq!(fs::read(&target).expect("read committed output"), b"committed");
+      assert!(!journal_path.exists());
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
 }

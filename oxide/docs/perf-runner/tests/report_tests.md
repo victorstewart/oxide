@@ -16,6 +16,7 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `repository_provenance_rejects_partial_or_malformed_triples()`: rejects incomplete provenance and malformed refs/object IDs.
 - `source_bound_report_serializes_and_renders_repository_revision()`, `version_two_report_rejects_missing_repository_revision()`, and `historical_report_omits_and_defaults_repository_revision()`: freeze the version-2 source contract and version-1 compatibility.
 - `comparison_rejection_precedes_report_output_resolution_and_writes()`: freezes the source ordering of comparison admission ahead of every report output.
+- `canonical_workspace_reports_use_one_atomic_promotion()`: freezes canonical JSON/latest-Markdown/dated-Markdown publication behind one staged promotion call.
 - `rejected_comparison_preserves_existing_report_outputs()`: explicitly runs one touched smoke case against a missing baseline and proves pre-existing JSON and Markdown sentinel bytes are unchanged.
 
 - `child_run_suite_tests_keep_everyday_tiering()` freezes all 55 literal child `--run-suite` sites: 53 must carry `#[ignore = "explicit touched-case perf contract"]`; only `filtered_run_suite_runs_only_the_touched_case()` and the zero-case `retired_exact_aliases_are_not_registered()` guard remain active.
@@ -99,6 +100,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests` for the every
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-07: froze canonical workspace publication behind one atomic promotion; library unit tests inject failure at each of its three output slots and each of the six paired-device slots.
 - 2026-08-07: added pre-write comparison-order coverage and an explicit sentinel test proving rejected comparisons preserve prior JSON and Markdown.
 - 2026-08-07: added nested-top-level, dirty/detached/drift, version-2 rejection, version-1 compatibility, JSON, and Markdown provenance coverage.
 - 2026-08-07: kept one representative touched-case child route and the zero-work retired-alias guard active; marked the other 54 literal child suite contracts plus the implicit filtered-registry suite explicitly ignored for one-by-one execution.

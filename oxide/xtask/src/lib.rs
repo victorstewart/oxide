@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use oxide_perf_runner::{
-    assert_report_repository_provenance, compare_reports, render_report_markdown,
+    assert_report_repository_provenance, compare_reports, promote_files_atomically,
+    render_report_markdown,
     AuditFinding, ContractCoverageEntry, ContractCoverageReport, CoverageReport,
     PerfCaseResult, PerfReport, RepositoryProvenance,
 };
@@ -2891,31 +2892,15 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     if cli.write_baseline {
         repository.ensure_unchanged(&repository_root)
             .with_context(|| "validating repository before paired device baseline promotion")?;
-        write_uikit_report_json(Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), &uikit_report)?;
-        write_uikit_markdown(
-            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
+        let outputs = paired_device_baseline_outputs(
             &uikit_report,
             uikit_comparison.as_ref(),
-        )?;
-        write_uikit_dated_markdown(
-            Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
-            &uikit_report,
-            uikit_comparison.as_ref(),
-        )?;
-        write_oxide_device_report_json(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_JSON),
-            &oxide_report,
-        )?;
-        write_oxide_device_report_markdown(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
             &oxide_report,
             oxide_comparison.as_ref(),
         )?;
-        write_oxide_device_dated_markdown(
-            Path::new(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN),
-            &oxide_report,
-            oxide_comparison.as_ref(),
-        )?;
+        repository.ensure_unchanged(&repository_root)
+            .with_context(|| "validating repository after paired baseline rendering")?;
+        promote_files_atomically(&outputs)?;
     }
 
     Ok(())
@@ -12904,14 +12889,18 @@ fn load_oxide_device_report(path: &Path) -> Result<PerfReport> {
 }
 
 fn write_oxide_device_report_json(path: &Path, report: &PerfReport) -> Result<()> {
-    assert_report_repository_provenance(report.version, &report.repository)
-        .context("validating Oxide device repository provenance before JSON write")?;
-    validate_oxide_device_report_metric_contract(report)
-        .with_context(|| "validating Oxide device report metric contract before JSON write")?;
+    let json = serialize_oxide_device_report_json(report)?;
     ensure_parent_dir(path)?;
-    let json =
-        serde_json::to_string_pretty(report).with_context(|| "serializing Oxide device report")?;
     fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+fn serialize_oxide_device_report_json(report: &PerfReport) -> Result<Vec<u8>>
+{
+   assert_report_repository_provenance(report.version, &report.repository)
+      .context("validating Oxide device repository provenance before JSON write")?;
+   validate_oxide_device_report_metric_contract(report)
+      .with_context(|| "validating Oxide device report metric contract before JSON write")?;
+   serde_json::to_vec_pretty(report).with_context(|| "serializing Oxide device report")
 }
 
 pub fn extract_oxide_device_report_json(stdout: &str) -> Result<String> {
@@ -13789,23 +13778,36 @@ fn write_oxide_device_report_markdown(
     report: &PerfReport,
     comparison: Option<&oxide_perf_runner::PerfComparison>,
 ) -> Result<()> {
-    assert_report_repository_provenance(report.version, &report.repository)
-        .context("validating Oxide device repository provenance before markdown write")?;
-    validate_oxide_device_report_metric_contract(report)
-        .with_context(|| "validating Oxide device report metric contract before markdown write")?;
+    let markdown = render_oxide_device_report_markdown(report, comparison)?;
     ensure_parent_dir(path)?;
-    let mut markdown = render_report_markdown(report, comparison);
-    markdown =
-        markdown.replacen("# Oxide Performance Report", "# Oxide Device Performance Report", 1);
-    markdown = markdown.replace(
-        "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline",
-        "PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline",
-    );
-    markdown =
-        markdown.replace("benchmarks/workspace/latest.json", DEFAULT_OXIDE_DEVICE_BASELINE_JSON);
-    markdown =
-        markdown.replace("benchmarks/workspace/latest.md", DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN);
     fs::write(path, markdown).with_context(|| format!("writing {}", path.display()))
+}
+
+fn render_oxide_device_report_markdown(report: &PerfReport, comparison: Option<&oxide_perf_runner::PerfComparison>) -> Result<String>
+{
+   assert_report_repository_provenance(report.version, &report.repository)
+      .context("validating Oxide device repository provenance before markdown write")?;
+   validate_oxide_device_report_metric_contract(report)
+      .with_context(|| "validating Oxide device report metric contract before markdown write")?;
+   let mut markdown = render_report_markdown(report, comparison);
+   markdown = markdown.replacen(
+      "# Oxide Performance Report",
+      "# Oxide Device Performance Report",
+      1,
+   );
+   markdown = markdown.replace(
+      "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline",
+      "PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline",
+   );
+   markdown = markdown.replace(
+      "benchmarks/workspace/latest.json",
+      DEFAULT_OXIDE_DEVICE_BASELINE_JSON,
+   );
+   markdown = markdown.replace(
+      "benchmarks/workspace/latest.md",
+      DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN,
+   );
+   Ok(markdown)
 }
 
 fn write_react_device_report_json(path: &Path, report: &PerfReport) -> Result<()> {
@@ -13937,14 +13939,18 @@ fn print_react_device_summary(
 }
 
 fn write_uikit_report_json(path: &Path, report: &UIKitPerfReport) -> Result<()> {
-    assert_report_repository_provenance(report.version, &report.repository)
-        .context("validating UIKit repository provenance before JSON write")?;
-    validate_uikit_device_report_metric_contract(report)
-        .with_context(|| "validating UIKit report metric contract before JSON write")?;
+    let json = serialize_uikit_report_json(report)?;
     ensure_parent_dir(path)?;
-    let json =
-        serde_json::to_string_pretty(report).with_context(|| "serializing UIKit perf report")?;
     fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+fn serialize_uikit_report_json(report: &UIKitPerfReport) -> Result<Vec<u8>>
+{
+   assert_report_repository_provenance(report.version, &report.repository)
+      .context("validating UIKit repository provenance before JSON write")?;
+   validate_uikit_device_report_metric_contract(report)
+      .with_context(|| "validating UIKit report metric contract before JSON write")?;
+   serde_json::to_vec_pretty(report).with_context(|| "serializing UIKit perf report")
 }
 
 fn push_repository_provenance_markdown(out: &mut String, repository: &RepositoryProvenance)
@@ -14007,7 +14013,9 @@ fn write_uikit_markdown(
     validate_uikit_device_report_metric_contract(report)
         .with_context(|| "validating UIKit report metric contract before markdown write")?;
     if report.suite == "device" {
-        return write_uikit_device_markdown(path, report, comparison);
+        ensure_parent_dir(path)?;
+        let markdown = render_uikit_device_markdown(report, comparison);
+        return fs::write(path, markdown).with_context(|| format!("writing {}", path.display()));
     }
     ensure_parent_dir(path)?;
     let mut out = String::new();
@@ -14100,13 +14108,11 @@ fn write_uikit_markdown(
     fs::write(path, out).with_context(|| format!("writing {}", path.display()))
 }
 
-fn write_uikit_device_markdown(
-    path: &Path,
+fn render_uikit_device_markdown(
     report: &UIKitPerfReport,
     comparison: Option<&UIKitPerfComparison>,
-) -> Result<()> {
+) -> String {
     let includes_energy = report_includes_metric(report, "energy_j");
-    ensure_parent_dir(path)?;
     let mut out = String::new();
     out.push_str("# UIKit Device Perf Report\n\n");
     out.push_str(&format!("- Suite: `{}`\n", report.suite));
@@ -14218,7 +14224,58 @@ fn write_uikit_device_markdown(
         }
     }
 
-    fs::write(path, out).with_context(|| format!("writing {}", path.display()))
+    out
+}
+
+fn paired_device_baseline_outputs(uikit_report: &UIKitPerfReport, uikit_comparison: Option<&UIKitPerfComparison>, oxide_report: &PerfReport, oxide_comparison: Option<&oxide_perf_runner::PerfComparison>) -> Result<Vec<(PathBuf, Vec<u8>)>>
+{
+   if uikit_report.suite != "device" || oxide_report.suite != "oxide-device"
+   {
+      bail!("paired device baseline promotion requires device reports");
+   }
+   if uikit_report.generated_label != oxide_report.generated_label
+   {
+      bail!("paired device baseline reports carry different publication labels");
+   }
+   if uikit_report.repository != oxide_report.repository
+   {
+      bail!("paired device baseline reports carry different source revisions");
+   }
+
+   let uikit_json = serialize_uikit_report_json(uikit_report)?;
+   let uikit_markdown = render_uikit_device_markdown(uikit_report, uikit_comparison).into_bytes();
+   let oxide_json = serialize_oxide_device_report_json(oxide_report)?;
+   let oxide_markdown = render_oxide_device_report_markdown(oxide_report, oxide_comparison)?.into_bytes();
+   let uikit_latest = PathBuf::from(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN);
+   let oxide_latest = PathBuf::from(DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN);
+   let mut outputs = vec![
+      (PathBuf::from(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), uikit_json),
+      (uikit_latest.clone(), uikit_markdown.clone()),
+   ];
+   if let Some(label) = uikit_report.generated_label.as_deref()
+   {
+      if let Some(path) = device_dated_markdown_path(&uikit_latest, label)?
+      {
+         outputs.push((path, uikit_markdown));
+      }
+   }
+   outputs.push((PathBuf::from(DEFAULT_OXIDE_DEVICE_BASELINE_JSON), oxide_json));
+   outputs.push((oxide_latest.clone(), oxide_markdown.clone()));
+   if let Some(label) = oxide_report.generated_label.as_deref()
+   {
+      if let Some(path) = device_dated_markdown_path(&oxide_latest, label)?
+      {
+         outputs.push((path, oxide_markdown));
+      }
+   }
+   Ok(outputs)
+}
+
+fn device_dated_markdown_path(latest_path: &Path, label: &str) -> Result<Option<PathBuf>>
+{
+   validate_experiment_date(label, "PERF_REPORT_DATE")?;
+   let dated_path = latest_path.with_file_name(format!("{label}.md"));
+   Ok((dated_path != latest_path).then_some(dated_path))
 }
 
 fn write_uikit_dated_markdown(

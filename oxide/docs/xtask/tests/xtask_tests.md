@@ -32,6 +32,7 @@ Call flow:
 - `standalone_oxide_default_matches_the_five_unique_compare_rows()`: prevents the no-`--case` Oxide command from silently running a broader on-screen battery than matched promotion.
 - `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
+- `paired_device_promotion_prepares_all_six_canonical_outputs()`: requires paired publication to pre-render both JSON files, both latest Markdown files, and both optional dated Markdown files before promotion.
 - `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
 - `device_build_for_testing_uses_release_iphoneos_configuration()`: freezes explicit Release/iphoneos build arguments and the generated scheme configuration.
 - `standalone_device_promotion_rejects_partial_batteries_before_device_work()`: rejects narrowed UIKit/Oxide canonical writes before source, build, or device work.
@@ -93,6 +94,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: froze pre-rendering of all six paired canonical outputs before the shared atomic promotion call.
 - 2026-08-07: added runtime and source-contract coverage for Oxide device override forwarding.
 - 2026-08-07: added partial standalone promotion and final source-recapture coverage.
 - 2026-08-07: added full evidence-run invalidation, toolchain/artifact reuse, and the React cache hard cut.

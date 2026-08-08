@@ -107,7 +107,7 @@ The required-family coverage matrix is deliberately explicit:
 
 Generated device reports use `missing` when none of the selected rows represent a group, `partial` when a selected signal exists without complete required coverage, and `implemented` only when the defined complete set is present. Exact UIKit and Oxide cases remain available for touched-surface evidence without changing the canonical default.
 
-The official publication proof is one canonical `cargo xtask ios compare-device-perf --write-baseline` run: ten UIKit rows and five deduplicated Oxide rows under `uikit/` and `oxide/`. Promotion rejects `--case`, `--watchable-smoke`, `--smoke`, and `--family`, so a partial selection cannot replace the committed canonical battery. Standalone UIKit and Oxide commands likewise reject `--write-baseline` when `--case` or `--smoke` narrows their canonical selection. The command validates both current reports and both requested baseline comparisons before it writes either committed `latest.*` baseline. Routine publication needs no earlier stage.
+The official publication proof is one canonical `cargo xtask ios compare-device-perf --write-baseline` run: ten UIKit rows and five deduplicated Oxide rows under `uikit/` and `oxide/`. Promotion rejects `--case`, `--watchable-smoke`, `--smoke`, and `--family`, so a partial selection cannot replace the committed canonical battery. Standalone UIKit and Oxide commands likewise reject `--write-baseline` when `--case` or `--smoke` narrows their canonical selection. The command validates and renders both reports and both requested baseline comparisons before staging the six canonical JSON/latest-Markdown/dated-Markdown outputs. A synced journal then promotes that set together, rolls an interrupted install back to the prior revision, and recovers committed cleanup on the next invocation. Routine publication needs no earlier stage.
 
 For a visibly changed build, `cargo xtask ios compare-device-perf --watchable-smoke` may run first. It captures exactly six UIKit rows—idiomatic collection component, spinner animation, button-response navigation, collection-navigation journey, and both camera surfaces—and their five deduplicated Oxide rows under `watchable/all/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` remains an explicit family diagnostic under `family/<family>/`; it neither records promotion status nor gates publication.
 
@@ -162,6 +162,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: promoted the six paired Oxide/UIKit canonical report files through one staged recovery journal.
 - 2026-08-07: forwarded explicit Oxide device renderer/debug overrides through the real shared launch environment and therefore into the evidence-run identity.
 - 2026-08-07: rejected partial standalone baseline promotion and moved final source-drift validation to the output boundary.
 - 2026-08-07: required exact source/toolchain/artifact validation for imported DerivedData, separated full evidence-run identity from build identity, and removed unsafe React Native external reuse.
