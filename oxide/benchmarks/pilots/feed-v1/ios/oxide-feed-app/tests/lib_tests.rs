@@ -310,6 +310,14 @@ fn device_runner_admits_each_release_target_independently()
 }
 
 #[test]
+fn controller_defines_the_errors_used_by_its_fail_closed_checks()
+{
+   let controller = include_str!("../../device-pilot/Controller/FeedV1ControllerTests.swift");
+   assert!(controller.contains("private func controllerError(_ description: String) -> NSError"));
+   assert!(controller.contains("userInfo: [NSLocalizedDescriptionKey: description]"));
+}
+
+#[test]
 fn device_runner_predeclares_resource_fuses_and_proves_every_process_absent()
 {
    let runner = include_str!("../../device-pilot/run-device.sh");

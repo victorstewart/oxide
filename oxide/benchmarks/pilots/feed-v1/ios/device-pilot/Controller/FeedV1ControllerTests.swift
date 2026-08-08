@@ -221,6 +221,15 @@ private func feedV1DarwinCallback(_ center: CFNotificationCenter?, _ observer: U
    Unmanaged<FeedV1DarwinObserver>.fromOpaque(observer).takeUnretainedValue().receive()
 }
 
+private func controllerError(_ description: String) -> NSError
+{
+   NSError(
+      domain: "com.oxide.feed-v1.controller",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: description]
+   )
+}
+
 final class FeedV1ControllerTests: XCTestCase
 {
    private let treatments = FeedV1Treatment.allCases
