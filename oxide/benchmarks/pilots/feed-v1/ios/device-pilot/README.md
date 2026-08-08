@@ -56,9 +56,16 @@ the root Cargo lock and resolved production metadata hashes, and the actual
 Authority/team/CDHash identities of all four signed products. Supporting raw
 tool output remains beneath `raw/provenance/`. The home indicator is outside the frozen comparison crop. The runner
 refuses a locked phone, removes and verifies stale installations of the two
-pilot bundle IDs and controller runner, proves no exact controller process
-survives, and captures the same physical-device identity before and after the
-run.
+pilot bundle IDs and controller runner, terminates and proves absence of the
+exact `FeedV1UIKit`, `FeedV1Oxide`, and `FeedV1Controller-Runner` processes, and
+captures the same physical-device identity before and after the run.
+
+Before the controller launch, the runner admits a build root no larger than
+`4,294,967,296` bytes and a retained tree no larger than `536,870,912` bytes,
+`512` files, or `134,217,728` bytes per file. The not-yet-created `.xcresult`
+has its own `536,870,912`-byte cap before attachment export. The same build,
+retained-byte, file-count, and per-file limits are checked again after their
+respective phases and recorded in the strict cleanup proof.
 
 Device signing follows the workspace convention: set
 `OXIDE_IOS_DEVELOPMENT_TEAM` to the 10-character team identifier. The runner

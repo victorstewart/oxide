@@ -28,7 +28,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 ## Logic narrative
 
-1. Recursively enumerate every retained evidence directory, rejecting a symlink root, nested symlinks, and non-regular filesystem entries rather than silently omitting them, while rejecting retained result bundles/tools/reducer binaries and more than 512 MiB of input. Names such as `.git`, `target`, and `build` receive no discovery exemption. The cleanup proof attests only that the reducer is absent from this retained root; the runner separately removes its external temporary executable after reduction and owns the final exit status.
+1. Recursively enumerate every retained evidence directory, rejecting a symlink root, nested symlinks, and non-regular filesystem entries rather than silently omitting them, while rejecting retained result bundles/tools/reducer binaries, more than 512 MiB, more than 512 files, or any file above 128 MiB. Names such as `.git`, `target`, and `build` receive no discovery exemption. Cleanup revision 3 additionally proves the prelaunch fuse pass, bounded external build/result bundle, and exact absence of both measured apps plus the controller. The runner separately removes its external temporary reducer after reduction and owns the final exit status.
 2. Parse success and failure records with unknown-field rejection. Require each nonce-derived app record under its treatment's retrieved documents tree, exactly one authority manifest and cleanup proof at their frozen paths, and the six nonce-derived smoke PNGs in the exact controller test's single-detail attachment manifest. Reject canonical-path and Unix hard-link aliases. Any app failure record blocks the population.
 3. Admit one booted physical 120 Hz iPhone with unchanged pre/post identity, unlocked preflight records, nominal thermal state, low-power mode off, zero thermal/power transition counts, and exact configured 120 Hz ranges. Require the controller's app-container runtime proof to remain within 20 minutes total and 10 minutes per treatment.
 4. Validate fixture identity, canvas, frozen geometry, direction, at least 524 points of travel, observed inertial entry, order, and the exact smoke or full tuple population. Smoke makes no unreplicated cross-treatment travel claim. Full mode forms nine balanced primary deltas for each candidate treatment and direction, then requires the median inside 5 percent and its exact rank-2-to-rank-8 interval inside 10 percent.
@@ -50,7 +50,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 
 - Missing, foreign, duplicated, malformed, non-finite, misplaced, aliased, symlinked, or out-of-order records block admission. Attachment authority additionally requires the exact controller test identifier, one manifest detail, six attachments, in-root paths, and distinct file identities on Unix.
 - Source evidence rejects symlinks and unclassified files, includes only `protocol.md` and admitted implementation files below `ios/` and `reducer/`, and excludes targets, builds, result/evidence trees, stale latest reports, logs, traces, XCTest result bundles, and generated Xcode projects. `project.yml` is authoritative; `FeedV1Pilot.xcodeproj` is generated only in the external build root. Build provenance additionally rejects a foreign CoreDevice/hardware pair, a non-120-Hz contract, translated Rust host, malformed dependency/build hashes, or any product outside one Apple Development team.
-- Device identity changes, a locked phone, Simulator evidence, 60 Hz target periods, thermal/power transitions, drag-only gestures, total/per-treatment runtime overflow, a changed post-export source snapshot, incomplete cleanup, Xcode-test failure, an attachment population other than the exact six smoke PNGs, or stale retained tooling block admission.
+- Device identity changes, a locked phone, Simulator evidence, 60 Hz target periods, thermal/power transitions, drag-only gestures, total/per-treatment runtime overflow, a breached prelaunch/build/result/evidence/file fuse, a surviving UIKit/Oxide/controller process, a changed post-export source snapshot, incomplete cleanup, Xcode-test failure, an attachment population other than the exact six smoke PNGs, or stale retained tooling block admission.
 - PNG decode, full-screen dimensions, crop, component geometry, travel, or adversarial-gate failures block admission.
 - Output paths must have a filename. Missing parent directories are created; atomic write or rename errors are returned to the caller.
 
@@ -86,6 +86,7 @@ cargo test --locked -p oxide-feed-v1-reducer
 
 ## Changelog
 
+- 2026-08-07: Added cleanup revision 3 with predeclared build/result/evidence/file fuses and exact three-process absence.
 - 2026-08-07: Bound evidence revision 3 to the exact phone, OS/toolchains, resolved Release settings, production Cargo graph, and signed product identities.
 - 2026-08-07: hard-cut revision-4 reports to exact nine-cluster median
   intervals with ranks 2 and 8 and 96.09375 percent achieved coverage; removed

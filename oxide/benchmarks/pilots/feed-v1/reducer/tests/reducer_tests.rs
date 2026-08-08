@@ -663,8 +663,15 @@ fn smoke_rejects_cleanup_and_artifact_provenance_mutations() -> Result<(), Strin
    let mut cleanup: Value = serde_json::from_slice(&cleanup_bytes).map_err(|error| error.to_string())?;
    cleanup["test_succeeded"] = json!(false);
    cleanup["verified_attachment_count"] = json!(5);
+   cleanup["uikit_process_absent"] = json!(false);
+   cleanup["prelaunch_fuses_admitted"] = json!(false);
+   cleanup["resource_limits"]["retained_file_count"] = json!(511);
    cleanup["source_snapshot_preserved"] = json!(false);
    cleanup["reducer_binary_absent_from_result_root"] = json!(false);
+   cleanup["external_build_bytes"] = json!(4294967297_u64);
+   cleanup["result_bundle_bytes"] = json!(536870913_u64);
+   cleanup["retained_file_count"] = json!(513);
+   cleanup["largest_retained_file_bytes"] = json!(134217729_u64);
    fs::write(&cleanup_path, serde_json::to_vec(&cleanup).map_err(|error| error.to_string())?)
       .map_err(|error| error.to_string())?;
    assert!(verify_smoke(&root).unwrap_err().contains("cleanup/runtime/cap proof failed"));
@@ -867,11 +874,12 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
    write_smoke_device_evidence(&raw)?;
    fs::write(raw.join("evidence-manifest.json"), serde_json::to_vec(&json!({
       "schema": "oxide.feed-v1.evidence-manifest",
-      "schema_revision": 2,
+      "schema_revision": 3,
       "fixture_sha256": "a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473",
       "repository_ref": "refs/heads/main",
       "repository_head_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "repository_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "build_provenance": valid_build_provenance(),
       "source_files": { "reducer/src/lib.rs": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
       "uikit_app_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "oxide_app_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -885,17 +893,31 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
    })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
    fs::write(raw.join("cleanup.json"), serde_json::to_vec(&json!({
       "schema": "oxide.feed-v1.cleanup",
-      "schema_revision": 2,
+      "schema_revision": 3,
       "test_succeeded": true,
       "verified_attachment_count": 6,
       "apps_uninstalled": true,
       "controller_uninstalled": true,
+      "uikit_process_absent": true,
+      "oxide_process_absent": true,
       "controller_process_absent": true,
+      "prelaunch_fuses_admitted": true,
+      "resource_limits": {
+         "external_build_bytes": 4294967296_u64,
+         "result_bundle_bytes": 536870912_u64,
+         "retained_evidence_bytes": 536870912_u64,
+         "retained_file_count": 512,
+         "retained_file_bytes": 134217728_u64
+      },
       "source_snapshot_preserved": true,
       "external_build_removed": true,
       "result_bundle_removed": true,
       "reducer_binary_absent_from_result_root": true,
-      "raw_evidence_bytes": 0,
+      "external_build_bytes": 1073741824,
+      "result_bundle_bytes": 104857600,
+      "raw_evidence_bytes": 10485760,
+      "retained_file_count": 100,
+      "largest_retained_file_bytes": 10485760,
       "runtime_seconds": 1.0
    })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
    fs::write(

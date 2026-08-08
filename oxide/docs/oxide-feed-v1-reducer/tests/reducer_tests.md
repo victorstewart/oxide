@@ -32,7 +32,7 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `smoke_admits_named_output_placeholders_as_evidence` proves smoke verification cannot hide an evidence record whose path happens to equal its internal no-write output placeholder.
 - `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
 - `smoke_rejects_symlink_roots_entries_and_nonregular_files` proves Unix evidence discovery rejects root aliases, nested symlinks, and socket entries instead of silently omitting them.
-- `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
+- `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root/process/fuse cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
 - `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, verifies the exact six-PNG export and full-screen dimensions, requires revision-4 exact-method/rank/coverage metadata plus all 54 primary timing/inertia summaries, rejects legacy bootstrap fields, and proves a second reduction over the exact same output paths is byte-identical.
 - `full_reduction_rejects_systematic_primary_travel_mismatch` proves a repeatable six-percent Oxide workload mismatch blocks both direction comparisons even though each confidence interval remains inside the wider ten-percent bound.
 
@@ -80,6 +80,7 @@ Expected integration result: every focused integration case passes.
 
 ## Changelog
 
+- 2026-08-07: Added hostile cleanup mutations for prelaunch, build, result-bundle, evidence-file, and exact process-absence fuses.
 - 2026-08-07: Added strict revision-3 evidence provenance for the frozen phone, toolchains, dependency graph, resolved settings, and all signed products.
 - 2026-08-07: replaced bootstrap determinism with exact rank, achieved-coverage,
   population-cardinality, revision-4 serialization, and retired-field checks.

@@ -40,6 +40,11 @@ const TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN: f64 = 0.10;
 const TRAVEL_EQUIVALENCE_EPSILON: f64 = 1e-12;
 const ATTACHMENT_COUNT: usize = 6;
 const ATTACHMENT_TEST_IDENTIFIER: &str = "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()";
+const MAX_BUILD_ROOT_BYTES: u64 = 4_294_967_296;
+const MAX_RETAINED_EVIDENCE_BYTES: u64 = 536_870_912;
+const MAX_RETAINED_FILE_COUNT: usize = 512;
+const MAX_RETAINED_FILE_BYTES: u64 = 134_217_728;
+const MAX_RESULT_BUNDLE_BYTES: u64 = 536_870_912;
 const CONFIDENCE_INTERVAL_METHOD: &str = "exact-binomial-median";
 const CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
 // Omitting zero or one successes from each Binomial(9, 0.5) tail leaves 492 / 512 coverage.
@@ -1805,13 +1810,32 @@ struct CleanupProof
    verified_attachment_count: usize,
    apps_uninstalled: bool,
    controller_uninstalled: bool,
+   uikit_process_absent: bool,
+   oxide_process_absent: bool,
    controller_process_absent: bool,
+   prelaunch_fuses_admitted: bool,
+   resource_limits: ResourceLimits,
    source_snapshot_preserved: bool,
    external_build_removed: bool,
    result_bundle_removed: bool,
    reducer_binary_absent_from_result_root: bool,
+   external_build_bytes: u64,
+   result_bundle_bytes: u64,
    raw_evidence_bytes: u64,
+   retained_file_count: usize,
+   largest_retained_file_bytes: u64,
    runtime_seconds: f64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceLimits
+{
+   external_build_bytes: u64,
+   result_bundle_bytes: u64,
+   retained_evidence_bytes: u64,
+   retained_file_count: usize,
+   retained_file_bytes: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2026,6 +2050,11 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       let bytes = fs::metadata(path).map_err(|error| format!("read retained metadata {}: {error}", path.display()))?.len();
       total.checked_add(bytes).ok_or_else(|| "retained evidence byte count overflowed".to_string())
    })?;
+   let largest_retained_file_bytes = files.iter().try_fold(0_u64, |maximum, path| {
+      let bytes = fs::metadata(path)
+         .map_err(|error| format!("read retained metadata {}: {error}", path.display()))?.len();
+      Ok::<u64, String>(maximum.max(bytes))
+   })?;
    let mut run_records = Vec::new();
    let mut failure_records = Vec::new();
    let mut blockers = Vec::new();
@@ -2050,9 +2079,17 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    {
       blockers.push(format!("attachment admission: {error}"));
    }
-   if retained_input_bytes > 512 * 1024 * 1024
+   if retained_input_bytes > MAX_RETAINED_EVIDENCE_BYTES
    {
       blockers.push(format!("retained reducer input is {retained_input_bytes} bytes, above 512 MiB"));
+   }
+   if files.len() > MAX_RETAINED_FILE_COUNT
+   {
+      blockers.push(format!("retained reducer input has {} files, above {MAX_RETAINED_FILE_COUNT}", files.len()));
+   }
+   if largest_retained_file_bytes > MAX_RETAINED_FILE_BYTES
+   {
+      blockers.push(format!("retained reducer input contains a {largest_retained_file_bytes}-byte file, above {MAX_RETAINED_FILE_BYTES}"));
    }
    let device = match admit_device(&paths.run_root)
    {
@@ -2416,17 +2453,33 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       Some(proof) =>
       {
          if proof.schema != "oxide.feed-v1.cleanup"
-            || proof.schema_revision != 2
+            || proof.schema_revision != 3
             || !proof.test_succeeded
             || proof.verified_attachment_count != ATTACHMENT_COUNT
             || !proof.apps_uninstalled
             || !proof.controller_uninstalled
+            || !proof.uikit_process_absent
+            || !proof.oxide_process_absent
             || !proof.controller_process_absent
+            || !proof.prelaunch_fuses_admitted
+            || proof.resource_limits.external_build_bytes != MAX_BUILD_ROOT_BYTES
+            || proof.resource_limits.result_bundle_bytes != MAX_RESULT_BUNDLE_BYTES
+            || proof.resource_limits.retained_evidence_bytes != MAX_RETAINED_EVIDENCE_BYTES
+            || proof.resource_limits.retained_file_count != MAX_RETAINED_FILE_COUNT
+            || proof.resource_limits.retained_file_bytes != MAX_RETAINED_FILE_BYTES
             || !proof.source_snapshot_preserved
             || !proof.external_build_removed
             || !proof.result_bundle_removed
             || !proof.reducer_binary_absent_from_result_root
-            || proof.raw_evidence_bytes > 512 * 1024 * 1024
+            || proof.external_build_bytes == 0
+            || proof.external_build_bytes > MAX_BUILD_ROOT_BYTES
+            || proof.result_bundle_bytes == 0
+            || proof.result_bundle_bytes > MAX_RESULT_BUNDLE_BYTES
+            || proof.raw_evidence_bytes > MAX_RETAINED_EVIDENCE_BYTES
+            || proof.retained_file_count == 0
+            || proof.retained_file_count > MAX_RETAINED_FILE_COUNT
+            || proof.largest_retained_file_bytes == 0
+            || proof.largest_retained_file_bytes > MAX_RETAINED_FILE_BYTES
             || !proof.runtime_seconds.is_finite()
             || proof.runtime_seconds < 0.0
             || proof.runtime_seconds > 20.0 * 60.0

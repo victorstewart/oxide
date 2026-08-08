@@ -24,6 +24,7 @@ Call graph:
 - `feed_crates_share_the_root_workspace_without_entering_default_builds` requires both pilot crates to use the root member/lock/profile graph while keeping them outside ordinary default-member work.
 - `complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work` keeps the all-row Swift/Rust proof in the authoritative runner and rejects reintroducing it into app construction.
 - `device_runner_binds_phone_toolchain_dependencies_and_signing` freezes the exact CoreDevice/hardware pair and requires structured evidence for arm64 toolchains, dependency resolution, resolved Release settings, and every signed product.
+- `device_runner_predeclares_resource_fuses_and_proves_every_process_absent` freezes build/evidence/file/result caps before launch and requires exact post-run absence for UIKit, Oxide, and the controller.
 - `frozen_app_starts_at_each_exact_contract_offset` covers both controller endpoints.
 - `measurement_begins_at_the_first_drag_offset_change` proves touch-down and sub-slop motion remain unmeasured.
 - `a_touch_that_never_drags_returns_to_ready` proves a tap does not create a benchmark sample.
@@ -97,6 +98,7 @@ cargo test -p oxide-feed-v1-app --test lib_tests \
 
 - 2026-08-07: Added a source boundary proving complete fixture derivation runs in paired host preflights rather than app startup.
 - 2026-08-07: Added a source boundary for exact phone, toolchain, dependency, build-setting, and signing provenance.
+- 2026-08-07: Added prelaunch resource-fuse and three-process cleanup source boundaries.
 - 2026-08-07: Added a source guard for shared root workspace ownership without default-member expansion.
 - 2026-08-07: Added a source guard for rlib-only ordinary builds and explicit device-only static-archive emission.
 - 2026-08-07: Added frame-coalesced text-atlas publication and complete runtime A8 adapter forwarding coverage.

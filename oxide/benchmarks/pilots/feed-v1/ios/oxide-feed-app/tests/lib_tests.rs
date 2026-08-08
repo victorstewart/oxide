@@ -280,6 +280,31 @@ fn device_runner_binds_phone_toolchain_dependencies_and_signing()
 }
 
 #[test]
+fn device_runner_predeclares_resource_fuses_and_proves_every_process_absent()
+{
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   for contract in [
+      "MAX_BUILD_ROOT_BYTES=4294967296",
+      "MAX_RETAINED_EVIDENCE_BYTES=536870912",
+      "MAX_RETAINED_FILE_COUNT=512",
+      "MAX_RETAINED_FILE_BYTES=134217728",
+      "MAX_RESULT_BUNDLE_BYTES=536870912",
+      "remove_device_processes postclean uikit FeedV1UIKit",
+      "remove_device_processes postclean oxide FeedV1Oxide",
+      "remove_controller_processes postclean",
+   ]
+   {
+      assert!(runner.contains(contract));
+   }
+
+   let reducer = include_str!("../../../reducer/src/lib.rs");
+   assert!(reducer.contains("proof.schema_revision == 3"));
+   assert!(reducer.contains("proof.uikit_process_absent"));
+   assert!(reducer.contains("proof.oxide_process_absent"));
+   assert!(reducer.contains("proof.prelaunch_fuses_admitted"));
+}
+
+#[test]
 fn frozen_app_starts_at_each_exact_contract_offset()
 {
    let _lock = lock_environment();

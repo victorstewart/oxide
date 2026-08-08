@@ -232,18 +232,23 @@ the externally generated `FeedV1Pilot.xcodeproj` is neither checked in nor
 admitted as source evidence. The report identifies both the frozen visual-gate
 specification and the actual `reducer/src/lib.rs` source hash from this manifest.
 
-Exactly one `oxide.feed-v1.cleanup` revision 2 may appear, at
+Exactly one `oxide.feed-v1.cleanup` revision 3 may appear, at
 `raw/cleanup.json`, and is written only after process/app cleanup and external
 build-root removal. It contains `test_succeeded`,
 `verified_attachment_count`, `apps_uninstalled`, `controller_uninstalled`,
-`controller_process_absent`, `source_snapshot_preserved`,
+`uikit_process_absent`, `oxide_process_absent`, `controller_process_absent`,
+`prelaunch_fuses_admitted`, the exact structured `resource_limits`, `source_snapshot_preserved`,
 `external_build_removed`, `result_bundle_removed`,
-`reducer_binary_absent_from_result_root`, `raw_evidence_bytes`, and
+`reducer_binary_absent_from_result_root`, `external_build_bytes`,
+`result_bundle_bytes`, `raw_evidence_bytes`, `retained_file_count`,
+`largest_retained_file_bytes`, and
 `runtime_seconds`.
 `raw_evidence_bytes` is the allocated size of `raw/` immediately before the
 cleanup proof and reports are written; it is not presented as final-package
 size. Publication requires Xcode success, the exact six-PNG smoke population,
-and every cleanup boolean to be true. The reducer independently proves that no
+and every cleanup boolean to be true. The frozen caps are 4 GiB for the external
+build root, 512 MiB for the result bundle and retained evidence, 512 retained
+files, and 128 MiB for any retained file. The reducer independently proves that no
 reducer executable exists inside the result root and rejects an actual retained
 `.xcresult` or `tools` directory. It also totals every retained input file
 instead of trusting the claimed raw size. After reduction, the runner removes

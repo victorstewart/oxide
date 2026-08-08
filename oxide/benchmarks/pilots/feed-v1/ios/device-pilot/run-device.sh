@@ -111,6 +111,11 @@ ATTACHMENT_ROOT="$RAW_ROOT/attachments"
 PROVENANCE_ROOT="$RAW_ROOT/provenance"
 BUILD_PROVENANCE="$BUILD_ROOT/build-provenance.json"
 CONTROLLER_BUNDLE_ID="com.oxide.feed-v1.controller.xctrunner"
+MAX_BUILD_ROOT_BYTES=4294967296
+MAX_RETAINED_EVIDENCE_BYTES=536870912
+MAX_RETAINED_FILE_COUNT=512
+MAX_RETAINED_FILE_BYTES=134217728
+MAX_RESULT_BUNDLE_BYTES=536870912
 SCHEME="FeedV1PilotSmoke"
 EXPECTED_ATTACHMENTS=6
 if [[ "$MODE" == "full" ]]
@@ -125,7 +130,10 @@ then
 fi
 APPS_UNINSTALLED=false
 CONTROLLER_UNINSTALLED=false
+UIKIT_PROCESS_ABSENT=false
+OXIDE_PROCESS_ABSENT=false
 CONTROLLER_PROCESS_ABSENT=false
+PRELAUNCH_FUSES_ADMITTED=false
 SOURCE_SNAPSHOT_PRESERVED=false
 BUILD_REMOVED=false
 RESULT_BUNDLE_REMOVED=false
@@ -133,12 +141,18 @@ REDUCER_REMOVED=false
 TEST_SUCCEEDED=false
 VERIFIED_ATTACHMENT_COUNT=0
 TEST_STATUS=1
+BUILD_ROOT_BYTES=0
+RESULT_BUNDLE_BYTES=0
+RETAINED_FILE_COUNT=0
+LARGEST_RETAINED_FILE_BYTES=0
 START_SECONDS="$(date +%s)"
 
 cleanup_backstop()
 {
    if [[ -d "$BUILD_ROOT" ]]
    then
+      remove_device_processes backstop uikit FeedV1UIKit >/dev/null 2>&1 || true
+      remove_device_processes backstop oxide FeedV1Oxide >/dev/null 2>&1 || true
       remove_controller_processes backstop >/dev/null 2>&1 || true
    fi
    xcrun devicectl device uninstall app --device "$CORE_DEVICE_ID" com.oxide.feed-v1.uikit --quiet >/dev/null 2>&1 || true
@@ -345,19 +359,21 @@ verify_controller_contract()
    fi
 }
 
-remove_controller_processes()
+remove_device_processes()
 {
    local stage="$1"
-   local before="$RAW_ROOT/$stage-controller-process-before.json"
-   local after="$RAW_ROOT/$stage-controller-process-after.json"
+   local label="$2"
+   local executable="$3"
+   local before="$RAW_ROOT/$stage-$label-process-before.json"
+   local after="$RAW_ROOT/$stage-$label-process-after.json"
    local index=0
    local pid
    local processes
    if ! xcrun devicectl device info processes --device "$CORE_DEVICE_ID" \
-      --filter "executable.absoluteString ENDSWITH '/FeedV1Controller-Runner'" \
+      --filter "executable.absoluteString ENDSWITH '/$executable'" \
       --json-output "$before" --quiet
    then
-      echo "could not inspect the controller process during $stage" >&2
+      echo "could not inspect the $label process during $stage" >&2
       return 1
    fi
    while pid="$(/usr/bin/plutil -extract "result.runningProcesses.$index.processIdentifier" raw -o - "$before" 2>/dev/null)"
@@ -365,20 +381,25 @@ remove_controller_processes()
       if [[ ! "$pid" =~ ^[[:digit:]]+$ ]] \
          || ! xcrun devicectl device process terminate --device "$CORE_DEVICE_ID" --pid "$pid" --quiet
       then
-         echo "could not terminate controller process $pid during $stage" >&2
+         echo "could not terminate $label process $pid during $stage" >&2
          return 1
       fi
       index=$((index + 1))
    done
    if ! xcrun devicectl device info processes --device "$CORE_DEVICE_ID" \
-      --filter "executable.absoluteString ENDSWITH '/FeedV1Controller-Runner'" \
+      --filter "executable.absoluteString ENDSWITH '/$executable'" \
       --json-output "$after" --quiet \
       || ! processes="$(/usr/bin/plutil -extract result.runningProcesses json -o - "$after")" \
       || [[ "$processes" != "[]" ]]
    then
-      echo "controller process survived cleanup during $stage" >&2
+      echo "$label process survived cleanup during $stage" >&2
       return 1
    fi
+}
+
+remove_controller_processes()
+{
+   remove_device_processes "$1" controller FeedV1Controller-Runner
 }
 
 remove_existing_app()
@@ -420,6 +441,46 @@ remove_existing_app()
       echo "$bundle_id installation survived removal during $stage" >&2
       return 1
    fi
+}
+
+measure_tree()
+{
+   local root="$1"
+   local kib
+   if ! kib="$(du -sk "$root" | awk '{print $1}')" \
+      || ! TREE_FILE_COUNT="$(find "$root" -type f | wc -l | tr -d ' ')" \
+      || ! TREE_LARGEST_FILE_BYTES="$(find "$root" -type f -exec stat -f '%z' {} + | awk 'BEGIN { maximum = 0 } { if ($1 > maximum) maximum = $1 } END { print maximum }')" \
+      || [[ ! "$kib" =~ ^[[:digit:]]+$ || ! "$TREE_FILE_COUNT" =~ ^[[:digit:]]+$ || ! "$TREE_LARGEST_FILE_BYTES" =~ ^[[:digit:]]+$ ]]
+   then
+      return 1
+   fi
+   TREE_BYTES=$((kib * 1024))
+}
+
+check_directory_bytes()
+{
+   local root="$1"
+   local label="$2"
+   local maximum="$3"
+   if ! measure_tree "$root" || [[ "$TREE_BYTES" -gt "$maximum" ]]
+   then
+      echo "$label exceeded its predeclared $maximum-byte fuse" >&2
+      return 1
+   fi
+}
+
+check_retained_evidence_fuses()
+{
+   if ! measure_tree "$RESULT_ROOT" \
+      || [[ "$TREE_BYTES" -gt "$MAX_RETAINED_EVIDENCE_BYTES" ]] \
+      || [[ "$TREE_FILE_COUNT" -gt "$MAX_RETAINED_FILE_COUNT" ]] \
+      || [[ "$TREE_LARGEST_FILE_BYTES" -gt "$MAX_RETAINED_FILE_BYTES" ]]
+   then
+      echo "retained evidence exceeded its predeclared byte, file-count, or per-file fuse" >&2
+      return 1
+   fi
+   RETAINED_FILE_COUNT="$TREE_FILE_COUNT"
+   LARGEST_RETAINED_FILE_BYTES="$TREE_LARGEST_FILE_BYTES"
 }
 
 sha256_file()
@@ -749,7 +810,9 @@ then
    exit 1
 fi
 
-if ! remove_controller_processes preclean \
+if ! remove_device_processes preclean uikit FeedV1UIKit \
+   || ! remove_device_processes preclean oxide FeedV1Oxide \
+   || ! remove_controller_processes preclean \
    || ! remove_existing_app com.oxide.feed-v1.uikit uikit preclean \
    || ! remove_existing_app com.oxide.feed-v1.oxide oxide preclean \
    || ! remove_existing_app "$CONTROLLER_BUNDLE_ID" controller preclean
@@ -776,6 +839,13 @@ then
 fi
 
 RESULT_BUNDLE="$RAW_ROOT/feed-v1-$MODE.xcresult"
+if [[ -e "$RESULT_BUNDLE" ]] \
+   || ! check_directory_bytes "$BUILD_ROOT" "external build root before launch" "$MAX_BUILD_ROOT_BYTES" \
+   || ! check_retained_evidence_fuses
+then
+   exit 1
+fi
+PRELAUNCH_FUSES_ADMITTED=true
 TEST_STARTED="$(date +%s)"
 xcrun xcodebuild \
    -project "$PROJECT" \
@@ -796,7 +866,18 @@ then
 fi
 TEST_ENDED="$(date +%s)"
 
-if [[ -d "$RESULT_BUNDLE" ]] \
+RESULT_BUNDLE_ADMITTED=false
+if [[ -d "$RESULT_BUNDLE" ]] && measure_tree "$RESULT_BUNDLE"
+then
+   RESULT_BUNDLE_BYTES="$TREE_BYTES"
+   if [[ "$RESULT_BUNDLE_BYTES" -le "$MAX_RESULT_BUNDLE_BYTES" ]]
+   then
+      RESULT_BUNDLE_ADMITTED=true
+   else
+      echo "XCTest result bundle exceeded its predeclared $MAX_RESULT_BUNDLE_BYTES-byte fuse" >&2
+   fi
+fi
+if [[ "$RESULT_BUNDLE_ADMITTED" == "true" ]] \
    && xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
       >"$RAW_ROOT/attachment-export.log" 2>&1 \
    && "$REDUCER" verify-attachments "$ATTACHMENT_ROOT" \
@@ -843,6 +924,14 @@ if remove_existing_app com.oxide.feed-v1.uikit uikit postclean \
 then
    APPS_UNINSTALLED=true
 fi
+if remove_device_processes postclean uikit FeedV1UIKit
+then
+   UIKIT_PROCESS_ABSENT=true
+fi
+if remove_device_processes postclean oxide FeedV1Oxide
+then
+   OXIDE_PROCESS_ABSENT=true
+fi
 if remove_controller_processes postclean
 then
    CONTROLLER_PROCESS_ABSENT=true
@@ -852,10 +941,13 @@ then
    CONTROLLER_UNINSTALLED=true
 fi
 
-BUILD_KIB="$(du -sk "$BUILD_ROOT" | awk '{print $1}')"
-if [[ "$BUILD_KIB" -gt 4194304 ]]
+if measure_tree "$BUILD_ROOT"
 then
-   echo "external build root exceeded 4 GiB" >&2
+   BUILD_ROOT_BYTES="$TREE_BYTES"
+fi
+if [[ "$BUILD_ROOT_BYTES" -eq 0 || "$BUILD_ROOT_BYTES" -gt "$MAX_BUILD_ROOT_BYTES" ]]
+then
+   echo "external build root exceeded its predeclared $MAX_BUILD_ROOT_BYTES-byte fuse" >&2
    TEST_STATUS=1
 fi
 if [[ "$BUILD_ROOT" == /tmp/oxide-feed-v1-build.* && -d "$BUILD_ROOT" ]]
@@ -879,21 +971,39 @@ then
    SOURCE_SNAPSHOT_PRESERVED=false
    TEST_STATUS=1
 fi
+if ! check_retained_evidence_fuses
+then
+   TEST_STATUS=1
+fi
 RAW_EVIDENCE_BYTES="$(du -sk "$RAW_ROOT" | awk '{print $1 * 1024}')"
 cat >"$RAW_ROOT/cleanup.json" <<EOF
 {
   "schema": "oxide.feed-v1.cleanup",
-  "schema_revision": 2,
+  "schema_revision": 3,
   "test_succeeded": $TEST_SUCCEEDED,
   "verified_attachment_count": $VERIFIED_ATTACHMENT_COUNT,
   "apps_uninstalled": $APPS_UNINSTALLED,
   "controller_uninstalled": $CONTROLLER_UNINSTALLED,
+  "uikit_process_absent": $UIKIT_PROCESS_ABSENT,
+  "oxide_process_absent": $OXIDE_PROCESS_ABSENT,
   "controller_process_absent": $CONTROLLER_PROCESS_ABSENT,
+  "prelaunch_fuses_admitted": $PRELAUNCH_FUSES_ADMITTED,
+  "resource_limits": {
+    "external_build_bytes": $MAX_BUILD_ROOT_BYTES,
+    "result_bundle_bytes": $MAX_RESULT_BUNDLE_BYTES,
+    "retained_evidence_bytes": $MAX_RETAINED_EVIDENCE_BYTES,
+    "retained_file_count": $MAX_RETAINED_FILE_COUNT,
+    "retained_file_bytes": $MAX_RETAINED_FILE_BYTES
+  },
   "source_snapshot_preserved": $SOURCE_SNAPSHOT_PRESERVED,
   "external_build_removed": $BUILD_REMOVED,
   "result_bundle_removed": $RESULT_BUNDLE_REMOVED,
   "reducer_binary_absent_from_result_root": true,
+  "external_build_bytes": $BUILD_ROOT_BYTES,
+  "result_bundle_bytes": $RESULT_BUNDLE_BYTES,
   "raw_evidence_bytes": $RAW_EVIDENCE_BYTES,
+  "retained_file_count": $RETAINED_FILE_COUNT,
+  "largest_retained_file_bytes": $LARGEST_RETAINED_FILE_BYTES,
   "runtime_seconds": $RUNTIME_SECONDS
 }
 EOF
@@ -926,10 +1036,8 @@ else
    echo "external reducer executable was not removed" >&2
    REDUCE_STATUS=1
 fi
-FINAL_BYTES="$(du -sk "$RESULT_ROOT" | awk '{print $1 * 1024}')"
-if [[ "$FINAL_BYTES" -gt 536870912 ]]
+if ! check_retained_evidence_fuses
 then
-   echo "retained result root exceeded 512 MiB" >&2
    exit 1
 fi
 
