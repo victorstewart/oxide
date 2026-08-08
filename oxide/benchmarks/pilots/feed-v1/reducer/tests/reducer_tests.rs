@@ -4,9 +4,9 @@ use std::process::Command;
 
 use oxide_feed_v1_reducer::{
    callback_deadline_counts, exact_median_confidence_interval, frozen_components,
-   frozen_order_index, reduce, strict_validate_failure_json, strict_validate_run_json,
-   travel_equivalence_passes, verify_attachment_export, verify_smoke, visual_metrics,
-   ReducePaths, RgbaImage,
+   frozen_order_index, nearest_rank_quantile, reduce, strict_validate_failure_json,
+   strict_validate_run_json, travel_equivalence_passes, verify_attachment_export,
+   verify_smoke, visual_metrics, ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
 
@@ -39,6 +39,21 @@ fn travel_equivalence_decision_honors_both_inclusive_frozen_boundaries()
    {
       assert_eq!(travel_equivalence_passes(median, lower, upper), expected, "{name}");
    }
+}
+
+#[test]
+fn nearest_rank_quantile_uses_one_based_ceiling_rank() -> Result<(), String>
+{
+   let values = [4.0, 1.0, 3.0, 2.0];
+   assert_eq!(nearest_rank_quantile(&values, 0.50)?, 2.0);
+   assert_eq!(nearest_rank_quantile(&values, 0.75)?, 3.0);
+   assert_eq!(nearest_rank_quantile(&values, 0.95)?, 4.0);
+   assert_eq!(nearest_rank_quantile(&values, 1.0)?, 4.0);
+   assert!(nearest_rank_quantile(&values, 0.0).is_err());
+   assert!(nearest_rank_quantile(&values, f64::NAN).is_err());
+   assert!(nearest_rank_quantile(&[1.0, f64::INFINITY], 0.50).is_err());
+   assert!(nearest_rank_quantile(&[], 0.50).is_err());
+   Ok(())
 }
 
 #[test]
@@ -734,6 +749,7 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
 {
    let root = temporary_root("valid-full-idempotence")?;
    write_valid_full_root(&root)?;
+   rewrite_primary_callback_profiles(&root)?;
    verify_attachment_export(&root.join("raw/attachments"))?;
    let paths = ReducePaths {
       run_root: root.clone(),
@@ -745,7 +761,7 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    let first_markdown = fs::read(&paths.output_markdown).map_err(|error| error.to_string())?;
    let report: Value = serde_json::from_slice(&first_json).map_err(|error| error.to_string())?;
    assert_eq!(report["status"], "complete");
-   assert_eq!(report["schema_revision"], 4);
+   assert_eq!(report["schema_revision"], 5);
    assert_eq!(report["run_count_total"], 60);
    assert_eq!(report["run_count_primary"], 54);
    let travel = report["travel_equivalence"].as_array()
@@ -781,6 +797,16 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
          && comparison.get("bootstrap_seed_hex").is_none()
          && comparison.get("confidence_95_lower").is_none()
          && comparison.get("confidence_95_upper").is_none()
+   }));
+   let treatments = report["treatments"].as_array()
+      .ok_or_else(|| "report treatments are not an array".to_string())?;
+   assert_eq!(treatments.len(), 3);
+   assert!(treatments.iter().all(|treatment| {
+      treatment["run_count"] == 18
+         && treatment["cluster_count"] == 9
+         && treatment["clusters"].as_array().is_some_and(|clusters| clusters.len() == 9)
+         && treatment["aggregate_interval_p50_ms"].as_f64().is_some_and(|value| (value - 8.0).abs() < 1e-6)
+         && treatment["aggregate_interval_p95_ms"].as_f64().is_some_and(|value| (value - 8.0).abs() < 1e-6)
    }));
    let runs = report["runs"].as_array().ok_or_else(|| "report runs are not an array".to_string())?;
    assert_eq!(runs.len(), 54);
@@ -1154,6 +1180,45 @@ fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treat
       "status": "complete",
       "failure": null
    }))
+}
+
+fn rewrite_primary_callback_profiles(root: &Path) -> Result<(), String>
+{
+   for documents in ["uikit-documents", "oxide-documents"]
+   {
+      let root = root.join("raw").join(documents);
+      for entry in fs::read_dir(&root).map_err(|error| error.to_string())?
+      {
+         let path = entry.map_err(|error| error.to_string())?.path();
+         let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+         let mut run: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+         if run["run"]["phase"] != "primary"
+         {
+            continue;
+         }
+         let session = run["run"]["session_index"].as_u64()
+            .ok_or_else(|| "primary run has no session index".to_string())?;
+         let pair = run["run"]["pair_index"].as_u64()
+            .ok_or_else(|| "primary run has no pair index".to_string())?;
+         let cluster = session * 3 + pair;
+         let interval = 0.0076 + cluster as f64 * 0.0001;
+         let interval_count = if cluster == 0 { 100 } else { 1 };
+         let mut timestamp = 100.0;
+         let mut samples = Vec::with_capacity(interval_count + 1);
+         for _ in 0 ..= interval_count
+         {
+            samples.push(json!({
+               "timestamp_seconds": timestamp,
+               "target_timestamp_seconds": timestamp + 1.0 / 120.0
+            }));
+            timestamp += interval;
+         }
+         run["display_link"]["samples"] = Value::Array(samples);
+         fs::write(&path, serde_json::to_vec(&run).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+      }
+   }
+   Ok(())
 }
 
 fn rewrite_travel(path: &Path, distance: f64) -> Result<(), String>

@@ -15,6 +15,9 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `strict_success_schema_round_trips_and_rejects_unknown_fields` admits the exact success schema and rejects missing/foreign fields.
 - `strict_failure_schema_round_trips_and_rejects_unknown_fields` does the same for non-measurable app failures.
 - `travel_equivalence_decision_honors_both_inclusive_frozen_boundaries` covers exact admission boundaries plus isolated median and confidence-interval violations through the production decision kernel.
+- `nearest_rank_quantile_uses_one_based_ceiling_rank` rejects empty, non-finite,
+  zero-rank, and non-finite-quantile inputs while distinguishing nearest-rank
+  p50 from interpolated p50 on an even population.
 - `frozen_recipe_matches_contract_extent_and_component_states` checks both endpoint component manifests against the reducer-owned 2,000-row recipe.
 - `visual_gate_rejects_one_corrupt_48_pixel_tile` proves localized corruption cannot hide behind whole-image averaging.
 - `exact_nine_cluster_interval_freezes_ranks_and_coverage` requires the
@@ -33,7 +36,7 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
 - `smoke_rejects_symlink_roots_entries_and_nonregular_files` proves Unix evidence discovery rejects root aliases, nested symlinks, and socket entries instead of silently omitting them.
 - `smoke_rejects_cleanup_and_artifact_provenance_mutations` rejects false Xcode/attachment/source-snapshot/result-root/process/fuse cleanup proof, controller runtime beyond the frozen caps, app-record container swapping, screenshot attachment substitution, and duplicate authority records.
-- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, verifies the exact six-PNG export and full-screen dimensions, requires revision-4 exact-method/rank/coverage metadata plus all 54 primary timing/inertia summaries, rejects legacy bootstrap fields, and proves a second reduction over the exact same output paths is byte-identical.
+- `full_reduction_is_byte_identical_when_repeated` builds six smoke diagnostics plus the one 54-run primary block, gives one cluster many more raw callbacks than the other eight, verifies the treatment aggregates remain the median of nine cluster p50/p95 values, requires revision-5 exact-method/rank/coverage metadata plus all 54 primary timing/inertia summaries, rejects legacy bootstrap fields, and proves a second reduction over the exact same output paths is byte-identical.
 - `full_reduction_rejects_systematic_primary_travel_mismatch` proves a repeatable six-percent Oxide workload mismatch blocks both direction comparisons even though each confidence interval remains inside the wider ten-percent bound.
 
 ## Logic narrative
@@ -82,6 +85,9 @@ Expected integration result: every focused integration case passes.
 
 - 2026-08-07: Added hostile cleanup mutations for prelaunch, build, result-bundle, evidence-file, and exact process-absence fuses.
 - 2026-08-07: Added strict revision-3 evidence provenance for the frozen phone, toolchains, dependency graph, resolved settings, and all signed products.
+- 2026-08-07: Added direct nearest-rank boundary coverage and an unequal-size
+  raw-callback population proving treatment p50/p95 are cluster medians rather
+  than pooled callback quantiles.
 - 2026-08-07: replaced bootstrap determinism with exact rank, achieved-coverage,
   population-cardinality, revision-4 serialization, and retired-field checks.
 - 2026-08-07: Switched focused commands to the shared root workspace graph.

@@ -199,6 +199,12 @@ Report the missed-callback-deadline ratio against total expected callbacks and
 callback-gap hitch excess in milliseconds per elapsed second. Never infer a
 fixed 60 Hz or 120 Hz deadline.
 
+Compute every callback p50, p95, and p99 with the one-based nearest-rank rule
+`rank = ceil(q * n)`. For each treatment/session/pair cluster, concatenate only
+its forward and reverse intervals and compute its descriptive p50 and p95. The
+treatment p50 and p95 are the medians of the nine corresponding cluster values,
+not quantiles over pooled callback intervals.
+
 The admitted full JSON and Markdown reports contain one deterministic per-run
 row for the 54 primary gestures, including identity/order, direction, duration, signed
 and absolute travel, observed inertia, both environment-transition counts,
@@ -241,7 +247,7 @@ forward/reverse pairs per implementation. Those nine paired clusters are the
 maximum population; do not add a second block after observing the result.
 
 Treat the nine session/gesture pairs as the independent population, not every
-frame as an independent trial. Compare Oxide separately with idiomatic UIKit
+callback as an independent trial. Compare Oxide separately with idiomatic UIKit
 and optimized UIKit:
 
 - `faster`: Oxide callback-interval p50 and p95 are lower and the 95% interval
@@ -259,7 +265,9 @@ and 8, which conservatively achieve `96.09375%` coverage for the requested 95
 percent interval. The pacing decision interval applies to the median pair-level
 relative p95 delta, where positive means Oxide is slower. No random seed,
 Monte Carlo approximation, or resampling loop belongs in this frozen protocol.
-The missed-callback-deadline guardrail requires Oxide to be at most `0.5`
+Treatment-level missed-deadline ratios divide summed misses by summed eligible
+deadlines across the 18 runs; treatment hitch excess divides summed excess by
+summed elapsed time. The missed-callback-deadline guardrail requires Oxide to be at most `0.5`
 percentage points above its comparator and at most `2%` absolute. The
 callback-hitch guardrail requires Oxide to be at most `2 ms/s` above its
 comparator and at most `10 ms/s` absolute. `faster` additionally requires both

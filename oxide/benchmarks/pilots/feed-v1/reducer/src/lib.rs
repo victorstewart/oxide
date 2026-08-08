@@ -45,6 +45,7 @@ const MAX_RETAINED_EVIDENCE_BYTES: u64 = 536_870_912;
 const MAX_RETAINED_FILE_COUNT: usize = 512;
 const MAX_RETAINED_FILE_BYTES: u64 = 134_217_728;
 const MAX_RESULT_BUNDLE_BYTES: u64 = 536_870_912;
+const QUANTILE_METHOD: &str = "one-based-nearest-rank";
 const CONFIDENCE_INTERVAL_METHOD: &str = "exact-binomial-median";
 const CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
 // Omitting zero or one successes from each Binomial(9, 0.5) tail leaves 492 / 512 coverage.
@@ -380,16 +381,27 @@ struct RunSummary
 }
 
 #[derive(Clone, Debug, Serialize)]
+struct ClusterSummary
+{
+   session_index: u32,
+   pair_index: u32,
+   run_count: usize,
+   interval_p50_ms: f64,
+   interval_p95_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct TreatmentSummary
 {
    treatment: String,
    run_count: usize,
-   interval_p50_ms: f64,
-   interval_p95_ms: f64,
-   interval_p99_ms: f64,
+   cluster_count: usize,
+   aggregate_interval_p50_ms: f64,
+   aggregate_interval_p95_ms: f64,
    interval_peak_ms: f64,
    missed_callback_deadline_ratio: f64,
    callback_hitch_ms_per_elapsed_second: f64,
+   clusters: Vec<ClusterSummary>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -431,10 +443,10 @@ struct Comparison
    classification: String,
    median_pair_relative_p95_delta: f64,
    confidence_interval: MedianConfidenceInterval,
-   oxide_interval_p50_ms: f64,
-   comparator_interval_p50_ms: f64,
-   oxide_interval_p95_ms: f64,
-   comparator_interval_p95_ms: f64,
+   oxide_aggregate_interval_p50_ms: f64,
+   comparator_aggregate_interval_p50_ms: f64,
+   oxide_aggregate_interval_p95_ms: f64,
+   comparator_aggregate_interval_p95_ms: f64,
    oxide_missed_deadline_ratio: f64,
    comparator_missed_deadline_ratio: f64,
    oxide_hitch_ms_per_second: f64,
@@ -1232,9 +1244,9 @@ fn callback_metrics(samples: &[DisplaySample]) -> Result<(Vec<f64>, CallbackMetr
    let metrics = CallbackMetrics {
       callback_count: samples.len(),
       achieved_cadence_hz: intervals.len() as f64 / elapsed,
-      interval_p50_ms: percentile(&intervals, 0.50)? * 1_000.0,
-      interval_p95_ms: percentile(&intervals, 0.95)? * 1_000.0,
-      interval_p99_ms: percentile(&intervals, 0.99)? * 1_000.0,
+      interval_p50_ms: nearest_rank_quantile(&intervals, 0.50)? * 1_000.0,
+      interval_p95_ms: nearest_rank_quantile(&intervals, 0.95)? * 1_000.0,
+      interval_p99_ms: nearest_rank_quantile(&intervals, 0.99)? * 1_000.0,
       interval_peak_ms: intervals.iter().copied().fold(0.0, f64::max) * 1_000.0,
       missed_callback_deadlines: missed,
       expected_callbacks: expected,
@@ -1252,23 +1264,17 @@ fn callback_metrics(samples: &[DisplaySample]) -> Result<(Vec<f64>, CallbackMetr
    Ok((intervals, metrics))
 }
 
-fn percentile(values: &[f64], quantile: f64) -> Result<f64, String>
+pub fn nearest_rank_quantile(values: &[f64], quantile: f64) -> Result<f64, String>
 {
-   if values.is_empty() || !(0.0 ..= 1.0).contains(&quantile)
+   if values.is_empty() || !quantile.is_finite() || quantile <= 0.0 || quantile > 1.0
    {
-      return Err("invalid percentile input".to_string());
+      return Err(format!("invalid {QUANTILE_METHOD} input"));
    }
+   finite(values, QUANTILE_METHOD)?;
    let mut sorted = values.to_vec();
    sorted.sort_by(f64::total_cmp);
-   if sorted.len() == 1
-   {
-      return Ok(sorted[0]);
-   }
-   let position = quantile * (sorted.len() - 1) as f64;
-   let lower = position.floor() as usize;
-   let upper = position.ceil() as usize;
-   let fraction = position - lower as f64;
-   Ok(sorted[lower] + (sorted[upper] - sorted[lower]) * fraction)
+   let rank = (quantile * sorted.len() as f64).ceil() as usize;
+   Ok(sorted[rank - 1])
 }
 
 fn geometry_matches(reference: &Geometry, candidate: &Geometry) -> bool
@@ -1552,33 +1558,58 @@ fn adversarial_result(name: &str, reference: &RgbaImage, mutation: RgbaImage) ->
 
 fn treatment_summary(runs: &[&MeasuredRun], treatment: &str) -> Result<TreatmentSummary, String>
 {
-   if runs.is_empty()
+   if runs.len() != CONFIDENCE_PAIR_COUNT * 2
    {
-      return Err(format!("no primary runs for {treatment}"));
+      return Err(format!(
+         "{treatment} has {} primary runs, expected {}",
+         runs.len(),
+         CONFIDENCE_PAIR_COUNT * 2
+      ));
    }
-   let mut intervals = Vec::new();
+   let mut clusters = Vec::with_capacity(CONFIDENCE_PAIR_COUNT);
+   let mut cluster_p50s = Vec::with_capacity(CONFIDENCE_PAIR_COUNT);
+   let mut cluster_p95s = Vec::with_capacity(CONFIDENCE_PAIR_COUNT);
+   let mut peak = 0.0_f64;
    let mut missed = 0_u64;
    let mut expected = 0_u64;
    let mut elapsed = 0.0;
    let mut hitch_ms = 0.0;
    for run in runs
    {
-      intervals.extend_from_slice(&run.intervals);
+      peak = peak.max(run.intervals.iter().copied().fold(0.0, f64::max));
       missed += run.metrics.missed_callback_deadlines;
       expected += run.metrics.expected_callbacks;
       let run_elapsed: f64 = run.intervals.iter().sum();
       elapsed += run_elapsed;
       hitch_ms += run.metrics.callback_hitch_ms_per_elapsed_second * run_elapsed;
    }
+   for session_index in 0 .. 3
+   {
+      for pair_index in 0 .. 3
+      {
+         let interval_p50_ms = cluster_quantile(runs, treatment, session_index, pair_index, 0.50)? * 1_000.0;
+         let interval_p95_ms = cluster_quantile(runs, treatment, session_index, pair_index, 0.95)? * 1_000.0;
+         cluster_p50s.push(interval_p50_ms);
+         cluster_p95s.push(interval_p95_ms);
+         clusters.push(ClusterSummary {
+            session_index,
+            pair_index,
+            run_count: 2,
+            interval_p50_ms,
+            interval_p95_ms,
+         });
+      }
+   }
    Ok(TreatmentSummary {
       treatment: treatment.to_string(),
       run_count: runs.len(),
-      interval_p50_ms: percentile(&intervals, 0.50)? * 1_000.0,
-      interval_p95_ms: percentile(&intervals, 0.95)? * 1_000.0,
-      interval_p99_ms: percentile(&intervals, 0.99)? * 1_000.0,
-      interval_peak_ms: intervals.iter().copied().fold(0.0, f64::max) * 1_000.0,
+      cluster_count: clusters.len(),
+      aggregate_interval_p50_ms: nearest_rank_quantile(&cluster_p50s, 0.50)?,
+      aggregate_interval_p95_ms: nearest_rank_quantile(&cluster_p95s, 0.50)?,
+      interval_peak_ms: peak * 1_000.0,
       missed_callback_deadline_ratio: if expected == 0 { 0.0 } else { missed as f64 / expected as f64 },
       callback_hitch_ms_per_elapsed_second: if elapsed == 0.0 { 0.0 } else { hitch_ms / elapsed },
+      clusters,
    })
 }
 
@@ -1612,7 +1643,7 @@ fn run_summary(run: &MeasuredRun) -> RunSummary
    }
 }
 
-fn pair_p95(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: u32) -> Result<f64, String>
+fn cluster_quantile(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: u32, quantile: f64) -> Result<f64, String>
 {
    let selected: Vec<&&MeasuredRun> = runs.iter().filter(|run| {
       run.record.run.treatment == treatment
@@ -1633,7 +1664,7 @@ fn pair_p95(runs: &[&MeasuredRun], treatment: &str, session: u32, pair: u32) -> 
    {
       intervals.extend_from_slice(&run.intervals);
    }
-   percentile(&intervals, 0.95)
+   nearest_rank_quantile(&intervals, quantile)
 }
 
 fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator: &str) -> Result<Comparison, String>
@@ -1647,8 +1678,8 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
    {
       for pair in 0 .. 3
       {
-         let oxide_p95 = pair_p95(runs, "oxide", session, pair)?;
-         let comparator_p95 = pair_p95(runs, comparator, session, pair)?;
+         let oxide_p95 = cluster_quantile(runs, "oxide", session, pair, 0.95)?;
+         let comparator_p95 = cluster_quantile(runs, comparator, session, pair, 0.95)?;
          if comparator_p95 <= 0.0
          {
             return Err("comparator pair p95 is not positive".to_string());
@@ -1669,8 +1700,8 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
    {
       "slower"
    }
-   else if oxide.interval_p50_ms < native.interval_p50_ms
-      && oxide.interval_p95_ms < native.interval_p95_ms
+   else if oxide.aggregate_interval_p50_ms < native.aggregate_interval_p50_ms
+      && oxide.aggregate_interval_p95_ms < native.aggregate_interval_p95_ms
       && confidence_interval.bounds[1] < 0.0
    {
       "faster"
@@ -1690,10 +1721,10 @@ fn comparison(runs: &[&MeasuredRun], summaries: &[TreatmentSummary], comparator:
       classification: classification.to_string(),
       median_pair_relative_p95_delta: median_delta,
       confidence_interval,
-      oxide_interval_p50_ms: oxide.interval_p50_ms,
-      comparator_interval_p50_ms: native.interval_p50_ms,
-      oxide_interval_p95_ms: oxide.interval_p95_ms,
-      comparator_interval_p95_ms: native.interval_p95_ms,
+      oxide_aggregate_interval_p50_ms: oxide.aggregate_interval_p50_ms,
+      comparator_aggregate_interval_p50_ms: native.aggregate_interval_p50_ms,
+      oxide_aggregate_interval_p95_ms: oxide.aggregate_interval_p95_ms,
+      comparator_aggregate_interval_p95_ms: native.aggregate_interval_p95_ms,
       oxide_missed_deadline_ratio: oxide.missed_callback_deadline_ratio,
       comparator_missed_deadline_ratio: native.missed_callback_deadline_ratio,
       oxide_hitch_ms_per_second: oxide.callback_hitch_ms_per_elapsed_second,
@@ -2560,7 +2591,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    };
    let report = Report {
       schema: "oxide.feed-v1.report",
-      schema_revision: 4,
+      schema_revision: 5,
       fixture_sha256: FIXTURE_SHA256,
       fixture_byte_count: FIXTURE_BYTE_COUNT,
       device,
@@ -2710,17 +2741,17 @@ fn render_markdown(report: &Report) -> String
    if !report.treatments.is_empty()
    {
       output.push_str("\n## Callback pacing\n\n");
-      output.push_str("| Treatment | Runs | p50 ms | p95 ms | p99 ms | Peak ms | Missed deadlines | Hitch ms/s |\n");
-      output.push_str("|---|---:|---:|---:|---:|---:|---:|---:|\n");
+      output.push_str("| Treatment | Runs/clusters | Aggregate p50 ms | Aggregate p95 ms | Peak ms | Missed deadlines | Hitch ms/s |\n");
+      output.push_str("|---|---:|---:|---:|---:|---:|---:|\n");
       for treatment in &report.treatments
       {
          output.push_str(&format!(
-            "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3}% | {:.3} |\n",
+            "| {} | {}/{} | {:.3} | {:.3} | {:.3} | {:.3}% | {:.3} |\n",
             treatment.treatment,
             treatment.run_count,
-            treatment.interval_p50_ms,
-            treatment.interval_p95_ms,
-            treatment.interval_p99_ms,
+            treatment.cluster_count,
+            treatment.aggregate_interval_p50_ms,
+            treatment.aggregate_interval_p95_ms,
             treatment.interval_peak_ms,
             treatment.missed_callback_deadline_ratio * 100.0,
             treatment.callback_hitch_ms_per_elapsed_second
@@ -2741,10 +2772,10 @@ fn render_markdown(report: &Report) -> String
             comparison.median_pair_relative_p95_delta * 100.0,
             comparison.confidence_interval.bounds[0] * 100.0,
             comparison.confidence_interval.bounds[1] * 100.0,
-            comparison.oxide_interval_p50_ms,
-            comparison.comparator_interval_p50_ms,
-            comparison.oxide_interval_p95_ms,
-            comparison.comparator_interval_p95_ms,
+            comparison.oxide_aggregate_interval_p50_ms,
+            comparison.comparator_aggregate_interval_p50_ms,
+            comparison.oxide_aggregate_interval_p95_ms,
+            comparison.comparator_aggregate_interval_p95_ms,
             comparison.oxide_missed_deadline_ratio * 100.0,
             comparison.comparator_missed_deadline_ratio * 100.0,
             comparison.oxide_hitch_ms_per_second,
