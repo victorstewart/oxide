@@ -2754,6 +2754,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let uikit_current_json = uikit_result_root.join("current.json");
     let expected_uikit_case_ids =
         selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
+    let mut gpu_counter_capability = MetalGpuCounterCapability::default();
     let mut uikit_report = if resumed && uikit_current_json.is_file() {
         let cached = load_uikit_report(&uikit_current_json)?;
         if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids)
@@ -2777,6 +2778,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
                 cli.power_trace.as_deref(),
                 cli.power_trace_root.as_deref(),
                 watch_capture,
+                &mut gpu_counter_capability,
             )?
         }
     } else {
@@ -2791,6 +2793,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
             cli.power_trace.as_deref(),
             cli.power_trace_root.as_deref(),
             watch_capture,
+            &mut gpu_counter_capability,
         )?
     };
     bind_uikit_report_repository(&mut uikit_report, &repository);
@@ -2839,6 +2842,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
                 &oxide_result_root,
                 trace_seconds,
                 watch_capture,
+                &mut gpu_counter_capability,
             )?
         }
     } else {
@@ -2851,6 +2855,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
             &oxide_result_root,
             trace_seconds,
             watch_capture,
+            &mut gpu_counter_capability,
         )?
     };
     bind_perf_report_repository(&mut oxide_report, &repository);
@@ -2980,6 +2985,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
     )?;
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
+    let mut gpu_counter_capability = MetalGpuCounterCapability::default();
     let mut report = if resumed && current_json.is_file() {
         let cached = load_uikit_report(&current_json)?;
         if uikit_report_matches_case_ids(&cached, &expected_case_ids)
@@ -3003,6 +3009,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
                 cli.power_trace.as_deref(),
                 cli.power_trace_root.as_deref(),
                 false,
+                &mut gpu_counter_capability,
             )?
         }
     } else {
@@ -3017,6 +3024,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             cli.power_trace.as_deref(),
             cli.power_trace_root.as_deref(),
             false,
+            &mut gpu_counter_capability,
         )?
     };
     bind_uikit_report_repository(&mut report, &repository);
@@ -3296,6 +3304,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
 
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
+    let mut gpu_counter_capability = MetalGpuCounterCapability::default();
     let mut report = if resumed && current_json.is_file() {
         let cached = load_oxide_device_report(&current_json)?;
         if perf_report_matches_case_ids(&cached, &expected_case_ids)
@@ -3317,6 +3326,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
                 &result_root,
                 trace_seconds,
                 false,
+                &mut gpu_counter_capability,
             )?
         }
     } else {
@@ -3329,6 +3339,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
             &result_root,
             trace_seconds,
             false,
+            &mut gpu_counter_capability,
         )?
     };
     bind_perf_report_repository(&mut report, &repository);
@@ -3408,6 +3419,36 @@ pub fn uikit_device_trace_enabled(trace_seconds: u64) -> bool {
 
 pub fn uikit_device_support_required(trace_seconds: u64) -> bool {
     uikit_device_trace_enabled(trace_seconds)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MetalGpuCounterCapability
+{
+   #[default]
+   Unknown,
+   Supported,
+   Unsupported,
+}
+
+impl MetalGpuCounterCapability
+{
+   pub fn should_request(self) -> bool
+   {
+      self != Self::Unsupported
+   }
+
+   pub fn record_supported(&mut self)
+   {
+      if *self == Self::Unknown
+      {
+         *self = Self::Supported;
+      }
+   }
+
+   pub fn record_explicit_unsupported(&mut self)
+   {
+      *self = Self::Unsupported;
+   }
 }
 
 #[derive(Debug, Clone)]
@@ -6737,6 +6778,7 @@ fn capture_uikit_device_report(
     power_trace: Option<&Path>,
     power_trace_root: Option<&Path>,
     watch_capture: bool,
+    gpu_counter_capability: &mut MetalGpuCounterCapability,
 ) -> Result<UIKitPerfReport> {
     let trace_enabled = uikit_device_trace_enabled(trace_seconds);
     let include_energy = trace_enabled && (power_trace.is_some() || power_trace_root.is_some());
@@ -6830,6 +6872,7 @@ fn capture_uikit_device_report(
                     &case_dir,
                     trace_seconds,
                     watch_capture,
+                    gpu_counter_capability,
                 )?
             }
         } else {
@@ -7012,135 +7055,168 @@ fn run_oxide_onscreen_case_console_capture(
 }
 
 fn run_oxide_onscreen_case_trace(
-    root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    spec: &OxideOnscreenCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    case_dir: &Path,
-    trace_seconds: u64,
-    watch_capture: bool,
-) -> Result<DeviceTraceRun> {
-    let launch_spec = oxide_onscreen_launch_spec(spec);
-    let console_run = run_oxide_onscreen_case_console_capture(
-        root,
-        device,
-        built_app,
-        spec,
-        refresh_mode,
-        case_dir,
-        watch_capture,
-    )?;
-    let mut include_gpu_counters = true;
-    let mut timeout_attempt = 0usize;
-    let mut notes = console_run
-        .notes
-        .iter()
-        .filter(|note| !note.starts_with("GPU trace status: skipped"))
-        .cloned()
-        .collect::<Vec<_>>();
-    notes.push(String::from(
-        "GPU trace source: collected through a separate launched Metal trace after the console-summary on-screen Oxide run, so in-app renderer stage summaries remain available when xctrace target stdout is empty.",
-    ));
-    loop {
-        let mut extra_instruments = vec![String::from("Points of Interest")];
-        if include_gpu_counters {
-            extra_instruments.push(String::from("Metal GPU Counters"));
-        }
-        let trace_attempt = run_uikit_device_launched_trace(
-            root,
-            device,
-            built_app,
-            &launch_spec,
-            refresh_mode,
-            case_dir,
-            "metal",
-            "Metal System Trace",
-            &extra_instruments,
-            trace_seconds,
-            true,
-            watch_capture,
-        );
-        let (trace_path, _trace_stdout_path, stderr_path) = match trace_attempt {
-            Ok(run) => run,
-            Err(err)
-                if include_gpu_counters
-                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
-            {
-                println!(
-                    "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
-                    device.name, spec.test_name
-                );
-                include_gpu_counters = false;
-                notes.push(String::from(
-                    "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
-                ));
-                continue;
-            }
-            Err(err)
-                if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
-                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
-            {
-                timeout_attempt += 1;
-                println!(
-                    "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
-                    spec.test_name,
-                    refresh_mode.report_value(),
-                    timeout_attempt + 1,
-                    UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
-                );
-                notes.push(String::from(
-                    "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
-                ));
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
-        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-        if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
+   root: &Path,
+   device: &UIKitPhysicalDevice,
+   built_app: &BuiltUIKitApp,
+   spec: &OxideOnscreenCaseSpec,
+   refresh_mode: UIKitDeviceRefreshMode,
+   case_dir: &Path,
+   trace_seconds: u64,
+   watch_capture: bool,
+   gpu_counter_capability: &mut MetalGpuCounterCapability,
+) -> Result<DeviceTraceRun>
+{
+   let launch_spec = oxide_onscreen_launch_spec(spec);
+   let console_run = run_oxide_onscreen_case_console_capture(
+      root,
+      device,
+      built_app,
+      spec,
+      refresh_mode,
+      case_dir,
+      watch_capture,
+   )?;
+   let mut include_gpu_counters = gpu_counter_capability.should_request();
+   let mut timeout_attempt = 0usize;
+   let mut notes = console_run
+      .notes
+      .iter()
+      .filter(|note| !note.starts_with("GPU trace status: skipped"))
+      .cloned()
+      .collect::<Vec<_>>();
+   notes.push(String::from(
+      "GPU trace source: collected through a separate launched Metal trace after the console-summary on-screen Oxide run, so in-app renderer stage summaries remain available when xctrace target stdout is empty.",
+   ));
+   if !include_gpu_counters
+   {
+      notes.push(String::from(
+         "GPU counter status: an earlier trace in this command established that the attached device explicitly rejects the Metal GPU Counters profile, so this case requested direct GPU time and GPU latency only.",
+      ));
+   }
+   loop
+   {
+      let mut extra_instruments = vec![String::from("Points of Interest")];
+      if include_gpu_counters
+      {
+         extra_instruments.push(String::from("Metal GPU Counters"));
+      }
+      let trace_attempt = run_uikit_device_launched_trace(
+         root,
+         device,
+         built_app,
+         &launch_spec,
+         refresh_mode,
+         case_dir,
+         "metal",
+         "Metal System Trace",
+         &extra_instruments,
+         trace_seconds,
+         true,
+         watch_capture,
+      );
+      let (trace_path, _trace_stdout_path, stderr_path) = match trace_attempt
+      {
+         Ok(run) => run,
+         Err(err)
+            if include_gpu_counters
+               && is_unsupported_gpu_counter_profile_error(&err.to_string()) =>
+         {
             println!(
-                "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
-                device.name, spec.test_name
+               "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
+               device.name, spec.test_name
+            );
+            gpu_counter_capability.record_explicit_unsupported();
+            include_gpu_counters = false;
+            notes.push(String::from(
+               "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+            ));
+            continue;
+         }
+         Err(err)
+            if include_gpu_counters
+               && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+         {
+            println!(
+               "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
+               device.name, spec.test_name
             );
             include_gpu_counters = false;
             notes.push(String::from(
-                "GPU counter status: the launched device trace rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+               "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
             ));
             continue;
-        }
-        if include_gpu_counters && is_retryable_xctrace_record_timeout_error(&stderr) {
-            println!(
-                "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
-                device.name, spec.test_name
-            );
-            include_gpu_counters = false;
-            notes.push(String::from(
-                "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
-            ));
-            continue;
-        }
-        if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
-            && is_retryable_xctrace_record_timeout_error(&stderr)
-        {
+         }
+         Err(err)
+            if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+               && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+         {
             timeout_attempt += 1;
             println!(
-                "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
-                spec.test_name,
-                refresh_mode.report_value(),
-                timeout_attempt + 1,
-                UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+               "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+               spec.test_name,
+               refresh_mode.report_value(),
+               timeout_attempt + 1,
+               UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
             );
             notes.push(String::from(
-                "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+               "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
             ));
             continue;
-        }
-        return Ok(DeviceTraceRun {
-            trace_path,
-            launch_stdout_path: console_run.launch_stdout_path,
-            notes,
-        });
-    }
+         }
+         Err(err) => return Err(err),
+      };
+      let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+      if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr)
+      {
+         println!(
+            "Metal GPU Counters unsupported on {}; retrying on-screen Oxide `{}` without the counter profile.",
+            device.name, spec.test_name
+         );
+         gpu_counter_capability.record_explicit_unsupported();
+         include_gpu_counters = false;
+         notes.push(String::from(
+            "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+         ));
+         continue;
+      }
+      if include_gpu_counters && is_retryable_xctrace_record_timeout_error(&stderr)
+      {
+         println!(
+            "Metal GPU Counters timed out on {}; retrying on-screen Oxide `{}` without the counter profile.",
+            device.name, spec.test_name
+         );
+         include_gpu_counters = false;
+         notes.push(String::from(
+            "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
+         ));
+         continue;
+      }
+      if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+         && is_retryable_xctrace_record_timeout_error(&stderr)
+      {
+         timeout_attempt += 1;
+         println!(
+            "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+            spec.test_name,
+            refresh_mode.report_value(),
+            timeout_attempt + 1,
+            UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+         );
+         notes.push(String::from(
+            "Trace timeout status: this on-screen Oxide case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+         ));
+         continue;
+      }
+      if include_gpu_counters
+      {
+         gpu_counter_capability.record_supported();
+      }
+      return Ok(DeviceTraceRun {
+         trace_path,
+         launch_stdout_path: console_run.launch_stdout_path,
+         notes,
+      });
+   }
 }
 
 fn summary_value_seconds(summary: &UIKitMetricSummary, value: f64) -> Result<f64> {
@@ -7838,6 +7914,7 @@ fn capture_oxide_onscreen_device_report(
     result_root: &Path,
     trace_seconds: u64,
     watch_capture: bool,
+    gpu_counter_capability: &mut MetalGpuCounterCapability,
 ) -> Result<PerfReport> {
     let trace_enabled = uikit_device_trace_enabled(trace_seconds);
     let total_cases = selected_specs.len();
@@ -7900,6 +7977,7 @@ fn capture_oxide_onscreen_device_report(
                     &case_dir,
                     trace_seconds,
                     watch_capture,
+                    gpu_counter_capability,
                 )?
             }
         } else {
@@ -8268,97 +8346,123 @@ pub fn oxide_device_launch_environment_json(smoke: bool) -> Result<String> {
 }
 
 fn run_uikit_device_case_trace(
-    root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    case_dir: &Path,
-    trace_seconds: u64,
-    watch_capture: bool,
-) -> Result<DeviceTraceRun> {
-    let mut include_gpu_counters = true;
-    let mut notes = Vec::new();
-    let mut handshake_attempt = 0usize;
-    let mut timeout_attempt = 0usize;
-    loop {
-        match run_uikit_device_case_trace_attempt(
-            root,
-            device,
-            built_app,
-            spec,
-            refresh_mode,
-            case_dir,
-            trace_seconds,
-            include_gpu_counters,
-            watch_capture,
-        ) {
-            Ok(mut run) => {
-                run.notes.splice(0..0, notes.drain(..));
-                return Ok(run);
-            }
-            Err(err)
-                if include_gpu_counters
-                    && is_unsupported_gpu_counter_profile_error(&err.to_string()) =>
+   root: &Path,
+   device: &UIKitPhysicalDevice,
+   built_app: &BuiltUIKitApp,
+   spec: &UIKitCaseSpec,
+   refresh_mode: UIKitDeviceRefreshMode,
+   case_dir: &Path,
+   trace_seconds: u64,
+   watch_capture: bool,
+   gpu_counter_capability: &mut MetalGpuCounterCapability,
+) -> Result<DeviceTraceRun>
+{
+   let mut notes = Vec::new();
+   let mut include_gpu_counters = gpu_counter_capability.should_request();
+   if !include_gpu_counters
+   {
+      notes.push(String::from(
+         "GPU counter status: an earlier trace in this command established that the attached device explicitly rejects the Metal GPU Counters profile, so this case requested direct GPU time and GPU latency only.",
+      ));
+   }
+   let mut handshake_attempt = 0usize;
+   let mut timeout_attempt = 0usize;
+   loop
+   {
+      match run_uikit_device_case_trace_attempt(
+         root,
+         device,
+         built_app,
+         spec,
+         refresh_mode,
+         case_dir,
+         trace_seconds,
+         include_gpu_counters,
+         watch_capture,
+      )
+      {
+         Ok((mut run, explicit_unsupported)) =>
+         {
+            if include_gpu_counters
             {
-                println!(
-                    "Metal GPU Counters unsupported on {}; retrying `{}` without the counter profile.",
-                    device.name, spec.test_name
-                );
-                include_gpu_counters = false;
-                notes.push(String::from(
-                    "GPU counter status: the attached device rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
-                ));
+               if explicit_unsupported
+               {
+                  gpu_counter_capability.record_explicit_unsupported();
+                  notes.push(String::from(
+                     "GPU counter status: the attached device explicitly rejected the Metal GPU Counters profile, so this case includes direct GPU time and GPU latency only.",
+                  ));
+               }
+               else
+               {
+                  gpu_counter_capability.record_supported();
+               }
             }
-            Err(err)
-                if include_gpu_counters
-                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
-            {
-                println!(
-                    "Metal GPU Counters timed out on {}; retrying `{}` without the counter profile.",
-                    device.name, spec.test_name
-                );
-                include_gpu_counters = false;
-                notes.push(String::from(
-                    "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
-                ));
-            }
-            Err(err)
-                if handshake_attempt + 1 < UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
-                    && is_retryable_uikit_trace_handshake_error(&err.to_string()) =>
-            {
-                handshake_attempt += 1;
-                println!(
-                    "UIKit device trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the launched trace.",
-                    spec.test_name,
-                    refresh_mode.report_value(),
-                    handshake_attempt + 1,
-                    UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
-                );
-                notes.push(format!(
-                    "Trace handshake status: this case retried the launched trace after a transient `{}` handshake timeout.",
-                    UIKIT_DEVICE_COMPLETE_NOTIFICATION
-                ));
-            }
-            Err(err)
-                if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
-                    && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
-            {
-                timeout_attempt += 1;
-                println!(
-                    "UIKit device trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
-                    spec.test_name,
-                    refresh_mode.report_value(),
-                    timeout_attempt + 1,
-                    UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
-                );
-                notes.push(String::from(
-                    "Trace timeout status: this case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
-                ));
-            }
-            Err(err) => return Err(err),
-        }
-    }
+            run.notes.splice(0..0, notes.drain(..));
+            return Ok(run);
+         }
+         Err(err)
+            if include_gpu_counters
+               && is_unsupported_gpu_counter_profile_error(&err.to_string()) =>
+         {
+            println!(
+               "Metal GPU Counters unsupported on {}; retrying `{}` without the counter profile.",
+               device.name, spec.test_name
+            );
+            gpu_counter_capability.record_explicit_unsupported();
+            include_gpu_counters = false;
+            notes.push(String::from(
+               "GPU counter status: the attached device explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+            ));
+         }
+         Err(err)
+            if include_gpu_counters
+               && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+         {
+            println!(
+               "Metal GPU Counters timed out on {}; retrying `{}` without the counter profile.",
+               device.name, spec.test_name
+            );
+            include_gpu_counters = false;
+            notes.push(String::from(
+               "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only; a later case will probe counters again.",
+            ));
+         }
+         Err(err)
+            if handshake_attempt + 1 < UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+               && is_retryable_uikit_trace_handshake_error(&err.to_string()) =>
+         {
+            handshake_attempt += 1;
+            println!(
+               "UIKit device trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the launched trace.",
+               spec.test_name,
+               refresh_mode.report_value(),
+               handshake_attempt + 1,
+               UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+            );
+            notes.push(format!(
+               "Trace handshake status: this case retried the launched trace after a transient `{}` handshake timeout.",
+               UIKIT_DEVICE_COMPLETE_NOTIFICATION
+            ));
+         }
+         Err(err)
+            if timeout_attempt + 1 < UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+               && is_retryable_xctrace_record_timeout_error(&err.to_string()) =>
+         {
+            timeout_attempt += 1;
+            println!(
+               "UIKit device trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+               spec.test_name,
+               refresh_mode.report_value(),
+               timeout_attempt + 1,
+               UIKIT_DEVICE_TRACE_TIMEOUT_RETRIES
+            );
+            notes.push(String::from(
+               "Trace timeout status: this case retried the launched trace after xctrace exceeded its wall-time watchdog before finishing.",
+            ));
+         }
+         Err(err) => return Err(err),
+      }
+   }
 }
 
 fn load_resumable_uikit_device_trace_run(
@@ -8591,76 +8695,79 @@ fn run_uikit_device_case_console_capture(
 }
 
 fn run_uikit_device_case_trace_attempt(
-    root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    case_dir: &Path,
-    trace_seconds: u64,
-    include_gpu_counters: bool,
-    watch_capture: bool,
-) -> Result<DeviceTraceRun> {
-    let trace_label = "metal";
-    let template_name = "Metal System Trace";
-    let mut extra_instruments = vec![String::from("Points of Interest")];
-    if include_gpu_counters {
-        extra_instruments.push(String::from("Metal GPU Counters"));
-    }
-    let mut notes = Vec::new();
-    let (trace_path, launch_stdout_path, stderr_path) =
-        if uikit_case_requires_console_launch_summary(spec) {
-            let console_run = run_uikit_device_case_console_capture(
-                root,
-                device,
-                built_app,
-                spec,
-                refresh_mode,
-                case_dir,
-                watch_capture,
-            )?;
-            notes.extend(console_run.notes.iter().cloned());
-            notes.push(String::from(
-                "GPU trace source: collected through a separate launched xctrace pass after the console-summary camera run, so camera stage summaries and GPU timing stay available without the flaky attached-trace camera path.",
-            ));
-            let (trace_path, _, stderr_path) = run_uikit_device_launched_trace(
-                root,
-                device,
-                built_app,
-                spec,
-                refresh_mode,
-                case_dir,
-                trace_label,
-                template_name,
-                &extra_instruments,
-                trace_seconds,
-                true,
-                watch_capture,
-            )?;
-            (trace_path, console_run.launch_stdout_path, stderr_path)
-        } else {
-            run_uikit_device_launched_trace(
-                root,
-                device,
-                built_app,
-                spec,
-                refresh_mode,
-                case_dir,
-                trace_label,
-                template_name,
-                &extra_instruments,
-                trace_seconds,
-                true,
-                watch_capture,
-            )?
-        };
-    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-    if include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr) {
-        notes.push(String::from(
-            "GPU counter status: the attached device rejected the Metal GPU Counters profile, so this case includes direct GPU time and GPU latency only.",
-        ));
-    }
-    Ok(DeviceTraceRun { trace_path, launch_stdout_path, notes })
+   root: &Path,
+   device: &UIKitPhysicalDevice,
+   built_app: &BuiltUIKitApp,
+   spec: &UIKitCaseSpec,
+   refresh_mode: UIKitDeviceRefreshMode,
+   case_dir: &Path,
+   trace_seconds: u64,
+   include_gpu_counters: bool,
+   watch_capture: bool,
+) -> Result<(DeviceTraceRun, bool)>
+{
+   let mut extra_instruments = vec![String::from("Points of Interest")];
+   if include_gpu_counters
+   {
+      extra_instruments.push(String::from("Metal GPU Counters"));
+   }
+   let mut notes = Vec::new();
+   let (trace_path, launch_stdout_path, stderr_path) =
+      if uikit_case_requires_console_launch_summary(spec)
+      {
+         let console_run = run_uikit_device_case_console_capture(
+            root,
+            device,
+            built_app,
+            spec,
+            refresh_mode,
+            case_dir,
+            watch_capture,
+         )?;
+         notes.extend(console_run.notes.iter().cloned());
+         notes.push(String::from(
+            "GPU trace source: collected through a separate launched xctrace pass after the console-summary camera run, so camera stage summaries and GPU timing stay available without the flaky attached-trace camera path.",
+         ));
+         let (trace_path, _, stderr_path) = run_uikit_device_launched_trace(
+            root,
+            device,
+            built_app,
+            spec,
+            refresh_mode,
+            case_dir,
+            "metal",
+            "Metal System Trace",
+            &extra_instruments,
+            trace_seconds,
+            true,
+            watch_capture,
+         )?;
+         (trace_path, console_run.launch_stdout_path, stderr_path)
+      }
+      else
+      {
+         run_uikit_device_launched_trace(
+            root,
+            device,
+            built_app,
+            spec,
+            refresh_mode,
+            case_dir,
+            "metal",
+            "Metal System Trace",
+            &extra_instruments,
+            trace_seconds,
+            true,
+            watch_capture,
+         )?
+      };
+   let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+   let explicit_unsupported =
+      include_gpu_counters && is_unsupported_gpu_counter_profile_error(&stderr);
+   Ok((
+      DeviceTraceRun { trace_path, launch_stdout_path, notes },
+      explicit_unsupported,
+   ))
 }
 
 fn run_uikit_device_launched_trace(

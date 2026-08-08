@@ -54,7 +54,7 @@ use xtask::{
     validate_normalized_camera_contract, validate_oxide_device_report_metric_contract,
     validate_uikit_device_report_metric_contract, xctrace_export_input_path_for_args,
     DeviceEvidenceInputStamp, DeviceEvidenceRunStamp, Entitlements, LocationMode,
-    ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
+    ExperimentCheckSummary, MetalGpuCounterCapability, TraceWindow, UIKitCanonicalSignpostSource,
     UIKitContractCoverageReport, UIKitHostBuildArtifactStamp, UIKitHostBuildStamp,
     UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
     UIKitPerfReport, XctraceCell,
@@ -3399,6 +3399,55 @@ fn unsupported_gpu_counter_profile_detection_matches_xctrace_error_text() {
     assert!(!is_unsupported_gpu_counter_profile_error(
         "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
     ));
+}
+
+#[test]
+fn metal_gpu_counter_capability_only_disables_explicitly_unsupported_profiles()
+{
+   let mut capability = MetalGpuCounterCapability::default();
+   assert_eq!(capability, MetalGpuCounterCapability::Unknown);
+   assert!(capability.should_request());
+
+   capability.record_supported();
+   assert_eq!(capability, MetalGpuCounterCapability::Supported);
+   assert!(capability.should_request());
+   assert!(is_retryable_xctrace_record_timeout_error(
+      "xcrun xctrace record exceeded wall-time timeout before xctrace finished",
+   ));
+   assert!(capability.should_request());
+
+   capability.record_explicit_unsupported();
+   assert_eq!(capability, MetalGpuCounterCapability::Unsupported);
+   assert!(!capability.should_request());
+}
+
+#[test]
+fn device_commands_share_one_gpu_counter_capability_per_run()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let combined = source
+      .split_once("fn ios_compare_device_perf(")
+      .and_then(|(_, tail)| tail.split_once("fn ios_device_perf("))
+      .map(|(body, _)| body)
+      .expect("combined device command body");
+   assert_eq!(combined.matches("MetalGpuCounterCapability::default()").count(), 1);
+   assert_eq!(combined.matches("&mut gpu_counter_capability").count(), 4);
+
+   let uikit = source
+      .split_once("fn ios_device_perf(")
+      .and_then(|(_, tail)| tail.split_once("fn ios_react_device_perf("))
+      .map(|(body, _)| body)
+      .expect("standalone UIKit device command body");
+   assert_eq!(uikit.matches("MetalGpuCounterCapability::default()").count(), 1);
+   assert_eq!(uikit.matches("&mut gpu_counter_capability").count(), 2);
+
+   let oxide = source
+      .split_once("fn ios_oxide_device_perf(")
+      .and_then(|(_, tail)| tail.split_once("fn ios_time_profiler_summary("))
+      .map(|(body, _)| body)
+      .expect("standalone Oxide device command body");
+   assert_eq!(oxide.matches("MetalGpuCounterCapability::default()").count(), 1);
+   assert_eq!(oxide.matches("&mut gpu_counter_capability").count(), 2);
 }
 
 #[test]
