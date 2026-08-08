@@ -12,6 +12,13 @@ CORE_DEVICE_ID="$1"
 RESULT_ROOT="$2"
 MODE="${3:-smoke}"
 XCODE_DEVICE_ID=""
+EXPECTED_CORE_DEVICE_ID="1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"
+EXPECTED_XCODE_DEVICE_ID="00008150-001529C434F8401C"
+if [[ "$CORE_DEVICE_ID" != "$EXPECTED_CORE_DEVICE_ID" ]]
+then
+   echo "feed-v1 publication is frozen to CoreDevice $EXPECTED_CORE_DEVICE_ID" >&2
+   exit 2
+fi
 DEVELOPMENT_TEAM_ID="${OXIDE_IOS_DEVELOPMENT_TEAM:-${DEVELOPMENT_TEAM:-}}"
 if [[ "$MODE" != "smoke" && "$MODE" != "full" ]]
 then
@@ -101,6 +108,8 @@ RUST_TARGET="$BUILD_ROOT/rust-ios"
 REDUCER_TARGET="$BUILD_ROOT/reducer-target"
 RAW_ROOT="$RESULT_ROOT/raw"
 ATTACHMENT_ROOT="$RAW_ROOT/attachments"
+PROVENANCE_ROOT="$RAW_ROOT/provenance"
+BUILD_PROVENANCE="$BUILD_ROOT/build-provenance.json"
 CONTROLLER_BUNDLE_ID="com.oxide.feed-v1.controller.xctrunner"
 SCHEME="FeedV1PilotSmoke"
 EXPECTED_ATTACHMENTS=6
@@ -109,7 +118,7 @@ then
    SCHEME="FeedV1Pilot"
 fi
 
-if ! mkdir -p "$RAW_ROOT" "$ATTACHMENT_ROOT"
+if ! mkdir -p "$RAW_ROOT" "$ATTACHMENT_ROOT" "$PROVENANCE_ROOT"
 then
    echo "could not create the external result root" >&2
    exit 1
@@ -189,6 +198,11 @@ resolve_xcode_device_id()
    if [[ ! "$udid" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{16}$ ]]
    then
       echo "physical device hardware UDID is malformed" >&2
+      return 1
+   fi
+   if [[ "$udid" != "$EXPECTED_XCODE_DEVICE_ID" ]]
+   then
+      echo "CoreDevice $CORE_DEVICE_ID resolved to unexpected hardware $udid" >&2
       return 1
    fi
    printf '%s\n' "$udid"
@@ -408,6 +422,156 @@ remove_existing_app()
    fi
 }
 
+sha256_file()
+{
+   /usr/bin/shasum -a 256 "$1" | awk '{print $1}'
+}
+
+capture_toolchain_provenance()
+{
+   if [[ "$(/usr/bin/arch)" != "arm64" ]]
+   then
+      echo "feed-v1 formal execution requires a native arm64 host process" >&2
+      return 1
+   fi
+   if ! xcrun xcodebuild -version >"$PROVENANCE_ROOT/xcode-version.txt" 2>&1 \
+      || ! xcrun --sdk iphoneos --show-sdk-version >"$PROVENANCE_ROOT/iphoneos-sdk-version.txt" 2>&1 \
+      || ! xcrun --sdk iphoneos --show-sdk-build-version >"$PROVENANCE_ROOT/iphoneos-sdk-build.txt" 2>&1 \
+      || ! rustc -vV >"$PROVENANCE_ROOT/rustc-version.txt" 2>&1 \
+      || ! cargo --version >"$PROVENANCE_ROOT/cargo-version.txt" 2>&1 \
+      || ! cargo metadata --locked --filter-platform aarch64-apple-ios --format-version 1 \
+         --manifest-path "$FEED_ROOT/ios/oxide-feed-app/Cargo.toml" \
+         >"$PROVENANCE_ROOT/production-cargo-metadata.json" 2>"$PROVENANCE_ROOT/production-cargo-metadata.log"
+   then
+      echo "toolchain or production dependency provenance capture failed" >&2
+      return 1
+   fi
+   verify_source_snapshot "toolchain provenance capture"
+}
+
+capture_signing_identity()
+{
+   local product="$1"
+   local label="$2"
+   local output="$PROVENANCE_ROOT/$label-codesign.txt"
+   local authority
+   local team_identifier
+   local cdhash
+   if ! /usr/bin/codesign -d --verbose=4 "$product" >/dev/null 2>"$output" \
+      || ! authority="$(sed -n 's/^Authority=//p' "$output" | head -1)" \
+      || ! team_identifier="$(sed -n 's/^TeamIdentifier=//p' "$output" | head -1)" \
+      || ! cdhash="$(sed -n 's/^CDHash=//p' "$output" | head -1)"
+   then
+      echo "$label signing identity capture failed" >&2
+      return 1
+   fi
+   if [[ "$authority" != "Apple Development:"* ]] \
+      || [[ "$team_identifier" != "$DEVELOPMENT_TEAM_ID" ]] \
+      || [[ ! "$cdhash" =~ ^[[:xdigit:]]{40}([[:xdigit:]]{24})?$ ]]
+   then
+      echo "$label signing identity does not match the frozen development-signing contract" >&2
+      return 1
+   fi
+}
+
+insert_signing_identity()
+{
+   local plist="$1"
+   local key="$2"
+   local output="$3"
+   local authority
+   local team_identifier
+   local cdhash
+   authority="$(sed -n 's/^Authority=//p' "$output" | head -1)"
+   team_identifier="$(sed -n 's/^TeamIdentifier=//p' "$output" | head -1)"
+   cdhash="$(sed -n 's/^CDHash=//p' "$output" | head -1)"
+   /usr/bin/plutil -insert "$key" -dictionary "$plist" \
+      && /usr/bin/plutil -insert "$key.authority" -string "$authority" "$plist" \
+      && /usr/bin/plutil -insert "$key.team_identifier" -string "$team_identifier" "$plist" \
+      && /usr/bin/plutil -insert "$key.cdhash" -string "$cdhash" "$plist"
+}
+
+write_build_provenance()
+{
+   local details="$RAW_ROOT/device-before.json"
+   local plist="$BUILD_ROOT/build-provenance.plist"
+   local device_model
+   local device_product_type
+   local os_version
+   local os_build
+   local xcode_version
+   local xcode_build
+   local sdk_version
+   local sdk_build
+   local rustc_release
+   local rustc_commit_hash
+   local rustc_host
+   local cargo_version
+   local build_settings_sha256
+   local cargo_lock_sha256
+   local cargo_metadata_sha256
+   if ! device_model="$(/usr/bin/plutil -extract result.hardwareProperties.marketingName raw -o - "$details")" \
+      || ! device_product_type="$(/usr/bin/plutil -extract result.hardwareProperties.productType raw -o - "$details")" \
+      || ! os_version="$(/usr/bin/plutil -extract result.deviceProperties.osVersionNumber raw -o - "$details")" \
+      || ! os_build="$(/usr/bin/plutil -extract result.deviceProperties.osBuildUpdate raw -o - "$details")" \
+      || ! xcode_version="$(sed -n 's/^Xcode //p' "$PROVENANCE_ROOT/xcode-version.txt")" \
+      || ! xcode_build="$(sed -n 's/^Build version //p' "$PROVENANCE_ROOT/xcode-version.txt")" \
+      || ! sdk_version="$(head -1 "$PROVENANCE_ROOT/iphoneos-sdk-version.txt")" \
+      || ! sdk_build="$(head -1 "$PROVENANCE_ROOT/iphoneos-sdk-build.txt")" \
+      || ! rustc_release="$(sed -n 's/^release: //p' "$PROVENANCE_ROOT/rustc-version.txt")" \
+      || ! rustc_commit_hash="$(sed -n 's/^commit-hash: //p' "$PROVENANCE_ROOT/rustc-version.txt")" \
+      || ! rustc_host="$(sed -n 's/^host: //p' "$PROVENANCE_ROOT/rustc-version.txt")" \
+      || ! cargo_version="$(head -1 "$PROVENANCE_ROOT/cargo-version.txt")" \
+      || ! build_settings_sha256="$(sha256_file "$PROVENANCE_ROOT/release-build-settings.txt")" \
+      || ! cargo_lock_sha256="$(sha256_file "$REPOSITORY_ROOT/oxide/Cargo.lock")" \
+      || ! cargo_metadata_sha256="$(sha256_file "$PROVENANCE_ROOT/production-cargo-metadata.json")"
+   then
+      echo "build provenance inputs are incomplete" >&2
+      return 1
+   fi
+   if [[ -z "$device_model" || -z "$device_product_type" || -z "$os_version" || -z "$os_build" \
+      || -z "$xcode_version" || -z "$xcode_build" || -z "$sdk_version" || -z "$sdk_build" \
+      || -z "$rustc_release" || ! "$rustc_commit_hash" =~ ^[[:xdigit:]]{40}$ \
+      || "$rustc_host" != "aarch64-apple-darwin" || "$cargo_version" != "cargo "* \
+      || ! "$build_settings_sha256" =~ ^[[:xdigit:]]{64}$ \
+      || ! "$cargo_lock_sha256" =~ ^[[:xdigit:]]{64}$ \
+      || ! "$cargo_metadata_sha256" =~ ^[[:xdigit:]]{64}$ ]]
+   then
+      echo "build provenance values are malformed" >&2
+      return 1
+   fi
+   if ! /usr/bin/plutil -create xml1 "$plist" \
+      || ! /usr/bin/plutil -insert schema -string oxide.feed-v1.build-provenance "$plist" \
+      || ! /usr/bin/plutil -insert schema_revision -integer 1 "$plist" \
+      || ! /usr/bin/plutil -insert core_device_id -string "$CORE_DEVICE_ID" "$plist" \
+      || ! /usr/bin/plutil -insert hardware_udid -string "$XCODE_DEVICE_ID" "$plist" \
+      || ! /usr/bin/plutil -insert device_model -string "$device_model" "$plist" \
+      || ! /usr/bin/plutil -insert device_product_type -string "$device_product_type" "$plist" \
+      || ! /usr/bin/plutil -insert os_version -string "$os_version" "$plist" \
+      || ! /usr/bin/plutil -insert os_build -string "$os_build" "$plist" \
+      || ! /usr/bin/plutil -insert maximum_refresh_hz -integer 120 "$plist" \
+      || ! /usr/bin/plutil -insert xcode_version -string "$xcode_version" "$plist" \
+      || ! /usr/bin/plutil -insert xcode_build -string "$xcode_build" "$plist" \
+      || ! /usr/bin/plutil -insert iphoneos_sdk_version -string "$sdk_version" "$plist" \
+      || ! /usr/bin/plutil -insert iphoneos_sdk_build -string "$sdk_build" "$plist" \
+      || ! /usr/bin/plutil -insert rustc_release -string "$rustc_release" "$plist" \
+      || ! /usr/bin/plutil -insert rustc_commit_hash -string "$rustc_commit_hash" "$plist" \
+      || ! /usr/bin/plutil -insert rustc_host -string "$rustc_host" "$plist" \
+      || ! /usr/bin/plutil -insert cargo_version -string "$cargo_version" "$plist" \
+      || ! /usr/bin/plutil -insert release_build_settings_sha256 -string "$build_settings_sha256" "$plist" \
+      || ! /usr/bin/plutil -insert production_cargo_lock_sha256 -string "$cargo_lock_sha256" "$plist" \
+      || ! /usr/bin/plutil -insert production_cargo_metadata_sha256 -string "$cargo_metadata_sha256" "$plist" \
+      || ! insert_signing_identity "$plist" uikit_signing "$PROVENANCE_ROOT/uikit-codesign.txt" \
+      || ! insert_signing_identity "$plist" oxide_signing "$PROVENANCE_ROOT/oxide-codesign.txt" \
+      || ! insert_signing_identity "$plist" controller_runner_signing "$PROVENANCE_ROOT/controller-runner-codesign.txt" \
+      || ! insert_signing_identity "$plist" controller_xctest_signing "$PROVENANCE_ROOT/controller-xctest-codesign.txt" \
+      || ! /usr/bin/plutil -convert json -o "$BUILD_PROVENANCE" "$plist"
+   then
+      echo "build provenance serialization failed" >&2
+      return 1
+   fi
+}
+
 verify_fixture_contracts()
 {
    local swift_check="$BUILD_ROOT/feed-v1-swift-contract-check"
@@ -455,6 +619,7 @@ trap 'exit 143' TERM
 
 export FEED_V1_SOURCE_ROOT="$SCRIPT_DIR"
 if ! verify_fixture_contracts \
+   || ! capture_toolchain_provenance \
    || ! mkdir -p "$GENERATED_PROJECT_ROOT" \
    || ! xcodegen generate \
       --spec "$SCRIPT_DIR/project.yml" \
@@ -493,6 +658,25 @@ then
    echo "resolved physical hardware UDID is not an Xcode destination" >&2
    exit 1
 fi
+if ! xcrun xcodebuild \
+   -project "$PROJECT" \
+   -scheme "$SCHEME" \
+   -configuration Release \
+   -destination "id=$XCODE_DEVICE_ID" \
+   -derivedDataPath "$DERIVED_DATA" \
+   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
+   CODE_SIGN_STYLE=Automatic \
+   CODE_SIGN_IDENTITY="Apple Development" \
+   -showBuildSettings >"$PROVENANCE_ROOT/release-build-settings.txt" 2>&1 \
+   || ! grep -Fq "    ARCHS = arm64" "$PROVENANCE_ROOT/release-build-settings.txt" \
+   || grep -Eq '^ +ARCHS = .*x86_64' "$PROVENANCE_ROOT/release-build-settings.txt" \
+   || ! grep -Fq "    CONFIGURATION = Release" "$PROVENANCE_ROOT/release-build-settings.txt" \
+   || ! grep -Fq "    PLATFORM_NAME = iphoneos" "$PROVENANCE_ROOT/release-build-settings.txt" \
+   || ! grep -Fq "    DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM_ID" "$PROVENANCE_ROOT/release-build-settings.txt"
+then
+   echo "resolved Release arm64 build settings are not publication-admissible" >&2
+   exit 1
+fi
 
 export FEED_V1_CARGO_TARGET_DIR="$RUST_TARGET"
 xcrun xcodebuild \
@@ -526,6 +710,11 @@ if ! verify_app_contract "$UIKIT_APP" UIKit \
    || ! verify_uikit_resource_contract "$UIKIT_APP" \
    || ! verify_app_contract "$OXIDE_APP" Oxide \
    || ! verify_controller_contract "$CONTROLLER_RUNNER" "$CONTROLLER_XCTEST" \
+   || ! capture_signing_identity "$UIKIT_APP" uikit \
+   || ! capture_signing_identity "$OXIDE_APP" oxide \
+   || ! capture_signing_identity "$CONTROLLER_RUNNER" controller-runner \
+   || ! capture_signing_identity "$CONTROLLER_XCTEST" controller-xctest \
+   || ! write_build_provenance \
    || ! verify_source_snapshot "arm64 device build"
 then
    exit 1
@@ -552,6 +741,7 @@ fi
    "$OXIDE_APP" \
    "$CONTROLLER_RUNNER" \
    "$CONTROLLER_XCTEST" \
+   "$BUILD_PROVENANCE" \
    "$RAW_ROOT/evidence-manifest.json"
 if [[ $? -ne 0 ]]
 then

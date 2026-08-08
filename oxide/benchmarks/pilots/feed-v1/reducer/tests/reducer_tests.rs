@@ -268,8 +268,9 @@ fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
    fs::create_dir_all(&raw).map_err(|error| error.to_string())?;
    let details = json!({
       "result": {
-         "identifier": "private-core-device-id",
+         "identifier": "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
          "hardwareProperties": {
+            "udid": "00008150-001529C434F8401C",
             "marketingName": "iPhone 17 Pro Max",
             "productType": "iPhone18,2",
             "reality": "physical",
@@ -287,7 +288,7 @@ fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
    });
    let lock = json!({
       "result": {
-         "deviceIdentifier": "private-core-device-id",
+         "deviceIdentifier": "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
          "passcodeRequired": false
       }
    });
@@ -309,8 +310,9 @@ fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
    assert_eq!(report["device"]["product_type"], "iPhone18,2");
    assert_eq!(report["device"]["cpu"], "arm64e");
    assert!(report["retained_input_bytes"].as_u64().is_some_and(|bytes| bytes > 0));
-   assert!(!serde_json::to_string(&report["device"]).map_err(|error| error.to_string())?
-      .contains("private-core-device-id"));
+   let public_device = serde_json::to_string(&report["device"]).map_err(|error| error.to_string())?;
+   assert!(!public_device.contains("1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"));
+   assert!(!public_device.contains("00008150-001529C434F8401C"));
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;
    Ok(())
 }
@@ -446,6 +448,7 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
    let oxide_app = root.join("apps/Oxide.app");
    let controller_runner = root.join("apps/FeedV1Controller-Runner.app");
    let controller_xctest = controller_runner.join("PlugIns/FeedV1Controller.xctest");
+   let build_provenance = output_root.join("build-provenance.json");
    fs::create_dir_all(source.join("ios/target")).map_err(|error| error.to_string())?;
    fs::create_dir_all(source.join("ios/raw")).map_err(|error| error.to_string())?;
    fs::create_dir_all(source.join("ios/feed-v1-smoke.xcresult")).map_err(|error| error.to_string())?;
@@ -487,6 +490,8 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
    git(&root, &["config", "user.email", "feed-v1-test@example.invalid"])?;
    git(&root, &["add", "-f", "."])?;
    git(&root, &["commit", "-m", "frozen feed-v1 test source"])?;
+   fs::write(&build_provenance, serde_json::to_vec(&valid_build_provenance())
+      .map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
 
    let output = output_root.join("evidence-manifest.json");
    oxide_feed_v1_reducer::build_evidence_manifest(
@@ -496,11 +501,13 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
       &oxide_app,
       &controller_runner,
       &controller_xctest,
+      &build_provenance,
       &output,
    )?;
    let manifest: Value = serde_json::from_slice(&fs::read(&output).map_err(|error| error.to_string())?)
       .map_err(|error| error.to_string())?;
-   assert_eq!(manifest["schema_revision"], 2);
+   assert_eq!(manifest["schema_revision"], 3);
+   assert_eq!(manifest["build_provenance"], valid_build_provenance());
    assert_eq!(manifest["repository_ref"], "refs/heads/main");
    assert!(manifest["repository_head_commit"].as_str().is_some_and(|value| value.len() == 40));
    assert!(manifest["repository_tree"].as_str().is_some_and(|value| value.len() == 40));
@@ -512,6 +519,21 @@ fn evidence_manifest_excludes_stale_reports_results_and_build_outputs() -> Resul
       .ok_or_else(|| "manifest has no source_files object".to_string())?;
    let paths: Vec<&str> = source_files.keys().map(String::as_str).collect();
    assert_eq!(paths, vec!["ios/source.swift", "protocol.md", "reducer/Cargo.toml", "reducer/src/lib.rs"]);
+   let mut foreign_provenance = valid_build_provenance();
+   foreign_provenance["hardware_udid"] = json!("00008150-0000000000000000");
+   fs::write(&build_provenance, serde_json::to_vec(&foreign_provenance)
+      .map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
+   let error = oxide_feed_v1_reducer::build_evidence_manifest(
+      &source,
+      &root,
+      &uikit_app,
+      &oxide_app,
+      &controller_runner,
+      &controller_xctest,
+      &build_provenance,
+      &output_root.join("foreign-evidence-manifest.json"),
+   ).unwrap_err();
+   assert!(error.contains("frozen device/toolchain/signing contract"));
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;
    fs::remove_dir_all(output_root).map_err(|error| error.to_string())?;
    Ok(())
@@ -963,8 +985,9 @@ fn write_smoke_device_evidence(raw: &Path) -> Result<(), String>
 {
    let details = json!({
       "result": {
-         "identifier": "private-core-device-id",
+         "identifier": "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
          "hardwareProperties": {
+            "udid": "00008150-001529C434F8401C",
             "marketingName": "iPhone 17 Pro Max",
             "productType": "iPhone18,2",
             "reality": "physical",
@@ -982,7 +1005,7 @@ fn write_smoke_device_evidence(raw: &Path) -> Result<(), String>
    });
    let lock = json!({
       "result": {
-         "deviceIdentifier": "private-core-device-id",
+         "deviceIdentifier": "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
          "passcodeRequired": false
       }
    });
@@ -993,6 +1016,41 @@ fn write_smoke_device_evidence(raw: &Path) -> Result<(), String>
    fs::write(raw.join("lock-before-build.json"), &lock).map_err(|error| error.to_string())?;
    fs::write(raw.join("lock-before-test.json"), &lock).map_err(|error| error.to_string())?;
    Ok(())
+}
+
+fn valid_build_provenance() -> Value
+{
+   let signing = json!({
+      "authority": "Apple Development: Feed V1 (ABCDE12345)",
+      "team_identifier": "ABCDE12345",
+      "cdhash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   });
+   json!({
+      "schema": "oxide.feed-v1.build-provenance",
+      "schema_revision": 1,
+      "core_device_id": "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
+      "hardware_udid": "00008150-001529C434F8401C",
+      "device_model": "iPhone 17 Pro Max",
+      "device_product_type": "iPhone18,2",
+      "os_version": "26.5.2",
+      "os_build": "23F84",
+      "maximum_refresh_hz": 120,
+      "xcode_version": "26.4",
+      "xcode_build": "17F12",
+      "iphoneos_sdk_version": "26.4",
+      "iphoneos_sdk_build": "23E211",
+      "rustc_release": "1.89.0",
+      "rustc_commit_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rustc_host": "aarch64-apple-darwin",
+      "cargo_version": "cargo 1.89.0 (c24e10642 2025-06-23)",
+      "release_build_settings_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "production_cargo_lock_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "production_cargo_metadata_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "uikit_signing": signing.clone(),
+      "oxide_signing": signing.clone(),
+      "controller_runner_signing": signing.clone(),
+      "controller_xctest_signing": signing
+   })
 }
 
 fn run_json(nonce: &str, phase: &str, session_index: u32, pair_index: u32, treatment: &str, direction: &str, order_index: u32) -> Result<Value, String>

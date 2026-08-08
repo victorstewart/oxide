@@ -27,7 +27,7 @@ Protect the feed-v1 publication boundary with deterministic host-side regression
 - `reducer_emits_only_admitted_nonsecret_device_identity` admits matching physical-device evidence while excluding device IDs from the report.
 - `attachment_export_verifier_requires_one_complete_manifest` rejects incomplete, unreferenced, or canonical-path-aliased XCTest export trees.
 - `attachment_export_rejects_hard_link_file_identity_aliases` rejects two capture names backed by the same Unix file identity.
-- `evidence_manifest_excludes_stale_reports_results_and_build_outputs` proves only protocol/iOS/reducer source enters `source_files`, while stale latest reports, evidence JSON, targets, raw results, and XCTest result bundles cannot contaminate it; it also proves the clean named Git commit/tree and compiled controller hashes are present.
+- `evidence_manifest_excludes_stale_reports_results_and_build_outputs` proves only protocol/iOS/reducer source enters `source_files`, while stale latest reports, evidence JSON, targets, raw results, and XCTest result bundles cannot contaminate it; it also proves the clean named Git commit/tree, strict device/toolchain/dependency/signing provenance, and compiled controller hashes are present.
 - `six_valid_smoke_tuples_pass_smoke_but_not_full_publication` builds the complete synthetic six-tuple package, proves smoke admission, proves no report was written, and proves full reduction remains blocked until the complete 60-record evidence population is present.
 - `smoke_admits_named_output_placeholders_as_evidence` proves smoke verification cannot hide an evidence record whose path happens to equal its internal no-write output placeholder.
 - `smoke_scans_build_and_target_named_directories` proves evidence discovery exempts neither conventional output-directory name.
@@ -80,6 +80,7 @@ Expected integration result: every focused integration case passes.
 
 ## Changelog
 
+- 2026-08-07: Added strict revision-3 evidence provenance for the frozen phone, toolchains, dependency graph, resolved settings, and all signed products.
 - 2026-08-07: replaced bootstrap determinism with exact rank, achieved-coverage,
   population-cardinality, revision-4 serialization, and retired-field checks.
 - 2026-08-07: Switched focused commands to the shared root workspace graph.

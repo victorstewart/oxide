@@ -239,6 +239,7 @@ struct EvidenceManifest
    repository_ref: String,
    repository_head_commit: String,
    repository_tree: String,
+   build_provenance: BuildProvenance,
    source_files: BTreeMap<String, String>,
    uikit_app_sha256: String,
    oxide_app_sha256: String,
@@ -249,6 +250,45 @@ struct EvidenceManifest
    reducer_binary_sha256: String,
    regular_font_sha256: String,
    bold_font_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct BuildProvenance
+{
+   schema: String,
+   schema_revision: u32,
+   core_device_id: String,
+   hardware_udid: String,
+   device_model: String,
+   device_product_type: String,
+   os_version: String,
+   os_build: String,
+   maximum_refresh_hz: u32,
+   xcode_version: String,
+   xcode_build: String,
+   iphoneos_sdk_version: String,
+   iphoneos_sdk_build: String,
+   rustc_release: String,
+   rustc_commit_hash: String,
+   rustc_host: String,
+   cargo_version: String,
+   release_build_settings_sha256: String,
+   production_cargo_lock_sha256: String,
+   production_cargo_metadata_sha256: String,
+   uikit_signing: SigningIdentity,
+   oxide_signing: SigningIdentity,
+   controller_runner_signing: SigningIdentity,
+   controller_xctest_signing: SigningIdentity,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SigningIdentity
+{
+   authority: String,
+   team_identifier: String,
+   cdhash: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -427,6 +467,7 @@ struct DeviceSummary
 struct DeviceEvidence
 {
    identifier: String,
+   hardware_udid: String,
    summary: DeviceSummary,
 }
 
@@ -1828,6 +1869,7 @@ fn parse_device_details(path: &Path) -> Result<DeviceEvidence, String>
    let value: serde_json::Value = serde_json::from_slice(&bytes)
       .map_err(|error| format!("parse device evidence {}: {error}", path.display()))?;
    let identifier = required_json_string(&value, "/result/identifier", "identifier")?;
+   let hardware_udid = required_json_string(&value, "/result/hardwareProperties/udid", "hardware UDID")?;
    let marketing_name = required_json_string(&value, "/result/hardwareProperties/marketingName", "marketing name")?;
    let product_type = required_json_string(&value, "/result/hardwareProperties/productType", "product type")?;
    let reality = required_json_string(&value, "/result/hardwareProperties/reality", "hardware reality")?;
@@ -1854,6 +1896,7 @@ fn parse_device_details(path: &Path) -> Result<DeviceEvidence, String>
    }
    Ok(DeviceEvidence {
       identifier,
+      hardware_udid,
       summary: DeviceSummary {
          marketing_name,
          product_type,
@@ -1884,7 +1927,11 @@ fn admit_device(run_root: &Path) -> Result<DeviceSummary, String>
    let raw = run_root.join("raw");
    let before = parse_device_details(&raw.join("device-before.json"))?;
    let after = parse_device_details(&raw.join("device-after.json"))?;
-   if before.identifier != after.identifier || before.summary != after.summary
+   if before.identifier != "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"
+      || before.hardware_udid != "00008150-001529C434F8401C"
+      || before.identifier != after.identifier
+      || before.hardware_udid != after.hardware_udid
+      || before.summary != after.summary
    {
       return Err("physical device identity or OS changed across the pilot".to_string());
    }
@@ -1926,6 +1973,45 @@ fn validate_run_record_source(run_root: &Path, path: &Path, record: &RunRecord) 
    Ok(())
 }
 
+fn build_provenance_admitted(provenance: &BuildProvenance) -> bool
+{
+   provenance.schema == "oxide.feed-v1.build-provenance"
+      && provenance.schema_revision == 1
+      && provenance.core_device_id == "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"
+      && provenance.hardware_udid == "00008150-001529C434F8401C"
+      && !provenance.device_model.is_empty()
+      && !provenance.device_product_type.is_empty()
+      && !provenance.os_version.is_empty()
+      && !provenance.os_build.is_empty()
+      && provenance.maximum_refresh_hz == 120
+      && !provenance.xcode_version.is_empty()
+      && !provenance.xcode_build.is_empty()
+      && !provenance.iphoneos_sdk_version.is_empty()
+      && !provenance.iphoneos_sdk_build.is_empty()
+      && !provenance.rustc_release.is_empty()
+      && is_git_object_id(&provenance.rustc_commit_hash)
+      && provenance.rustc_host == "aarch64-apple-darwin"
+      && provenance.cargo_version.starts_with("cargo ")
+      && is_sha256(&provenance.release_build_settings_sha256)
+      && is_sha256(&provenance.production_cargo_lock_sha256)
+      && is_sha256(&provenance.production_cargo_metadata_sha256)
+      && signing_identity_admitted(&provenance.uikit_signing)
+      && signing_identity_admitted(&provenance.oxide_signing)
+      && signing_identity_admitted(&provenance.controller_runner_signing)
+      && signing_identity_admitted(&provenance.controller_xctest_signing)
+      && provenance.uikit_signing.team_identifier == provenance.oxide_signing.team_identifier
+      && provenance.uikit_signing.team_identifier == provenance.controller_runner_signing.team_identifier
+      && provenance.uikit_signing.team_identifier == provenance.controller_xctest_signing.team_identifier
+}
+
+fn signing_identity_admitted(identity: &SigningIdentity) -> bool
+{
+   identity.authority.starts_with("Apple Development:")
+      && identity.team_identifier.len() == 10
+      && identity.team_identifier.bytes().all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+      && is_git_object_id(&identity.cdhash)
+}
+
 fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, String>
 {
    if !paths.run_root.is_dir()
@@ -1954,6 +2040,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    };
    let mut cleanup: Option<CleanupProof> = None;
    let mut controller_runtime: Option<ControllerRuntimeProof> = None;
+   let mut evidence_manifest: Option<EvidenceManifest> = None;
    let mut evidence_manifest_path: Option<PathBuf> = None;
    let mut visual_gate_source_sha256: Option<String> = None;
    let mut repository_ref: Option<String> = None;
@@ -2069,11 +2156,12 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          Some("oxide.feed-v1.evidence-manifest") => match serde_json::from_value::<EvidenceManifest>(value)
          {
             Ok(manifest) if manifest.schema == "oxide.feed-v1.evidence-manifest"
-               && manifest.schema_revision == 2
+               && manifest.schema_revision == 3
                && manifest.fixture_sha256 == FIXTURE_SHA256
                && manifest.repository_ref.starts_with("refs/heads/")
                && is_git_object_id(&manifest.repository_head_commit)
                && is_git_object_id(&manifest.repository_tree)
+               && build_provenance_admitted(&manifest.build_provenance)
                && manifest.regular_font_sha256 == "7d494f276293fb0a8e2aab1fc0e386baa3e8a1d90927f518abb152b5c73e29f9"
                && manifest.bold_font_sha256 == "7f4feacd835eed23e104413f800a74b9f0270ce8c754c990bfc09b796a3ca628"
                && is_sha256(&manifest.uikit_app_sha256)
@@ -2094,9 +2182,10 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
                   blockers.push("multiple evidence manifests".to_string());
                }
                visual_gate_source_sha256 = manifest.source_files.get("reducer/src/lib.rs").cloned();
-               repository_ref = Some(manifest.repository_ref);
-               repository_head_commit = Some(manifest.repository_head_commit);
-               repository_tree = Some(manifest.repository_tree);
+               repository_ref = Some(manifest.repository_ref.clone());
+               repository_head_commit = Some(manifest.repository_head_commit.clone());
+               repository_tree = Some(manifest.repository_tree.clone());
+               evidence_manifest = Some(manifest);
                evidence_manifest_path = Some(path.clone());
             }
             Ok(_) => blockers.push(format!("evidence manifest identity mismatch in {}", path.display())),
@@ -2346,6 +2435,18 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          }
       }
       None => blockers.push("missing cleanup proof".to_string()),
+   }
+
+   if let (Some(device), Some(manifest)) = (&device, &evidence_manifest)
+   {
+      let provenance = &manifest.build_provenance;
+      if provenance.device_model != device.marketing_name
+         || provenance.device_product_type != device.product_type
+         || provenance.os_version != device.os_version
+         || provenance.os_build != device.os_build
+      {
+         blockers.push("build provenance device model or OS differs from device evidence".to_string());
+      }
    }
 
    let evidence_manifest_sha256 = match evidence_manifest_path
@@ -2709,7 +2810,7 @@ pub fn verify_attachment_export(root: &Path) -> Result<(), String>
    Ok(())
 }
 
-pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit_app: &Path, oxide_app: &Path, controller_runner: &Path, controller_xctest: &Path, output: &Path) -> Result<(), String>
+pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit_app: &Path, oxide_app: &Path, controller_runner: &Path, controller_xctest: &Path, build_provenance: &Path, output: &Path) -> Result<(), String>
 {
    if !source_root.is_dir()
       || !repository_root.is_dir()
@@ -2717,8 +2818,9 @@ pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit
       || !oxide_app.is_dir()
       || !controller_runner.is_dir()
       || !controller_xctest.is_dir()
+      || !build_provenance.is_file()
    {
-      return Err("manifest inputs must be existing directories".to_string());
+      return Err("manifest products must be directories and build provenance must be a file".to_string());
    }
    let controller_runner_binary = controller_runner.join("FeedV1Controller-Runner");
    let controller_xctest_binary = controller_xctest.join("FeedV1Controller");
@@ -2727,6 +2829,14 @@ pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit
       return Err("controller products do not contain the frozen executables".to_string());
    }
    let (repository_ref, repository_head_commit, repository_tree) = repository_snapshot(repository_root)?;
+   let build_provenance: BuildProvenance = serde_json::from_slice(
+      &fs::read(build_provenance)
+         .map_err(|error| format!("read build provenance {}: {error}", build_provenance.display()))?,
+   ).map_err(|error| format!("strict build provenance {}: {error}", build_provenance.display()))?;
+   if !build_provenance_admitted(&build_provenance)
+   {
+      return Err("build provenance does not match the frozen device/toolchain/signing contract".to_string());
+   }
    let source_files = collect_evidence_source_files(source_root)?;
    let mut hashes = BTreeMap::new();
    for path in source_files
@@ -2740,11 +2850,12 @@ pub fn build_evidence_manifest(source_root: &Path, repository_root: &Path, uikit
    let reducer_binary = env::current_exe().map_err(|error| format!("resolve reducer executable: {error}"))?;
    let manifest = EvidenceManifest {
       schema: "oxide.feed-v1.evidence-manifest".to_string(),
-      schema_revision: 2,
+      schema_revision: 3,
       fixture_sha256: FIXTURE_SHA256.to_string(),
       repository_ref,
       repository_head_commit,
       repository_tree,
+      build_provenance,
       source_files: hashes,
       uikit_app_sha256: hash_directory(uikit_app)?,
       oxide_app_sha256: hash_directory(oxide_app)?,

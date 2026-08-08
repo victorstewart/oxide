@@ -215,13 +215,19 @@ for either UIKit treatment or the retrieved Oxide documents tree for Oxide.
 
 ## Evidence and cleanup records
 
-Exactly one `oxide.feed-v1.evidence-manifest` revision 2 may appear, at
+Exactly one `oxide.feed-v1.evidence-manifest` revision 3 may appear, at
 `raw/evidence-manifest.json`. It contains the fixture hash; the exact named Git
-ref, clean `HEAD` commit, and `HEAD` tree; a sorted source-path-to-SHA-256 map;
+ref, clean `HEAD` commit, and `HEAD` tree; a strict embedded
+`oxide.feed-v1.build-provenance` revision 1; a sorted source-path-to-SHA-256 map;
 deterministic hashes of each signed app bundle, the compiled
 `FeedV1Controller-Runner.app` and its executable, the embedded
 `FeedV1Controller.xctest` and its executable, the exact standalone reducer
-executable, and both font hashes. `project.yml` is the Xcode source definition;
+executable, and both font hashes. Build provenance freezes the exact CoreDevice
+and hardware UDID, model, OS version/build, 120 Hz requirement, Xcode and iPhoneOS
+SDK versions/builds, Rust compiler/host and Cargo version, resolved Release build
+settings hash, Cargo lock and resolved production metadata hashes, and the
+Authority/team/CDHash identity of both apps plus both controller products.
+`project.yml` is the Xcode source definition;
 the externally generated `FeedV1Pilot.xcodeproj` is neither checked in nor
 admitted as source evidence. The report identifies both the frozen visual-gate
 specification and the actual `reducer/src/lib.rs` source hash from this manifest.

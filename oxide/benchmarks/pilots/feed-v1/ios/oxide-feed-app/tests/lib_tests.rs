@@ -258,6 +258,28 @@ fn complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work()
 }
 
 #[test]
+fn device_runner_binds_phone_toolchain_dependencies_and_signing()
+{
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   for contract in [
+      "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659",
+      "00008150-001529C434F8401C",
+      "aarch64-apple-darwin",
+      "production-cargo-metadata.json",
+      "release-build-settings.txt",
+      "capture_signing_identity",
+      "build-provenance.json",
+   ]
+   {
+      assert!(runner.contains(contract));
+   }
+
+   let reducer = include_str!("../../../reducer/src/lib.rs");
+   assert!(reducer.contains("build_provenance_admitted"));
+   assert!(reducer.contains("manifest.schema_revision == 3"));
+}
+
+#[test]
 fn frozen_app_starts_at_each_exact_contract_offset()
 {
    let _lock = lock_environment();

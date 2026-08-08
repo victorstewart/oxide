@@ -29,8 +29,9 @@ xcodegen generate --spec "$pilot_root/project.yml" \
   --project "$pilot_build" --project-root "$pilot_root"
 ```
 
-`run-device.sh <CoreDevice-ID> <result-root> [smoke|full]` resolves that
-CoreDevice record's hardware UDID for Xcode, creates an external build root,
+`run-device.sh <CoreDevice-ID> <result-root> [smoke|full]` accepts only
+CoreDevice `1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659`, requires it to resolve to
+hardware UDID `00008150-001529C434F8401C`, and creates an external build root,
 generates the project there from `project.yml`, then performs the bounded build,
 test, artifact retrieval, reduction, and temporary-product cleanup. Omitting the
 mode selects `smoke`. Official output requires a
@@ -49,7 +50,11 @@ the UIKit bundle to contain byte-identical copies of both frozen Asap font
 files. It separately resolves and verifies the processed controller runner
 bundle ID `com.oxide.feed-v1.controller.xctrunner`, the embedded xctest ID, and
 exact arm64 executables, then hashes both controller products into the evidence
-manifest. The home indicator is outside the frozen comparison crop. The runner
+manifest. The manifest also embeds the device model and OS build, the 120 Hz
+contract, Xcode/SDK/Rust versions, a hash of resolved Release build settings,
+the root Cargo lock and resolved production metadata hashes, and the actual
+Authority/team/CDHash identities of all four signed products. Supporting raw
+tool output remains beneath `raw/provenance/`. The home indicator is outside the frozen comparison crop. The runner
 refuses a locked phone, removes and verifies stale installations of the two
 pilot bundle IDs and controller runner, proves no exact controller process
 survives, and captures the same physical-device identity before and after the
@@ -58,7 +63,9 @@ run.
 Device signing follows the workspace convention: set
 `OXIDE_IOS_DEVELOPMENT_TEAM` to the 10-character team identifier. The runner
 passes that team, `Automatic` signing, and `Apple Development` explicitly to
-both Xcode phases; it does not bake a developer identity into the project.
+both Xcode phases; it does not bake a developer identity into the project. It
+rejects a translated host process, any non-arm64 resolved architecture, a
+foreign signing team, or a non-development authority before device launch.
 
 The default `smoke` mode strictly verifies the six frozen treatment/direction
 tuples and produces no timing classification, cross-treatment travel claim, or

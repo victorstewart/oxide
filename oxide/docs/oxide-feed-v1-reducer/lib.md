@@ -17,7 +17,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 - `reduce(&ReducePaths)` admits exactly six smoke diagnostics and one 54-run primary block, then atomically writes JSON and one dense Markdown report containing four travel-equivalence decisions and 54 primary timing rows.
 - `verify_smoke(run_root)` applies the six-run smoke gates without timing classification or report output.
 - `verify_attachment_export(root)` requires exactly six files, one manifest detail for the exact physical-device controller test, in-root canonical paths, unique names and file identities, and non-empty files.
-- `build_evidence_manifest(source_root, repository_root, uikit_app, oxide_app, controller_runner, controller_xctest, output)` requires a clean named Git `HEAD` and hashes its ref/commit/tree, the strict `protocol.md` plus `ios/**` and `reducer/**` source allowlist, both built app bundles, both compiled controller products/executables, the executing reducer, and both frozen fonts.
+- `build_evidence_manifest(source_root, repository_root, uikit_app, oxide_app, controller_runner, controller_xctest, build_provenance, output)` requires a clean named Git `HEAD`; strictly admits the frozen device, toolchain, resolved-build, production-dependency, and signing provenance; and hashes the ref/commit/tree, strict `protocol.md` plus `ios/**` and `reducer/**` source allowlist, both built app bundles, both compiled controller products/executables, the executing reducer, and both frozen fonts.
 - `strict_validate_run_json` and `strict_validate_failure_json` expose strict schema admission to regression tests.
 - `visual_metrics` evaluates frozen luma SSIM, worst-tile RGB error, and exact whole-image RGB error for equal-size RGBA images; `travel_equivalence_passes` applies the inclusive frozen median and confidence-interval margins.
 - `MedianConfidenceInterval` carries the exact method, requested and achieved
@@ -49,7 +49,7 @@ It is not an Oxide runtime dependency and does not add behavior to either measur
 ## Edge cases and failure modes
 
 - Missing, foreign, duplicated, malformed, non-finite, misplaced, aliased, symlinked, or out-of-order records block admission. Attachment authority additionally requires the exact controller test identifier, one manifest detail, six attachments, in-root paths, and distinct file identities on Unix.
-- Source evidence rejects symlinks and unclassified files, includes only `protocol.md` and admitted implementation files below `ios/` and `reducer/`, and excludes targets, builds, result/evidence trees, stale latest reports, logs, traces, XCTest result bundles, and generated Xcode projects. `project.yml` is authoritative; `FeedV1Pilot.xcodeproj` is generated only in the external build root.
+- Source evidence rejects symlinks and unclassified files, includes only `protocol.md` and admitted implementation files below `ios/` and `reducer/`, and excludes targets, builds, result/evidence trees, stale latest reports, logs, traces, XCTest result bundles, and generated Xcode projects. `project.yml` is authoritative; `FeedV1Pilot.xcodeproj` is generated only in the external build root. Build provenance additionally rejects a foreign CoreDevice/hardware pair, a non-120-Hz contract, translated Rust host, malformed dependency/build hashes, or any product outside one Apple Development team.
 - Device identity changes, a locked phone, Simulator evidence, 60 Hz target periods, thermal/power transitions, drag-only gestures, total/per-treatment runtime overflow, a changed post-export source snapshot, incomplete cleanup, Xcode-test failure, an attachment population other than the exact six smoke PNGs, or stale retained tooling block admission.
 - PNG decode, full-screen dimensions, crop, component geometry, travel, or adversarial-gate failures block admission.
 - Output paths must have a filename. Missing parent directories are created; atomic write or rename errors are returned to the caller.
@@ -86,6 +86,7 @@ cargo test --locked -p oxide-feed-v1-reducer
 
 ## Changelog
 
+- 2026-08-07: Bound evidence revision 3 to the exact phone, OS/toolchains, resolved Release settings, production Cargo graph, and signed product identities.
 - 2026-08-07: hard-cut revision-4 reports to exact nine-cluster median
   intervals with ranks 2 and 8 and 96.09375 percent achieved coverage; removed
   all bootstrap seeds, resample fields, and resampling loops.

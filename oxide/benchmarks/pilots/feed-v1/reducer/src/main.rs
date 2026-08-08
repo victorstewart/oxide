@@ -38,6 +38,7 @@ fn run() -> Result<(), String>
          let oxide_app = required_path(&mut args, "Oxide app")?;
          let controller_runner = required_path(&mut args, "controller runner app")?;
          let controller_xctest = required_path(&mut args, "controller xctest")?;
+         let build_provenance = required_path(&mut args, "build provenance")?;
          let output = required_path(&mut args, "manifest output")?;
          reject_extra(args)?;
          build_evidence_manifest(
@@ -47,6 +48,7 @@ fn run() -> Result<(), String>
             &oxide_app,
             &controller_runner,
             &controller_xctest,
+            &build_provenance,
             &output,
          )
       }
@@ -62,7 +64,7 @@ fn run() -> Result<(), String>
          reject_extra(args)?;
          verify_smoke(&root)
       }
-      _ => Err("usage: oxide-feed-v1-reducer reduce <run-root> <latest.json> <latest.md> | manifest <source-root> <repository-root> <UIKit.app> <Oxide.app> <FeedV1Controller-Runner.app> <FeedV1Controller.xctest> <output.json> | verify-attachments <root> | verify-smoke <run-root>".to_string()),
+      _ => Err("usage: oxide-feed-v1-reducer reduce <run-root> <latest.json> <latest.md> | manifest <source-root> <repository-root> <UIKit.app> <Oxide.app> <FeedV1Controller-Runner.app> <FeedV1Controller.xctest> <build-provenance.json> <output.json> | verify-attachments <root> | verify-smoke <run-root>".to_string()),
    }
 }
 
