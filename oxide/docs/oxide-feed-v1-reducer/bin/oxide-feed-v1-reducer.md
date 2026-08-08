@@ -14,7 +14,7 @@ The binary is a thin command dispatcher for the feed-v1 reducer library. It keep
 
 - `main() -> ExitCode` calls the argument dispatcher, returns success only for an admitted operation, and prints one prefixed error before returning failure.
 - `run() -> Result<(), String>` parses exactly one command and dispatches into the library.
-- `reduce <run-root> <latest.json> <latest.md>` admits six smoke diagnostics plus one 54-run primary block and publishes four travel-equivalence decisions plus the 54 primary timing rows.
+- `reduce <run-root> <latest.json> <latest.md>` admits six smoke diagnostics plus one 54-run primary block, keeps the 54 primary timing rows in canonical JSON, and writes only aggregate decisions and summaries to Markdown.
 - `manifest <source-root> <repository-root> <UIKit.app> <Oxide.app> <FeedV1Controller-Runner.app> <FeedV1Controller.xctest> <build-provenance.json> <output.json>` creates the clean-Git/source/app/controller/reducer/font evidence manifest.
 - `verify-attachments <root>` validates the frozen 12-file publication smoke export from the exact controller XCTest.
 - `verify-no-attachments <root>` proves that the primary XCTest export contains no attachments.

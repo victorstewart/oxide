@@ -2,7 +2,7 @@
 
 ## Scope
 
-This benchmark suite exists to support one claim only: on identical pixels, geometry, timings, and interactions, compare Oxide against UIKit honestly.
+This benchmark suite exists to support one claim only: under an identical visible-scene specification, geometry, timing, cache state, and interaction path, compare Oxide against UIKit honestly.
 
 The contract is Oxide/UIKit-native. External or legacy apps must not appear in the persisted policy, report language, or benchmark definitions.
 
@@ -146,7 +146,7 @@ When a persisted metric is derived from multiple potential collectors, the repor
   - the official today bucket is the parked microscope comparison between the pure custom Oxide-owned visible preview path and the matching `AVCaptureVideoPreviewLayer` baseline on the same unchanged build and device
   - the actual app-host comparison is a separate shipping-oriented bucket and must be reported as partial or blocked until the UI-test runner path is stable
 - Hybrid camera visible-preview-layer paths are diagnostic-only. They must never appear in committed default baselines or user-facing summary tables.
-- Treat real-device process-scoped Metal System Trace as the authoritative GPU source.
+- Treat Oxide's in-app Metal command-buffer and counter-sample timing as its first GPU source; use real-device process-scoped Metal System Trace as the external cross-check.
 - Treat manual device-side Power Profiler traces as the authoritative energy source when available.
 
 ## Reporting Rules

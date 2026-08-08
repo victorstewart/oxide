@@ -14,9 +14,10 @@ This is evidence for one workload on one device, not a global framework verdict.
 A truthful `slower`, `inconclusive`, or `blocked` result completes the goal.
 Do not optimize any implementation, change a threshold, add samples, or repair
 the workload after the publication source is frozen.
-This study is intentionally partial relative to the broader scroll-performance
-contract: canonical Oxide/UIKit device baselines remain separate verification
-artifacts, not extra app surfaces or publication pages.
+This study covers one representative flow. It is separate from the compact
+canonical Oxide/UIKit signal battery and from explicit touched-case or
+full-contract tiers; those remain verification artifacts, not extra app
+surfaces or publication pages.
 
 ## Non-negotiable scope
 
@@ -204,20 +205,16 @@ figures are allowed only when one collector observes the same boundary for all
 three treatments; otherwise emit `missing`. Never compare Oxide
 command-buffer timing with a UIKit/Core Animation scope.
 
-Use nearest-rank quantiles with one-based rank `ceil(q × n)`. Each
-treatment/session/pair is one independent cluster. Concatenate the two
-directional runs only to compute that cluster's descriptive p50 and p95, then
-use the median of the nine cluster p50s and p95s as the treatment aggregates.
-Only the nine matched cluster deltas enter interval classification; raw callback
-intervals are never independent trials. Aggregate missed-deadline ratio as
-total missed deadlines divided by total eligible deadlines, and aggregate
-hitch excess as total excess milliseconds divided by total elapsed seconds.
-
-Compute every callback p50, p95, and p99 with the one-based nearest-rank rule
-`rank = ceil(q * n)`. For each treatment/session/pair cluster, concatenate only
+Compute callback quantiles with the one-based nearest-rank rule
+`rank = ceil(q * n)`. Per-run p50, p95, p99, and peak values are descriptive
+only. Each treatment/session/pair is one independent cluster: concatenate only
 its forward and reverse intervals and compute its descriptive p50 and p95. The
 treatment p50 and p95 are the medians of the nine corresponding cluster values,
-not quantiles over pooled callback intervals.
+not quantiles over pooled callback intervals. Only the nine matched cluster
+deltas enter interval classification; raw callback intervals are never
+independent trials. Aggregate missed-deadline ratio as total missed deadlines
+divided by total eligible deadlines, and aggregate hitch excess as total excess
+milliseconds divided by total elapsed seconds.
 
 The admitted canonical JSON contains one deterministic row for each of the 54
 primary gestures, including its raw callback timestamp/targetTimestamp samples,
