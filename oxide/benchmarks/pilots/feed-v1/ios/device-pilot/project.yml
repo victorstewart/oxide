@@ -28,7 +28,7 @@ schemes:
       targets:
         - FeedV1Controller
       environmentVariables:
-        OXIDE_FEED_V1_CONTROLLER_MODE: full
+        OXIDE_FEED_V1_CONTROLLER_MODE: primary
   FeedV1PilotSmoke:
     build:
       targets:

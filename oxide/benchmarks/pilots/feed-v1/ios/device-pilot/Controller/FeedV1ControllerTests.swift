@@ -117,33 +117,31 @@ final class FeedV1ControllerTests: XCTestCase
    {
       let started = ProcessInfo.processInfo.systemUptime
       let mode = ProcessInfo.processInfo.environment["OXIDE_FEED_V1_CONTROLLER_MODE"] ?? "smoke"
-      guard mode == "smoke" || mode == "full" else
+      guard mode == "smoke" || mode == "primary" else
       {
          XCTFail("unknown controller mode \(mode)")
          return
       }
 
-      for (orderIndex, treatment) in treatments.enumerated()
-      {
-         for direction in FeedV1Direction.allCases
-         {
-            try run(
-               phase: "smoke",
-               sessionIndex: 0,
-               pairIndex: 0,
-               orderIndex: orderIndex,
-               treatment: treatment,
-               direction: direction
-            )
-         }
-      }
       if mode == "smoke"
       {
+         for (orderIndex, treatment) in treatments.enumerated()
+         {
+            for direction in FeedV1Direction.allCases
+            {
+               try run(
+                  phase: "smoke",
+                  sessionIndex: 0,
+                  pairIndex: 0,
+                  orderIndex: orderIndex,
+                  treatment: treatment,
+                  direction: direction
+               )
+            }
+         }
          try persistRuntime(mode: mode, started: started)
          return
       }
-
-      treatmentRuntime.removeAll(keepingCapacity: true)
 
       for sessionIndex in 0 ..< 3
       {
@@ -348,7 +346,7 @@ final class FeedV1ControllerTests: XCTestCase
       let data = try encoder.encode(record)
       let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       try data.write(
-         to: documents.appendingPathComponent("oxide-feed-v1-controller-runtime.json", isDirectory: false),
+         to: documents.appendingPathComponent("oxide-feed-v1-controller-runtime-\(mode).json", isDirectory: false),
          options: .atomic
       )
    }

@@ -139,6 +139,9 @@ BUILD_REMOVED=false
 RESULT_BUNDLE_REMOVED=false
 REDUCER_REMOVED=false
 TEST_SUCCEEDED=false
+SMOKE_TEST_SUCCEEDED=false
+SMOKE_ADMITTED=false
+PRIMARY_TEST_SUCCEEDED=false
 VERIFIED_ATTACHMENT_COUNT=0
 TEST_STATUS=1
 BUILD_ROOT_BYTES=0
@@ -740,19 +743,33 @@ then
 fi
 
 export FEED_V1_CARGO_TARGET_DIR="$RUST_TARGET"
-xcrun xcodebuild \
-   -project "$PROJECT" \
-   -scheme "$SCHEME" \
-   -configuration Release \
-   -destination "id=$XCODE_DEVICE_ID" \
-   -derivedDataPath "$DERIVED_DATA" \
-   -allowProvisioningUpdates \
-   -allowProvisioningDeviceRegistration \
-   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
-   CODE_SIGN_STYLE=Automatic \
-   CODE_SIGN_IDENTITY="Apple Development" \
-   build-for-testing 2>&1 | tee "$RAW_ROOT/build.log"
-if [[ ${PIPESTATUS[0]} -ne 0 ]]
+build_for_testing()
+{
+   local scheme="$1"
+   local log="$2"
+   xcrun xcodebuild \
+      -project "$PROJECT" \
+      -scheme "$scheme" \
+      -configuration Release \
+      -destination "id=$XCODE_DEVICE_ID" \
+      -derivedDataPath "$DERIVED_DATA" \
+      -allowProvisioningUpdates \
+      -allowProvisioningDeviceRegistration \
+      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
+      CODE_SIGN_STYLE=Automatic \
+      CODE_SIGN_IDENTITY="Apple Development" \
+      build-for-testing 2>&1 | tee "$log"
+   return "${PIPESTATUS[0]}"
+}
+
+if [[ "$MODE" == "full" ]]
+then
+   build_for_testing FeedV1PilotSmoke "$RAW_ROOT/build-smoke.log" \
+      && build_for_testing FeedV1Pilot "$RAW_ROOT/build-primary.log"
+else
+   build_for_testing "$SCHEME" "$RAW_ROOT/build.log"
+fi
+if [[ $? -ne 0 ]]
 then
    echo "arm64 device build failed" >&2
    exit 1
@@ -810,6 +827,120 @@ then
    exit 1
 fi
 
+verify_evidence_manifest_snapshot()
+{
+   local stage="$1"
+   local candidate="$BUILD_ROOT/evidence-manifest-$stage.json"
+   "$REDUCER" manifest \
+      "$FEED_ROOT" \
+      "$REPOSITORY_ROOT" \
+      "$UIKIT_APP" \
+      "$OXIDE_APP" \
+      "$CONTROLLER_RUNNER" \
+      "$CONTROLLER_XCTEST" \
+      "$BUILD_PROVENANCE" \
+      "$candidate" \
+      && cmp -s "$RAW_ROOT/evidence-manifest.json" "$candidate"
+}
+
+run_controller_test()
+{
+   local scheme="$1"
+   local result_bundle="$2"
+   local log="$3"
+   local execution_allowance="$4"
+   xcrun xcodebuild \
+      -project "$PROJECT" \
+      -scheme "$scheme" \
+      -configuration Release \
+      -destination "id=$XCODE_DEVICE_ID" \
+      -derivedDataPath "$DERIVED_DATA" \
+      -resultBundlePath "$result_bundle" \
+      -allowProvisioningUpdates \
+      -test-timeouts-enabled YES \
+      -maximum-test-execution-time-allowance "$execution_allowance" \
+      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
+      CODE_SIGN_STYLE=Automatic \
+      CODE_SIGN_IDENTITY="Apple Development" \
+      test-without-building 2>&1 | tee "$log"
+   return "${PIPESTATUS[0]}"
+}
+
+copy_documents()
+{
+   local bundle_id="$1"
+   local destination="$2"
+   local output="$3"
+   xcrun devicectl device copy from --device "$CORE_DEVICE_ID" \
+      --domain-type appDataContainer --domain-identifier "$bundle_id" \
+      --source Documents --destination "$destination" --quiet \
+      --json-output "$output"
+}
+
+move_result_bundle()
+{
+   local result_bundle="$1"
+   local name="$2"
+   local discarded="$BUILD_ROOT/$name.xcresult"
+   if [[ ! -d "$result_bundle" ]] || ! measure_tree "$result_bundle"
+   then
+      return 1
+   fi
+   if [[ "$TREE_BYTES" -gt "$MAX_RESULT_BUNDLE_BYTES" ]] \
+      || [[ "$RESULT_BUNDLE_BYTES" -gt $((MAX_RESULT_BUNDLE_BYTES - TREE_BYTES)) ]]
+   then
+      echo "XCTest result bundles exceeded their predeclared $MAX_RESULT_BUNDLE_BYTES-byte fuse" >&2
+      return 1
+   fi
+   RESULT_BUNDLE_BYTES=$((RESULT_BUNDLE_BYTES + TREE_BYTES))
+   mv -- "$result_bundle" "$discarded" \
+      && [[ ! -e "$result_bundle" && -d "$discarded" ]]
+}
+
+merge_app_documents()
+{
+   local source="$1"
+   local destination="$2"
+   local label="$3"
+   local path
+   local relative
+   local target
+   local invalid
+   local list="$BUILD_ROOT/merge-$label.list"
+   if [[ ! -d "$source" ]]
+   then
+      echo "$label primary Documents copy is missing" >&2
+      return 1
+   fi
+   invalid="$(find "$source" -mindepth 1 ! -type f ! -type d -print -quit)" || return 1
+   if [[ -n "$invalid" ]]
+   then
+      echo "$label primary Documents contain a symlink or nonregular entry: $invalid" >&2
+      return 1
+   fi
+   find "$source" -type f -print0 >"$list" || return 1
+   while IFS= read -r -d '' path
+   do
+      relative="${path#"$source"/}"
+      target="$destination/$relative"
+      if [[ -e "$target" ]] && ! cmp -s "$path" "$target"
+      then
+         echo "$label primary evidence conflicts with retained smoke evidence at $relative" >&2
+         return 1
+      fi
+   done <"$list"
+   while IFS= read -r -d '' path
+   do
+      relative="${path#"$source"/}"
+      target="$destination/$relative"
+      if [[ ! -e "$target" ]]
+      then
+         mkdir -p "$(dirname "$target")" || return 1
+         cp -p "$path" "$target" || return 1
+      fi
+   done <"$list"
+}
+
 if ! remove_device_processes preclean uikit FeedV1UIKit \
    || ! remove_device_processes preclean oxide FeedV1Oxide \
    || ! remove_controller_processes preclean \
@@ -838,79 +969,210 @@ then
    exit 1
 fi
 
-RESULT_BUNDLE="$RAW_ROOT/feed-v1-$MODE.xcresult"
-if [[ -e "$RESULT_BUNDLE" ]] \
-   || ! check_directory_bytes "$BUILD_ROOT" "external build root before launch" "$MAX_BUILD_ROOT_BYTES" \
+if ! check_directory_bytes "$BUILD_ROOT" "external build root before launch" "$MAX_BUILD_ROOT_BYTES" \
    || ! check_retained_evidence_fuses
 then
    exit 1
 fi
 PRELAUNCH_FUSES_ADMITTED=true
 TEST_STARTED="$(date +%s)"
-xcrun xcodebuild \
-   -project "$PROJECT" \
-   -scheme "$SCHEME" \
-   -configuration Release \
-   -destination "id=$XCODE_DEVICE_ID" \
-   -derivedDataPath "$DERIVED_DATA" \
-   -resultBundlePath "$RESULT_BUNDLE" \
-   -allowProvisioningUpdates \
-   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
-   CODE_SIGN_STYLE=Automatic \
-   CODE_SIGN_IDENTITY="Apple Development" \
-   test-without-building 2>&1 | tee "$RAW_ROOT/test.log"
-TEST_STATUS=${PIPESTATUS[0]}
-if [[ $TEST_STATUS -eq 0 ]]
+if [[ "$MODE" == "full" ]]
 then
-   TEST_SUCCEEDED=true
-fi
-TEST_ENDED="$(date +%s)"
-
-RESULT_BUNDLE_ADMITTED=false
-if [[ -d "$RESULT_BUNDLE" ]] && measure_tree "$RESULT_BUNDLE"
-then
-   RESULT_BUNDLE_BYTES="$TREE_BYTES"
-   if [[ "$RESULT_BUNDLE_BYTES" -le "$MAX_RESULT_BUNDLE_BYTES" ]]
+   SMOKE_RESULT_BUNDLE="$RAW_ROOT/feed-v1-smoke.xcresult"
+   run_controller_test FeedV1PilotSmoke "$SMOKE_RESULT_BUNDLE" "$RAW_ROOT/test-smoke.log" 1200
+   TEST_STATUS=$?
+   if [[ $TEST_STATUS -eq 0 ]]
    then
-      RESULT_BUNDLE_ADMITTED=true
-   else
-      echo "XCTest result bundle exceeded its predeclared $MAX_RESULT_BUNDLE_BYTES-byte fuse" >&2
+      SMOKE_TEST_SUCCEEDED=true
    fi
-fi
-if [[ "$RESULT_BUNDLE_ADMITTED" == "true" ]] \
-   && xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
-      >"$RAW_ROOT/attachment-export.log" 2>&1 \
-   && "$REDUCER" verify-attachments "$ATTACHMENT_ROOT" \
-      >>"$RAW_ROOT/attachment-export.log" 2>&1
-then
-   VERIFIED_ATTACHMENT_COUNT=$EXPECTED_ATTACHMENTS
-   DISCARDED_RESULT_BUNDLE="$BUILD_ROOT/feed-v1-$MODE.xcresult"
-   if mv -- "$RESULT_BUNDLE" "$DISCARDED_RESULT_BUNDLE" \
-      && [[ ! -e "$RESULT_BUNDLE" && -d "$DISCARDED_RESULT_BUNDLE" ]]
+   if [[ -d "$SMOKE_RESULT_BUNDLE" ]] \
+      && xcrun xcresulttool export attachments --path "$SMOKE_RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
+         >"$RAW_ROOT/attachment-export.log" 2>&1 \
+      && "$REDUCER" verify-attachments "$ATTACHMENT_ROOT" \
+         >>"$RAW_ROOT/attachment-export.log" 2>&1
+   then
+      VERIFIED_ATTACHMENT_COUNT=$EXPECTED_ATTACHMENTS
+   else
+      echo "smoke result-bundle attachment export or verification failed" >&2
+      TEST_STATUS=1
+   fi
+   SMOKE_RESULT_REMOVED=false
+   if move_result_bundle "$SMOKE_RESULT_BUNDLE" feed-v1-smoke
+   then
+      SMOKE_RESULT_REMOVED=true
+   else
+      echo "smoke result bundle could not be removed from retained evidence" >&2
+      TEST_STATUS=1
+   fi
+   SMOKE_EXPORT_OK=true
+   if ! copy_documents com.oxide.feed-v1.uikit "$RAW_ROOT/uikit-documents" "$RAW_ROOT/copy-smoke-uikit.json"
+   then
+      SMOKE_EXPORT_OK=false
+   fi
+   if ! copy_documents com.oxide.feed-v1.oxide "$RAW_ROOT/oxide-documents" "$RAW_ROOT/copy-smoke-oxide.json"
+   then
+      SMOKE_EXPORT_OK=false
+   fi
+   if ! copy_documents "$CONTROLLER_BUNDLE_ID" "$RAW_ROOT/controller-documents" "$RAW_ROOT/copy-smoke-controller.json"
+   then
+      SMOKE_EXPORT_OK=false
+   fi
+   if [[ -e "$RAW_ROOT/device-after-smoke.json" ]] \
+      || ! xcrun devicectl device info details --device "$CORE_DEVICE_ID" \
+         --json-output "$RAW_ROOT/device-after-smoke.json" --quiet
+   then
+      SMOKE_EXPORT_OK=false
+   fi
+   if [[ "$SMOKE_EXPORT_OK" != "true" ]]
+   then
+      echo "smoke evidence export failed" >&2
+      TEST_STATUS=1
+   fi
+   if [[ $TEST_STATUS -eq 0 ]]
+   then
+      if ! verify_evidence_manifest_snapshot before-primary
+      then
+         echo "build or source identity changed before primary admission" >&2
+         TEST_STATUS=1
+      elif ! "$REDUCER" admit-smoke-prefix "$RESULT_ROOT" >"$RAW_ROOT/smoke-admission.log" 2>&1
+      then
+         echo "smoke admission blocked; primary population will not start" >&2
+         TEST_STATUS=1
+      else
+         SMOKE_ADMITTED=true
+      fi
+   fi
+
+   PRIMARY_RESULT_REMOVED=false
+   if [[ $TEST_STATUS -eq 0 ]]
+   then
+      if ! require_unlocked_device "$RAW_ROOT/lock-before-primary.json"
+      then
+         TEST_STATUS=1
+      else
+         PRIMARY_RESULT_BUNDLE="$RAW_ROOT/feed-v1-primary.xcresult"
+         PRIMARY_ALLOWANCE=$((1200 - ($(date +%s) - TEST_STARTED)))
+         if [[ $PRIMARY_ALLOWANCE -le 0 ]]
+         then
+            echo "global 20-minute fuse expired before primary" >&2
+            TEST_STATUS=1
+         else
+            run_controller_test FeedV1Pilot "$PRIMARY_RESULT_BUNDLE" "$RAW_ROOT/test-primary.log" "$PRIMARY_ALLOWANCE"
+            TEST_STATUS=$?
+            if [[ $TEST_STATUS -eq 0 ]]
+            then
+               PRIMARY_TEST_SUCCEEDED=true
+            fi
+         fi
+         PRIMARY_ATTACHMENT_ROOT="$BUILD_ROOT/primary-attachments"
+         if [[ -d "$PRIMARY_RESULT_BUNDLE" ]] \
+            && mkdir -p "$PRIMARY_ATTACHMENT_ROOT" \
+            && xcrun xcresulttool export attachments --path "$PRIMARY_RESULT_BUNDLE" \
+               --output-path "$PRIMARY_ATTACHMENT_ROOT" >"$RAW_ROOT/primary-attachment-export.log" 2>&1 \
+            && "$REDUCER" verify-no-attachments "$PRIMARY_ATTACHMENT_ROOT" \
+               >>"$RAW_ROOT/primary-attachment-export.log" 2>&1
+         then
+            :
+         else
+            echo "primary result bundle did not prove an attachment-free population" >&2
+            TEST_STATUS=1
+         fi
+         if move_result_bundle "$PRIMARY_RESULT_BUNDLE" feed-v1-primary
+         then
+            PRIMARY_RESULT_REMOVED=true
+         else
+            echo "primary result bundle could not be removed from retained evidence" >&2
+            TEST_STATUS=1
+         fi
+
+         PRIMARY_DOCUMENTS="$BUILD_ROOT/primary-documents"
+         PRIMARY_EXPORT_OK=true
+         mkdir -p "$PRIMARY_DOCUMENTS" || PRIMARY_EXPORT_OK=false
+         if ! copy_documents com.oxide.feed-v1.uikit "$PRIMARY_DOCUMENTS/uikit" "$RAW_ROOT/copy-primary-uikit.json"
+         then
+            PRIMARY_EXPORT_OK=false
+         fi
+         if ! copy_documents com.oxide.feed-v1.oxide "$PRIMARY_DOCUMENTS/oxide" "$RAW_ROOT/copy-primary-oxide.json"
+         then
+            PRIMARY_EXPORT_OK=false
+         fi
+         if ! copy_documents "$CONTROLLER_BUNDLE_ID" "$PRIMARY_DOCUMENTS/controller" "$RAW_ROOT/copy-primary-controller.json"
+         then
+            PRIMARY_EXPORT_OK=false
+         fi
+         if ! merge_app_documents "$PRIMARY_DOCUMENTS/uikit" "$RAW_ROOT/uikit-documents" UIKit \
+            || ! merge_app_documents "$PRIMARY_DOCUMENTS/oxide" "$RAW_ROOT/oxide-documents" Oxide \
+            || ! merge_app_documents "$PRIMARY_DOCUMENTS/controller" "$RAW_ROOT/controller-documents" controller
+         then
+            PRIMARY_EXPORT_OK=false
+         fi
+         if [[ "$PRIMARY_EXPORT_OK" != "true" ]]
+         then
+            echo "primary evidence export or smoke/primary merge failed" >&2
+            TEST_STATUS=1
+         fi
+         if [[ ! -f "$RAW_ROOT/controller-documents/oxide-feed-v1-controller-runtime-primary.json" ]]
+         then
+            echo "primary controller runtime proof is missing" >&2
+            TEST_STATUS=1
+         fi
+      fi
+   fi
+   if [[ "$SMOKE_RESULT_REMOVED" == "true" && "$PRIMARY_RESULT_REMOVED" == "true" ]]
+   then
+      RESULT_BUNDLE_REMOVED=true
+   fi
+   if [[ "$SMOKE_TEST_SUCCEEDED" == "true" && "$PRIMARY_TEST_SUCCEEDED" == "true" ]]
+   then
+      TEST_SUCCEEDED=true
+   fi
+else
+   RESULT_BUNDLE="$RAW_ROOT/feed-v1-$MODE.xcresult"
+   run_controller_test "$SCHEME" "$RESULT_BUNDLE" "$RAW_ROOT/test.log" 1200
+   TEST_STATUS=$?
+   if [[ $TEST_STATUS -eq 0 ]]
+   then
+      TEST_SUCCEEDED=true
+   fi
+   if [[ -d "$RESULT_BUNDLE" ]] \
+      && xcrun xcresulttool export attachments --path "$RESULT_BUNDLE" --output-path "$ATTACHMENT_ROOT" \
+         >"$RAW_ROOT/attachment-export.log" 2>&1 \
+      && "$REDUCER" verify-attachments "$ATTACHMENT_ROOT" \
+         >>"$RAW_ROOT/attachment-export.log" 2>&1
+   then
+      VERIFIED_ATTACHMENT_COUNT=$EXPECTED_ATTACHMENTS
+   else
+      echo "result-bundle attachment export or verification failed" >&2
+      TEST_STATUS=1
+   fi
+   if move_result_bundle "$RESULT_BUNDLE" "feed-v1-$MODE"
    then
       RESULT_BUNDLE_REMOVED=true
    else
-      echo "verified result bundle could not be moved out of the retained root" >&2
+      echo "result bundle could not be removed from retained evidence" >&2
       TEST_STATUS=1
    fi
-else
-   echo "result-bundle attachment export or verification failed" >&2
+   if ! copy_documents com.oxide.feed-v1.uikit "$RAW_ROOT/uikit-documents" "$RAW_ROOT/copy-uikit.json" \
+      || ! copy_documents com.oxide.feed-v1.oxide "$RAW_ROOT/oxide-documents" "$RAW_ROOT/copy-oxide.json" \
+      || ! copy_documents "$CONTROLLER_BUNDLE_ID" "$RAW_ROOT/controller-documents" "$RAW_ROOT/copy-controller.json"
+   then
+      echo "$MODE evidence export failed" >&2
+      TEST_STATUS=1
+   fi
+fi
+TEST_ENDED="$(date +%s)"
+if ! verify_evidence_manifest_snapshot after-test
+then
+   echo "build or source identity changed during device testing" >&2
    TEST_STATUS=1
 fi
-
-xcrun devicectl device copy from --device "$CORE_DEVICE_ID" \
-   --domain-type appDataContainer --domain-identifier com.oxide.feed-v1.uikit \
-   --source Documents --destination "$RAW_ROOT/uikit-documents" --quiet \
-   --json-output "$RAW_ROOT/copy-uikit.json" || true
-xcrun devicectl device copy from --device "$CORE_DEVICE_ID" \
-   --domain-type appDataContainer --domain-identifier com.oxide.feed-v1.oxide \
-   --source Documents --destination "$RAW_ROOT/oxide-documents" --quiet \
-   --json-output "$RAW_ROOT/copy-oxide.json" || true
-xcrun devicectl device copy from --device "$CORE_DEVICE_ID" \
-   --domain-type appDataContainer --domain-identifier "$CONTROLLER_BUNDLE_ID" \
-   --source Documents --destination "$RAW_ROOT/controller-documents" --quiet \
-   --json-output "$RAW_ROOT/copy-controller.json" || true
-xcrun devicectl device info details --device "$CORE_DEVICE_ID" --json-output "$RAW_ROOT/device-after.json" --quiet || true
+if [[ -e "$RAW_ROOT/device-after.json" ]] \
+   || ! xcrun devicectl device info details --device "$CORE_DEVICE_ID" \
+      --json-output "$RAW_ROOT/device-after.json" --quiet
+then
+   echo "final physical-device endpoint capture failed or was not exclusive" >&2
+   TEST_STATUS=1
+fi
 
 if verify_source_snapshot "device test and evidence export"
 then

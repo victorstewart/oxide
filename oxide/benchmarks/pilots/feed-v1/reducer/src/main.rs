@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use oxide_feed_v1_reducer::{build_evidence_manifest, reduce, verify_attachment_export, verify_smoke, ReducePaths};
+use oxide_feed_v1_reducer::{admit_smoke_prefix, build_evidence_manifest, reduce, verify_attachment_export, verify_no_attachment_export, verify_smoke, ReducePaths};
 
 fn main() -> ExitCode
 {
@@ -58,13 +58,25 @@ fn run() -> Result<(), String>
          reject_extra(args)?;
          verify_attachment_export(&root)
       }
+      Some("verify-no-attachments") =>
+      {
+         let root = required_path(&mut args, "empty attachment root")?;
+         reject_extra(args)?;
+         verify_no_attachment_export(&root)
+      }
+      Some("admit-smoke-prefix") =>
+      {
+         let root = required_path(&mut args, "smoke-prefix result root")?;
+         reject_extra(args)?;
+         admit_smoke_prefix(&root)
+      }
       Some("verify-smoke") =>
       {
          let root = required_path(&mut args, "smoke result root")?;
          reject_extra(args)?;
          verify_smoke(&root)
       }
-      _ => Err("usage: oxide-feed-v1-reducer reduce <run-root> <latest.json> <latest.md> | manifest <source-root> <repository-root> <UIKit.app> <Oxide.app> <FeedV1Controller-Runner.app> <FeedV1Controller.xctest> <build-provenance.json> <output.json> | verify-attachments <root> | verify-smoke <run-root>".to_string()),
+      _ => Err("usage: oxide-feed-v1-reducer reduce <run-root> <latest.json> <latest.md> | manifest <source-root> <repository-root> <UIKit.app> <Oxide.app> <FeedV1Controller-Runner.app> <FeedV1Controller.xctest> <build-provenance.json> <output.json> | verify-attachments <root> | verify-no-attachments <root> | admit-smoke-prefix <run-root> | verify-smoke <run-root>".to_string()),
    }
 }
 

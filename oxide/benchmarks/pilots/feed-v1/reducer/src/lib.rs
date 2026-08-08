@@ -2068,30 +2068,46 @@ struct ControllerRuntimeProof
    oxide_runtime_seconds: f64,
 }
 
-fn validate_controller_runtime(proof: &ControllerRuntimeProof, population: Population) -> Result<(), String>
+fn validate_controller_runtimes(proofs: &[ControllerRuntimeProof], population: Population) -> Result<(), String>
 {
-   let expected_mode = if population == Population::Full { "full" } else { "smoke" };
-   let runtimes = [
-      proof.total_runtime_seconds,
-      proof.uikit_idiomatic_runtime_seconds,
-      proof.uikit_optimized_runtime_seconds,
-      proof.oxide_runtime_seconds,
-   ];
-   finite(&runtimes, "controller runtime proof")?;
-   let treatment_total = proof.uikit_idiomatic_runtime_seconds
-      + proof.uikit_optimized_runtime_seconds
-      + proof.oxide_runtime_seconds;
-   if proof.schema != "oxide.feed-v1.controller-runtime"
-      || proof.schema_revision != 1
-      || proof.mode != expected_mode
-      || runtimes.iter().any(|runtime| *runtime <= 0.0)
-      || proof.total_runtime_seconds > 20.0 * 60.0
-      || proof.uikit_idiomatic_runtime_seconds > 10.0 * 60.0
-      || proof.uikit_optimized_runtime_seconds > 10.0 * 60.0
-      || proof.oxide_runtime_seconds > 10.0 * 60.0
-      || treatment_total > proof.total_runtime_seconds + 1.0
+   let expected_modes: BTreeSet<&str> = match population
    {
-      return Err("controller runtime proof violates the frozen 20/10-minute limits".to_string());
+      Population::Smoke => ["smoke"].into_iter().collect(),
+      Population::Full => ["smoke", "primary"].into_iter().collect(),
+   };
+   let observed_modes: BTreeSet<&str> = proofs.iter().map(|proof| proof.mode.as_str()).collect();
+   if proofs.len() != expected_modes.len() || observed_modes != expected_modes
+   {
+      return Err("controller runtime proof population is missing, duplicated, or mislabeled".to_string());
+   }
+   let mut aggregate = [0.0; 4];
+   for proof in proofs
+   {
+      if proof.schema != "oxide.feed-v1.controller-runtime" || proof.schema_revision != 1
+      {
+         return Err("controller runtime proof schema identity mismatch".to_string());
+      }
+      let runtimes = [
+         proof.total_runtime_seconds,
+         proof.uikit_idiomatic_runtime_seconds,
+         proof.uikit_optimized_runtime_seconds,
+         proof.oxide_runtime_seconds,
+      ];
+      finite(&runtimes, "controller runtime proof")?;
+      let treatment_total = runtimes[1] + runtimes[2] + runtimes[3];
+      if runtimes.iter().any(|runtime| *runtime <= 0.0)
+         || treatment_total > proof.total_runtime_seconds + 1.0
+      {
+         return Err("controller runtime proof violates the frozen runtime accounting".to_string());
+      }
+      for index in 0 .. aggregate.len()
+      {
+         aggregate[index] += runtimes[index];
+      }
+   }
+   if aggregate[0] > 20.0 * 60.0 || aggregate[1 ..].iter().any(|runtime| *runtime > 10.0 * 60.0)
+   {
+      return Err("combined controller runtime proofs violate the frozen 20/10-minute limits".to_string());
    }
    Ok(())
 }
@@ -2163,11 +2179,11 @@ fn validate_lock_state(path: &Path, expected_identifier: &str) -> Result<(), Str
    Ok(())
 }
 
-fn admit_device(run_root: &Path) -> Result<DeviceSummary, String>
+fn admit_device(run_root: &Path, device_after_name: &str, require_full_chain: bool) -> Result<DeviceSummary, String>
 {
    let raw = run_root.join("raw");
    let before = parse_device_details(&raw.join("device-before.json"))?;
-   let after = parse_device_details(&raw.join("device-after.json"))?;
+   let after = parse_device_details(&raw.join(device_after_name))?;
    if before.identifier != "1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"
       || before.hardware_udid != "00008150-001529C434F8401C"
       || before.identifier != after.identifier
@@ -2178,6 +2194,17 @@ fn admit_device(run_root: &Path) -> Result<DeviceSummary, String>
    }
    validate_lock_state(&raw.join("lock-before-build.json"), &before.identifier)?;
    validate_lock_state(&raw.join("lock-before-test.json"), &before.identifier)?;
+   if require_full_chain
+   {
+      let smoke_after = parse_device_details(&raw.join("device-after-smoke.json"))?;
+      if before.identifier != smoke_after.identifier
+         || before.hardware_udid != smoke_after.hardware_udid
+         || before.summary != smoke_after.summary
+      {
+         return Err("physical device identity or OS changed across smoke admission".to_string());
+      }
+      validate_lock_state(&raw.join("lock-before-primary.json"), &before.identifier)?;
+   }
    Ok(before.summary)
 }
 
@@ -2288,7 +2315,7 @@ fn cleanup_admitted(proof: &CleanupProof) -> bool
       && proof.runtime_seconds <= 20.0 * 60.0
 }
 
-fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, String>
+fn evaluate(paths: &ReducePaths, population: Population, require_cleanup: bool, device_after_name: &str) -> Result<Report, String>
 {
    if !paths.run_root.is_dir()
    {
@@ -2311,7 +2338,7 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    let mut run_records = Vec::new();
    let mut failure_records = Vec::new();
    let mut blockers = Vec::new();
-   let attachment_exports = match attachment_export_map(&files)
+   let attachment_exports = match attachment_export_map(&files, ATTACHMENT_COUNT)
    {
       Ok(attachments) => attachments,
       Err(error) =>
@@ -2321,14 +2348,17 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       }
    };
    let mut cleanup: Option<CleanupProof> = None;
-   let mut controller_runtime: Option<ControllerRuntimeProof> = None;
+   let mut controller_runtimes = Vec::new();
    let mut evidence_manifest: Option<EvidenceManifest> = None;
    let mut evidence_manifest_path: Option<PathBuf> = None;
    let mut visual_gate_source_sha256: Option<String> = None;
    let mut repository_ref: Option<String> = None;
    let mut repository_head_commit: Option<String> = None;
    let mut repository_tree: Option<String> = None;
-   if let Err(error) = verify_attachment_export(&paths.run_root.join("raw/attachments"))
+   if let Err(error) = verify_attachment_export_count(
+      &paths.run_root.join("raw/attachments"),
+      ATTACHMENT_COUNT,
+   )
    {
       blockers.push(format!("attachment admission: {error}"));
    }
@@ -2344,7 +2374,11 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    {
       blockers.push(format!("retained reducer input contains a {largest_retained_file_bytes}-byte file, above {MAX_RETAINED_FILE_BYTES}"));
    }
-   let device = match admit_device(&paths.run_root)
+   let device = match admit_device(
+      &paths.run_root,
+      device_after_name,
+      population == Population::Full,
+   )
    {
       Ok(device) => Some(device),
       Err(error) =>
@@ -2426,20 +2460,17 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          {
             Ok(proof) =>
             {
-               let expected_name = "oxide-feed-v1-controller-runtime.json";
+               let expected_name = format!("oxide-feed-v1-controller-runtime-{}.json", proof.mode);
                let controller_documents = paths.run_root.join("raw/controller-documents");
                let canonical_documents = fs::canonicalize(&controller_documents);
                let canonical_path = fs::canonicalize(path);
-               if path.file_name().and_then(|name| name.to_str()) != Some(expected_name)
+               if path.file_name().and_then(|name| name.to_str()) != Some(expected_name.as_str())
                   || !matches!((canonical_documents, canonical_path),
                      (Ok(documents), Ok(path)) if path.starts_with(&documents))
                {
                   blockers.push(format!("controller runtime proof has a noncanonical source: {}", path.display()));
                }
-               if controller_runtime.replace(proof).is_some()
-               {
-                  blockers.push("multiple controller runtime proofs".to_string());
-               }
+               controller_runtimes.push(proof);
             }
             Err(error) => blockers.push(format!("strict controller runtime schema {}: {error}", path.display())),
          },
@@ -2516,16 +2547,9 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       ));
    }
 
-   match controller_runtime
+   if let Err(error) = validate_controller_runtimes(&controller_runtimes, population)
    {
-      Some(proof) =>
-      {
-         if let Err(error) = validate_controller_runtime(&proof, population)
-         {
-            blockers.push(error);
-         }
-      }
-      None => blockers.push("missing controller runtime proof".to_string()),
+      blockers.push(error);
    }
 
    let mut nonces = BTreeSet::new();
@@ -2732,9 +2756,9 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       }
    }
 
-   let cleanup = match cleanup
+   let cleanup = match (cleanup, require_cleanup)
    {
-      Some(proof) =>
+      (Some(proof), _) =>
       {
          let admitted = cleanup_admitted(&proof);
          if !admitted
@@ -2743,11 +2767,12 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          }
          CleanupEvidence { admitted, proof: Some(proof) }
       }
-      None =>
+      (None, true) =>
       {
          blockers.push("missing cleanup proof".to_string());
          CleanupEvidence { admitted: false, proof: None }
       }
+      (None, false) => CleanupEvidence { admitted: false, proof: None },
    };
 
    if let (Some(device), Some(manifest)) = (&device, &evidence_manifest)
@@ -2900,7 +2925,7 @@ fn relative_path_string(root: &Path, path: &Path) -> Result<String, String>
 
 pub fn reduce(paths: &ReducePaths) -> Result<(), String>
 {
-   let report = evaluate(paths, Population::Full)?;
+   let report = evaluate(paths, Population::Full, true, "device-after.json")?;
    if output_excluded_raw_evidence_files(paths)? != report.evidence_inventory
    {
       return Err("raw evidence changed during publication reduction".to_string());
@@ -2915,7 +2940,7 @@ pub fn verify_smoke(run_root: &Path) -> Result<(), String>
       output_json: run_root.join("unused-smoke-report.json"),
       output_markdown: run_root.join("unused-smoke-report.md"),
    };
-   let report = evaluate(&paths, Population::Smoke)?;
+   let report = evaluate(&paths, Population::Smoke, true, "device-after.json")?;
    if report.blockers.is_empty()
    {
       Ok(())
@@ -2923,6 +2948,24 @@ pub fn verify_smoke(run_root: &Path) -> Result<(), String>
    else
    {
       Err(format!("smoke verification blocked:\n{}", report.blockers.join("\n")))
+   }
+}
+
+pub fn admit_smoke_prefix(run_root: &Path) -> Result<(), String>
+{
+   let paths = ReducePaths {
+      run_root: run_root.to_path_buf(),
+      output_json: run_root.join("unused-smoke-admission.json"),
+      output_markdown: run_root.join("unused-smoke-admission.md"),
+   };
+   let report = evaluate(&paths, Population::Smoke, false, "device-after-smoke.json")?;
+   if report.blockers.is_empty()
+   {
+      Ok(())
+   }
+   else
+   {
+      Err(format!("smoke-prefix admission blocked: {}", report.blockers.join("; ")))
    }
 }
 
@@ -3137,6 +3180,16 @@ fn render_markdown(report: &Report, canonical_json_path: &str, canonical_json_sh
 
 pub fn verify_attachment_export(root: &Path) -> Result<(), String>
 {
+   verify_attachment_export_count(root, ATTACHMENT_COUNT)
+}
+
+pub fn verify_no_attachment_export(root: &Path) -> Result<(), String>
+{
+   verify_attachment_export_count(root, 0)
+}
+
+fn verify_attachment_export_count(root: &Path, expected_attachment_count: usize) -> Result<(), String>
+{
    if !root.is_dir()
    {
       return Err(format!("attachment export {} is not a directory", root.display()));
@@ -3149,20 +3202,20 @@ pub fn verify_attachment_export(root: &Path) -> Result<(), String>
    {
       return Err(format!("attachment export has {manifest_count} manifests, expected 1"));
    }
-   let attachments = attachment_export_map(&files)?;
-   if attachments.len() != ATTACHMENT_COUNT
+   let attachments = attachment_export_map(&files, expected_attachment_count)?;
+   if attachments.len() != expected_attachment_count
    {
       return Err(format!(
-         "attachment export has {} referenced files, expected {ATTACHMENT_COUNT}",
+         "attachment export has {} referenced files, expected {expected_attachment_count}",
          attachments.len()
       ));
    }
-   if files.len() != ATTACHMENT_COUNT + 1
+   if files.len() != expected_attachment_count + 1
    {
       return Err(format!(
          "attachment export has {} total files, expected {} referenced files plus one manifest",
          files.len(),
-         ATTACHMENT_COUNT
+         expected_attachment_count
       ));
    }
    let canonical_root = fs::canonicalize(root)
@@ -3458,7 +3511,7 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>, String>
    Ok(files)
 }
 
-fn attachment_export_map(files: &[PathBuf]) -> Result<BTreeMap<String, PathBuf>, String>
+fn attachment_export_map(files: &[PathBuf], expected_attachment_count: usize) -> Result<BTreeMap<String, PathBuf>, String>
 {
    let mut output = BTreeMap::new();
    let mut exported_paths = BTreeSet::new();
@@ -3491,10 +3544,10 @@ fn attachment_export_map(files: &[PathBuf]) -> Result<BTreeMap<String, PathBuf>,
       }
       let attachments = detail.get("attachments").and_then(serde_json::Value::as_array)
          .ok_or_else(|| format!("attachment manifest {} has no attachment array", manifest.display()))?;
-      if attachments.len() != ATTACHMENT_COUNT
+      if attachments.len() != expected_attachment_count
       {
          return Err(format!(
-            "attachment manifest {} has {} attachments, expected {ATTACHMENT_COUNT}",
+            "attachment manifest {} has {} attachments, expected {expected_attachment_count}",
             manifest.display(),
             attachments.len()
          ));

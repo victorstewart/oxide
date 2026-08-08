@@ -3,10 +3,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use oxide_feed_v1_reducer::{
-   callback_deadline_counts, exact_median_confidence_interval, frozen_components,
-   frozen_order_index, nearest_rank_quantile, reduce, strict_validate_failure_json,
-   strict_validate_run_json, travel_equivalence_passes, verify_attachment_export,
-   verify_smoke, visual_metrics, ReducePaths, RgbaImage,
+   admit_smoke_prefix, callback_deadline_counts, exact_median_confidence_interval,
+   frozen_components, frozen_order_index, nearest_rank_quantile, reduce,
+   strict_validate_failure_json, strict_validate_run_json, travel_equivalence_passes,
+   verify_attachment_export, verify_no_attachment_export, verify_smoke, visual_metrics,
+   ReducePaths, RgbaImage,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -311,9 +312,11 @@ fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
    let detail_bytes = serde_json::to_vec(&details).map_err(|error| error.to_string())?;
    let lock_bytes = serde_json::to_vec(&lock).map_err(|error| error.to_string())?;
    fs::write(raw.join("device-before.json"), &detail_bytes).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-after-smoke.json"), &detail_bytes).map_err(|error| error.to_string())?;
    fs::write(raw.join("device-after.json"), &detail_bytes).map_err(|error| error.to_string())?;
    fs::write(raw.join("lock-before-build.json"), &lock_bytes).map_err(|error| error.to_string())?;
    fs::write(raw.join("lock-before-test.json"), &lock_bytes).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-primary.json"), &lock_bytes).map_err(|error| error.to_string())?;
    let paths = ReducePaths {
       run_root: root.clone(),
       output_json: root.join("latest.json"),
@@ -329,6 +332,35 @@ fn reducer_emits_only_admitted_nonsecret_device_identity() -> Result<(), String>
    let public_device = serde_json::to_string(&report["device"]).map_err(|error| error.to_string())?;
    assert!(!public_device.contains("1DEDF2A3-EC8E-5FCC-A437-8BD3A6F3D659"));
    assert!(!public_device.contains("00008150-001529C434F8401C"));
+
+   let mut changed_device = details.clone();
+   changed_device["result"]["deviceProperties"]["osBuildUpdate"] = json!("changed");
+   fs::write(
+      raw.join("device-after-smoke.json"),
+      serde_json::to_vec(&changed_device).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert!(report["device"].is_null());
+   assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
+      blocker.as_str().is_some_and(|text| text.contains("device identity or OS changed across smoke admission"))
+   })));
+
+   fs::write(raw.join("device-after-smoke.json"), &detail_bytes).map_err(|error| error.to_string())?;
+   let mut locked = lock.clone();
+   locked["result"]["passcodeRequired"] = json!(true);
+   fs::write(
+      raw.join("lock-before-primary.json"),
+      serde_json::to_vec(&locked).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   reduce(&paths)?;
+   let report: Value = serde_json::from_slice(&fs::read(&paths.output_json).map_err(|error| error.to_string())?)
+      .map_err(|error| error.to_string())?;
+   assert!(report["device"].is_null());
+   assert!(report["blockers"].as_array().is_some_and(|blockers| blockers.iter().any(|blocker| {
+      blocker.as_str().is_some_and(|text| text.contains("admitted device was unlocked"))
+   })));
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;
    Ok(())
 }
@@ -415,6 +447,25 @@ fn attachment_export_verifier_requires_one_complete_manifest() -> Result<(), Str
    ).map_err(|error| error.to_string())?;
    assert!(verify_attachment_export(&root).unwrap_err().contains("leaves the export root"));
    fs::remove_file(escape).map_err(|error| error.to_string())?;
+   fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+   Ok(())
+}
+
+#[test]
+fn zero_attachment_export_verifier_requires_one_empty_manifest() -> Result<(), String>
+{
+   let root = temporary_root("empty-attachment-export")?;
+   fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+   fs::write(
+      root.join("manifest.json"),
+      serde_json::to_vec(&json!([{
+         "testIdentifier": "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()",
+         "attachments": []
+      }])).map_err(|error| error.to_string())?,
+   ).map_err(|error| error.to_string())?;
+   verify_no_attachment_export(&root)?;
+   fs::write(root.join("unexpected.png"), b"not empty").map_err(|error| error.to_string())?;
+   assert!(verify_no_attachment_export(&root).unwrap_err().contains("total files"));
    fs::remove_dir_all(root).map_err(|error| error.to_string())?;
    Ok(())
 }
@@ -561,6 +612,11 @@ fn six_valid_smoke_tuples_pass_smoke_but_not_full_publication() -> Result<(), St
    let root = temporary_root("valid-smoke")?;
    write_valid_smoke_root(&root)?;
    verify_attachment_export(&root.join("raw/attachments"))?;
+   let cleanup_path = root.join("raw/cleanup.json");
+   let cleanup = fs::read(&cleanup_path).map_err(|error| error.to_string())?;
+   fs::remove_file(&cleanup_path).map_err(|error| error.to_string())?;
+   admit_smoke_prefix(&root)?;
+   fs::write(&cleanup_path, cleanup).map_err(|error| error.to_string())?;
    verify_smoke(&root)?;
    rewrite_travel(
       &root.join("raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o1-uikit-optimized-forward-test.json"),
@@ -694,7 +750,7 @@ fn smoke_rejects_cleanup_and_artifact_provenance_mutations() -> Result<(), Strin
    assert!(verify_smoke(&root).unwrap_err().contains("cleanup/runtime/cap proof failed"));
    fs::write(&cleanup_path, &cleanup_bytes).map_err(|error| error.to_string())?;
 
-   let runtime_path = raw.join("controller-documents/oxide-feed-v1-controller-runtime.json");
+   let runtime_path = raw.join("controller-documents/oxide-feed-v1-controller-runtime-smoke.json");
    let runtime_bytes = fs::read(&runtime_path).map_err(|error| error.to_string())?;
    let mut runtime: Value = serde_json::from_slice(&runtime_bytes).map_err(|error| error.to_string())?;
    runtime["total_runtime_seconds"] = json!(602.0);
@@ -994,7 +1050,7 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
       "schema": "oxide.feed-v1.cleanup",
       "schema_revision": 3,
       "test_succeeded": true,
-      "verified_attachment_count": 6,
+      "verified_attachment_count": 12,
       "apps_uninstalled": true,
       "controller_uninstalled": true,
       "uikit_process_absent": true,
@@ -1019,18 +1075,25 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
       "largest_retained_file_bytes": 10485760,
       "runtime_seconds": 1.0
    })).map_err(|error| error.to_string())?).map_err(|error| error.to_string())?;
-   fs::write(
-      raw.join("controller-documents/oxide-feed-v1-controller-runtime.json"),
-      serde_json::to_vec(&json!({
-         "schema": "oxide.feed-v1.controller-runtime",
-         "schema_revision": 1,
-         "mode": if full { "full" } else { "smoke" },
-         "total_runtime_seconds": 0.2,
-         "uikit_idiomatic_runtime_seconds": 0.05,
-         "uikit_optimized_runtime_seconds": 0.05,
-         "oxide_runtime_seconds": 0.05
-      })).map_err(|error| error.to_string())?,
-   ).map_err(|error| error.to_string())?;
+   let write_runtime = |mode: &str| -> Result<(), String> {
+      fs::write(
+         raw.join(format!("controller-documents/oxide-feed-v1-controller-runtime-{mode}.json")),
+         serde_json::to_vec(&json!({
+            "schema": "oxide.feed-v1.controller-runtime",
+            "schema_revision": 1,
+            "mode": mode,
+            "total_runtime_seconds": 0.2,
+            "uikit_idiomatic_runtime_seconds": 0.05,
+            "uikit_optimized_runtime_seconds": 0.05,
+            "oxide_runtime_seconds": 0.05
+         })).map_err(|error| error.to_string())?,
+      ).map_err(|error| error.to_string())
+   };
+   write_runtime("smoke")?;
+   if full
+   {
+      write_runtime("primary")?;
+   }
 
    let top_png = smoke_png("top")?;
    let bottom_png = smoke_png("bottom")?;
@@ -1136,9 +1199,11 @@ fn write_smoke_device_evidence(raw: &Path) -> Result<(), String>
    let details = serde_json::to_vec(&details).map_err(|error| error.to_string())?;
    let lock = serde_json::to_vec(&lock).map_err(|error| error.to_string())?;
    fs::write(raw.join("device-before.json"), &details).map_err(|error| error.to_string())?;
+   fs::write(raw.join("device-after-smoke.json"), &details).map_err(|error| error.to_string())?;
    fs::write(raw.join("device-after.json"), &details).map_err(|error| error.to_string())?;
    fs::write(raw.join("lock-before-build.json"), &lock).map_err(|error| error.to_string())?;
    fs::write(raw.join("lock-before-test.json"), &lock).map_err(|error| error.to_string())?;
+   fs::write(raw.join("lock-before-primary.json"), &lock).map_err(|error| error.to_string())?;
    Ok(())
 }
 
