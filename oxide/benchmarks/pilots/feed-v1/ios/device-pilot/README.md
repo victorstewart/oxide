@@ -12,12 +12,14 @@ UI-test controller from `project.yml`:
 
 There is one visible feed screen in each app. App readiness and completion use
 nonce-scoped Darwin notifications. Raw run JSON stays app-owned until the host
-runner retrieves each app's `Documents` directory. Each of the six smoke
-treatment/direction tuples attaches one full-screen PNG named
-`feed-v1-<nonce>.png`; there is no capture JSON or repeat image. The 54 primary
-tuples produce app records but no screenshots. The retained evidence package
-contains exactly those six smoke PNGs, not the `.xcresult` or reducer
-executable.
+runner retrieves each app's `Documents` directory. Each of the six publication
+smoke treatment/direction tuples attaches two immediate normalized full-screen
+PNGs named `feed-v1-<nonce>-admission.png` and
+`feed-v1-<nonce>-repeat.png`. Both independently pass the frozen visual gate,
+and their normalized surface crops must be byte-identical. The 54 primary
+tuples produce app records and prove an attachment-free XCTest export. The
+retained publication evidence therefore contains exactly 12 smoke PNGs, not
+the `.xcresult` or reducer executable.
 
 `FeedV1Pilot.xcodeproj` is generated output and is not checked in. To generate
 the arm64-only project outside the source tree for inspection:
@@ -74,21 +76,38 @@ both Xcode phases; it does not bake a developer identity into the project. It
 rejects a translated host process, any non-arm64 resolved architecture, a
 foreign signing team, or a non-development authority before device launch.
 
-The default `smoke` mode strictly verifies the six frozen treatment/direction
-tuples and produces no timing classification, cross-treatment travel claim, or
-publication report. Passing `full` runs those six diagnostics plus exactly one
-54-run primary block: nine paired clusters, each containing three treatments in
-both directions. Only that replicated population may admit travel equivalence
-and write `latest.json` and `latest.md`. Their travel-equivalence array/table
-persists all four admission decisions, and their run table contains the 54
-primary timing rows; the six smoke run records remain diagnostic evidence.
-Cleanup proof records actual Xcode test success and the exact six
-verified smoke PNGs in either mode; a merely present result bundle cannot
-authorize a report. The controller also writes one app-container runtime proof.
-The reducer enforces the 20-minute total and each 10-minute per-treatment limit
-from that record, while the runner independently fails an overlong Xcode phase.
-After evidence export, the runner rechecks the clean named ref/commit/tree before
-reduction.
+The default `smoke` mode strictly verifies the six frozen publication
+treatment/direction tuples and their 12 captures, but produces no timing
+classification, cross-treatment travel claim, or publication report. Passing
+`full` first runs and admits that exact smoke population. Only then does a
+separate controller phase run one 54-launch primary block: nine paired clusters,
+each containing three treatments in both directions and no screenshots. The
+full population is therefore exactly 60 launches. Only its replicated primary
+population may admit travel equivalence and write `latest.json` and `latest.md`.
+Those outputs persist all four travel-equivalence decisions. Canonical JSON
+contains the 54 primary timing rows; compact Markdown contains aggregate
+summaries only. The six smoke run records remain admission evidence. A smoke
+blocker stops before the primary phase without replacement.
+
+Cleanup proof records actual Xcode test success and the verified 12-attachment
+smoke count. The primary phase separately proves zero attachments. A merely
+present result bundle cannot authorize a report. Publication writes
+`oxide-feed-v1-controller-runtime-smoke.json`; full mode additionally writes
+`oxide-feed-v1-controller-runtime-primary.json`. The reducer sums the two
+proofs' runtimes before enforcing the 20-minute total and each 10-minute
+treatment limit. `raw/runner.json`
+records the requested mode, completed or blocked status, first failure, smoke
+admission result, and phase outcomes so a blocked primary cannot erase valid
+smoke admission. The runner independently fails an overlong Xcode phase and
+rechecks the clean named ref/commit/tree after evidence export.
+
+Controller-runtime schema revision 2 requires `session_environments` on every
+publication runtime proof. Smoke records use an empty array. The primary proof
+uses exactly three ordered session entries for
+indices 0, 1, and 2, sampled before and after each session's 18 launches. Each
+endpoint must report nominal thermal state, Low Power Mode off, maximum refresh
+exactly 120 Hz, and configured minimum, maximum, and preferred refresh exactly
+120 Hz; both transition counts must be zero.
 
 The pre-reduction cleanup proof states only facts already observed, including
 that the reducer executable is absent from the retained result root. The runner

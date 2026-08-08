@@ -182,17 +182,21 @@ mismatch, and any complete record with fewer than two display-link samples.
 The six-run smoke command applies these gates plus screenshot, visual, device,
 travel, environment, and cleanup admission, but writes no report and computes
 no timing classification. Only the exact 60-record evidence population—six
-smoke diagnostics plus the 54-run primary block—can produce `latest.json` and
-`latest.md`; their timing rows come only from the 54 primary records.
+smoke launches plus the 54-run primary block—with the fixed current optimized
+UIKit configuration can produce `latest.json` and `latest.md`.
 
 ## Smoke screenshot attachment
 
-The controller attaches exactly one PNG named `feed-v1-<nonce>.png` for each of
-the six smoke treatment/direction tuples. Primary tuples produce only their
-app-owned run records. There is no controller capture JSON, second image, or
-repeat gate. Because one full run uses the same immutable manifest-hashed app
-bundles for its smoke and primary populations, the six smoke visuals authorize
-or block the 54 primary timing rows.
+For each of the six publication smoke treatment/direction tuples, the controller
+attaches two immediate normalized PNGs named
+`feed-v1-<nonce>-admission.png` and `feed-v1-<nonce>-repeat.png`. Each image
+independently passes the frozen visual gate, and the two normalized surface
+crops must be byte-identical. Primary tuples produce only their app-owned run
+records and an attachment manifest proving zero screenshots. There is no
+controller capture JSON. Because one run uses the same immutable manifest-
+hashed app bundles for its smoke and primary populations, the six admitted
+publication tuples and their 12 captures authorize or block its primary timing
+rows.
 
 Every smoke PNG must decode as the complete portrait `1320 x 2868` physical-
 pixel XCUIScreen capture. The reducer rejects an already-cropped surface image,
@@ -204,14 +208,16 @@ Xcode 26 decorates each suggested name with a terminal `_0_<UUID>` during
 attachment export. The reducer accepts only that exact UUID-shaped decoration
 or the undecorated name, removes the decoration, and then requires the exported
 XCTest manifest to contain exactly one detail for
-`FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()` and map the six
-canonical nonce-derived PNG names to six distinct canonical files. Canonical
-path aliases and, on the Unix device-runner host, hard-link file-identity aliases
-are rejected along with fallback lookup, unrelated attachments, or an
-unmanifested authority record. Both smoke and full modes therefore retain
-exactly six attachments. Each successful app record must use the exact
-`oxide-feed-v1-<nonce>.json` basename beneath the retrieved UIKit documents tree
-for either UIKit treatment or the retrieved Oxide documents tree for Oxide.
+`FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()`. A publication smoke
+export maps the 12 canonical nonce/capture-derived PNG names to 12 distinct
+canonical files; a primary export maps no attachments. Canonical path aliases
+and, on the Unix device-runner host, hard-link file-identity aliases are
+rejected along with fallback lookup, unrelated attachments, or an unmanifested
+authority record. Publication `smoke` and `full` therefore retain exactly 12
+attachments, and primary retains none. Each successful app record must use the
+exact `oxide-feed-v1-<nonce>.json` basename beneath the retrieved UIKit
+documents tree for either UIKit treatment or the retrieved Oxide documents tree
+for Oxide.
 
 ## Evidence and cleanup records
 
@@ -229,8 +235,8 @@ settings hash, Cargo lock and resolved production metadata hashes, and the
 Authority/team/CDHash identity of both apps plus both controller products.
 `project.yml` is the Xcode source definition;
 the externally generated `FeedV1Pilot.xcodeproj` is neither checked in nor
-admitted as source evidence. The report identifies both the frozen visual-gate
-specification and the actual `reducer/src/lib.rs` source hash from this manifest.
+admitted as source evidence. Publication identifies the frozen visual-gate
+specification and actual `reducer/src/lib.rs` source hash from this manifest.
 
 Exactly one `oxide.feed-v1.cleanup` revision 3 may appear, at
 `raw/cleanup.json`, and is written only after process/app cleanup and external
@@ -245,33 +251,79 @@ build-root removal. It contains `test_succeeded`,
 `runtime_seconds`.
 `raw_evidence_bytes` is the allocated size of `raw/` immediately before the
 cleanup proof and reports are written; it is not presented as final-package
-size. Publication requires Xcode success, the exact six-PNG smoke population,
-and every cleanup boolean to be true. The frozen caps are 4 GiB for the external
+size. Publication requires Xcode success, the exact 12-PNG smoke population,
+and every cleanup boolean to be true. The primary XCTest phase separately
+proves an empty attachment export. The frozen caps are 4 GiB for the external
 build root, 512 MiB for the result bundle and retained evidence, 512 retained
-files, and 128 MiB for any retained file. The reducer independently proves that no
-reducer executable exists inside the result root and rejects an actual retained
-`.xcresult` or `tools` directory. It also totals every retained input file
-instead of trusting the claimed raw size. After reduction, the runner removes
-the external temporary reducer and exits unsuccessfully if that final cleanup
-fails; the report does not claim that a post-reduction action has already
-happened. The runner separately measures the completed package after both
-reports are written. More than 512 MiB at either boundary, more than 20 minutes
-of device-test runtime, a missing record, or an unknown field blocks
+files, and 128 MiB for any retained file. The reducer independently proves that
+no reducer executable exists inside the result root and rejects an actual
+retained `.xcresult` or `tools` directory. It also totals every retained input
+file instead of trusting the claimed raw size. After reduction, the runner
+removes the external temporary reducer and exits unsuccessfully if that final
+cleanup fails; the report does not claim that a post-reduction action has
+already happened. The runner separately measures the completed package after
+both reports are written. More than 512 MiB at either boundary, more than 20
+minutes of device-test runtime, a missing record, or an unknown field blocks
 publication.
 
-The controller atomically writes exactly one
-`oxide.feed-v1.controller-runtime` revision 1 record named
-`oxide-feed-v1-controller-runtime.json` in its app container. The runner
-retrieves it beneath `raw/controller-documents`. It contains `mode`,
-`total_runtime_seconds`, and separate
-`uikit_idiomatic_runtime_seconds`, `uikit_optimized_runtime_seconds`, and
-`oxide_runtime_seconds`. Full mode resets the treatment accumulators after the
-smoke prefix, so the three treatment limits describe the primary population.
-The reducer independently requires total runtime at most 20 minutes and every
-treatment at most 10 minutes; Xcode test success remains separately mandatory.
-After export, the runner also rechecks that the named Git ref, commit, tree, and
-clean worktree still match the pre-build snapshot and persists that result in
-the cleanup proof.
+The controller atomically writes one `oxide.feed-v1.controller-runtime`
+revision 2 record per publication phase in
+its app container. Smoke writes
+`oxide-feed-v1-controller-runtime-smoke.json`; primary writes
+`oxide-feed-v1-controller-runtime-primary.json`. The runner retrieves them
+beneath `raw/controller-documents`. Each contains `mode`, total runtime,
+separate per-treatment runtimes, and `session_environments`.
+Standalone smoke requires only the smoke proof and an empty environment array.
+Full publication requires exactly one smoke and one primary proof. The primary
+proof contains exactly three environment entries, ordered by `session_index`
+`0`, `1`, and `2`. Each entry has this exact shape:
+
+```json
+{
+  "session_index": 0,
+  "before": {
+    "thermal_state": "nominal",
+    "low_power_mode": false,
+    "maximum_frames_per_second": 120,
+    "configured_frame_rate": {
+      "minimum": 120.0,
+      "maximum": 120.0,
+      "preferred": 120.0
+    }
+  },
+  "after": {
+    "thermal_state": "nominal",
+    "low_power_mode": false,
+    "maximum_frames_per_second": 120,
+    "configured_frame_rate": {
+      "minimum": 120.0,
+      "maximum": 120.0,
+      "preferred": 120.0
+    }
+  },
+  "thermal_state_change_count": 0,
+  "low_power_mode_change_count": 0
+}
+```
+
+The controller samples `before` immediately before each primary session's 18
+launches and `after` immediately after them. Both endpoints must have thermal
+state `nominal`, Low Power Mode disabled, `maximum_frames_per_second` exactly
+`120`, and configured minimum, maximum, and preferred frame rates exactly
+`120`. Both transition counts must be zero. Missing, duplicated, misordered, or
+foreign session indices block publication. Mode-specific filenames, identical
+smoke/primary publication provenance, and the combined 20-minute total and
+10-minute per-treatment runtime limits remain unchanged.
+
+Exactly one `oxide.feed-v1.runner` revision 1 record appears at
+`raw/runner.json`. It records `mode`, `status`, `first_failure_stage`,
+`first_failure_reason`, `smoke_admitted`, and ordered phase outcomes. Full mode
+requires smoke and primary phase entries and records whether smoke admission
+succeeded before primary began. Smoke mode sets `smoke_admitted` to `null`. A
+`blocked` status preserves the first precise failure stage/reason instead of
+fabricating Xcode failure or timing rows. After export, the runner also
+rechecks that the named Git ref, commit, tree, and clean worktree still match
+the pre-build snapshot and persists that result in the cleanup proof.
 
 The report requires matching `device-before.json` and `device-after.json`
 records for one booted physical arm64 iPhone plus unlocked lock-state records
@@ -279,18 +331,18 @@ before build and immediately before the test. It emits only marketing model,
 product type, OS version/build, and CPU; device identifiers remain raw evidence
 and are not copied into the publication summary.
 
-A complete revision-4 full report contains a deterministic
+A complete revision-5 full report contains a deterministic
 `travel_equivalence` array and matching compact Markdown table for the four
 treatment/direction comparisons. Each result persists its pair count, median
 relative delta, exact interval method, requested and achieved coverage,
 one-based rank bounds, numeric bounds, both frozen margins, and pass/fail
 decision. The two pacing comparisons persist the same interval metadata.
-Historical revision-3 bootstrap reports remain historical evidence and are not
-rewritten as revision 4. The revision-4 deterministic `runs` array and matching
-dense Markdown table contain the 54 primary gestures. Each row preserves the
-run identity, duration, inertia/travel evidence, both environment-transition
-counts, callback count/cadence,
-p50/p95/p99/peak, missed/expected counts and ratio, hitch excess, and
-target-period admission ratio. Blocked and smoke evaluations expose no timing
-rows. Exact report output paths are excluded from discovery so a second full
-reduction is byte-identical to the first.
+Historical earlier revisions remain historical evidence and are not rewritten.
+The revision-5 deterministic `runs` array contains the 54 primary gestures.
+Each row preserves the run identity, duration, inertia/travel evidence, both
+environment-transition counts, callback count/cadence, p50/p95/p99/peak,
+missed/expected counts and ratio, hitch excess, and target-period admission
+ratio. Compact Markdown contains aggregate summaries rather than duplicating
+the run table. Blocked and smoke evaluations expose no timing rows. Exact report
+output paths are excluded from discovery so a second full reduction is
+byte-identical to the first.

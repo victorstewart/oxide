@@ -46,7 +46,7 @@ Persistence validates the nonce before deriving any path or notification. It cre
 
 ## Preconditions and postconditions
 
-- Nonces are 1 through 128 ASCII alphanumeric, hyphen, underscore, or dot characters. Path separators, whitespace, control characters, and empty strings are rejected.
+- Nonces are 1 through 128 ASCII alphanumeric-or-hyphen bytes. Underscore, dot, path separators, whitespace, control characters, and empty strings are rejected.
 - iOS callers run device/environment queries on the linked production host's app thread.
 - A success record has an admitted fixture, actual ready geometry, a positive configured frame-rate range, at least two callback samples, direct Rust-owned inertia observation, and zero-or-greater environment transition deltas.
 - `write_record_json` emits `thermal_state_change_count` and `low_power_mode_change_count` even when either is zero.
@@ -100,6 +100,7 @@ assert!(!nonce_is_valid("../escape"));
 
 ## Changelog
 
+- 2026-08-07: Corrected the documented nonce grammar to match the shared alphanumeric-or-hyphen validator.
 - 2026-08-06: Narrowed completion identity to the shared 1-through-128-byte ASCII alphanumeric-or-hyphen grammar.
 - 2026-08-06: Added required direct inertia observation and ready-to-completion thermal/low-power change counts.
 - 2026-08-06: Moved schema coverage to mapped public-API integration tests.

@@ -43,14 +43,16 @@ emits the controller schema shape
 `{id,kind,row_index,content_rect_px:{x,y,width,height},viewport_clip_px:{x,y,width,height}}`
 for a frozen or observed offset.
 
-The host canvas is exactly `440 x 956 pt` at `3x`. XCTest supplies one full
-`1320 x 2868` physical-pixel screen PNG for each smoke tuple. The reducer then
-crops the `390 x 844 pt` feed surface at the frozen integer origin `(25, 56)`,
-yielding `(75, 168) + 1170 x 2532` physical pixels. Already-cropped PNG input is
-rejected. The feed surface has zero safe-area inset. Both app targets require
-full-screen portrait presentation and hide the status bar. The home-indicator
-region lies below the frozen crop, whose vertical extent is `y = 56 .. 900 pt`,
-so it is neither benchmark content nor a reason to fork the production host.
+The host canvas is exactly `440 x 956 pt` at `3x`. For each of the six
+publication smoke tuples, XCTest takes two immediate normalized full-screen
+`1320 x 2868` physical-pixel PNGs: an admission image and a repeatability image.
+Every primary tuple retains none. The reducer crops each image to the
+`390 x 844 pt` feed surface at the frozen integer origin `(25, 56)`, yielding
+`(75, 168) + 1170 x 2532` physical pixels. Already-cropped PNG input is rejected.
+The feed surface has zero safe-area inset. Both app targets require full-screen
+portrait presentation and hide the status bar. The home-indicator region lies
+below the frozen crop, whose vertical extent is `y = 56 .. 900 pt`, so it is
+neither benchmark content nor a reason to fork the production host.
 
 Rows are contiguous, with no collection inset or inter-row spacing. Heights are
 `92`, `110`, `128`, or `146 pt`; `prefix[0] = 0` and
@@ -75,21 +77,22 @@ hashes before registering the faces with Core Text.
   `UILabel`/`UIImageView` composition, standard cell reuse, and UIKit-owned
   scroll/deceleration.
 - `FeedV1OptimizedUIKitView` uses the same collection, subviews, resources,
-  clipping, and scroll behavior, but precomputes all item geometry, common exact
-  visible attribute ranges, and the four cell-frame shapes. It does not replace
-  cells with a painted canvas.
+  clipping, and scroll behavior with the reviewed production-selected
+  invalidation, reuse, and composition choices. It does not replace cells with
+  a painted canvas.
 
 Both paths disable collection prefetching so a fresh process warms only the
-initially visible resources. Checker images are generated and cached lazily on
+initially visible resources. Checker images are generated and reused lazily on
 first naturally visible use. Their shared fixture retains only prefix geometry
 and identity; row strings are generated as cells are requested. Neither path
 logs or appends samples during frame callbacks.
 
-`FeedV1RootFactory.make(variant:resourceBundle:)` creates exactly one root and
-one feed surface. The controller chooses `.idiomatic` or `.optimized` once per
-fresh process, assigns a `FeedV1UIKitObservationSink`, and calls `mount(at:)`
-with `.top` or `.bottom`. The sink receives direct scroll-state and display-link
-timestamp/target-timestamp callbacks; it must preallocate any sample storage.
+`FeedV1RootFactory` creates exactly one root and one feed surface. The
+controller chooses `.idiomatic` or
+`.optimized` once per fresh process, assigns a `FeedV1UIKitObservationSink`, and
+calls `mount(at:)` with `.top` or `.bottom`. The sink receives direct scroll-state
+and display-link timestamp/target-timestamp callbacks; it must preallocate any
+sample storage.
 Admission must reject a non-nil `hostContractErrorDescription`, a non-nil
 surface `renderingErrorDescription`, or content extent/offset outside the
 one-physical-pixel protocol tolerance.

@@ -10,7 +10,7 @@ This crate is the production-path Oxide treatment for the frozen `feed-v1` physi
 - `oxide-ui-core::CollectionView` virtualizes the frozen rows; `VerticalScrollSurface` owns drag and inertia; `oxide-text` shapes the two embedded Asap fonts; renderer-api commands are consumed by the production Metal renderer.
 - [`contract`](contract.md) independently reconstructs the Swift fixture identity and exact scene geometry.
 - [`observation`](observation.md) writes the strict nonce-scoped run/failure records consumed by the feed-v1 reducer.
-- The device harness waits for ready/completion notifications and supplies only controller metadata. It never drives app state through the diagnostic API. XCTest, not this crate, owns the single full-screen PNG attached to each smoke tuple.
+- The device harness waits for ready/completion notifications and supplies only controller metadata. It never drives app state through the diagnostic API. XCTest, not this crate, owns the two immediate full-screen PNGs attached to each publication smoke tuple; primary retains none.
 
 Call graph:
 
@@ -120,6 +120,7 @@ assert_eq!(status.callback_sample_count, 0);
 
 ## Changelog
 
+- 2026-08-07: Documented the 12-image publication smoke gate and attachment-free primary population.
 - 2026-08-07: Moved complete canonical derivation from every app startup into paired authoritative pre-build host checks so offscreen row content remains runtime-cold.
 - 2026-08-07: Joined the non-default root workspace graph and replaced the nested lock/profile boundary with root-owned resolution and target reuse.
 - 2026-08-07: Made ordinary host builds rlib-only and moved static-archive emission to the explicit arm64 device build.
