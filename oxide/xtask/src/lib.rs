@@ -2923,6 +2923,10 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
 
 fn ios_device_perf(args: &[String]) -> Result<()> {
     let cli = parse_ios_device_perf_cli(args)?;
+    if cli.write_baseline && !cli.cases.is_empty()
+    {
+       bail!("--write-baseline requires the canonical UIKit battery without --case");
+    }
     let root = locate_workspace_root()?;
     let repository_root = RepositoryProvenance::resolve_root(&root)
         .with_context(|| "resolving UIKit device evidence Git top level")?;
@@ -3052,6 +3056,9 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             );
         }
     }
+
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository immediately before UIKit device report outputs")?;
 
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_UIKIT_DEVICE_BASELINE_JSON)))
@@ -3202,6 +3209,9 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
         }
     }
 
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository immediately before React device report outputs")?;
+
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_REACT_DEVICE_BASELINE_JSON)))
     } else {
@@ -3229,6 +3239,14 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
 
 fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     let cli = parse_ios_oxide_device_perf_cli(args)?;
+    if cli.smoke && !cli.cases.is_empty()
+    {
+       bail!("--smoke cannot be combined with --case for ios oxide-device-perf");
+    }
+    if cli.write_baseline && (!cli.cases.is_empty() || cli.smoke)
+    {
+       bail!("--write-baseline requires the canonical Oxide battery without --case or --smoke");
+    }
     let root = locate_workspace_root()?;
     let repository_root = RepositoryProvenance::resolve_root(&root)
         .with_context(|| "resolving Oxide device evidence Git top level")?;
@@ -3238,10 +3256,6 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     let project = root.join("host/ios-app/App/OxideHost.xcodeproj");
     let result_root =
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_OXIDE_DEVICE_RESULT_ROOT));
-    let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
-    if cli.smoke && !cli.cases.is_empty() {
-        bail!("--smoke cannot be combined with --case for ios oxide-device-perf");
-    }
     let selected_specs = if !cli.cases.is_empty() {
         selected_oxide_onscreen_case_specs(&cli.cases)?
     } else if cli.smoke {
@@ -3249,6 +3263,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     } else {
         selected_oxide_onscreen_case_specs(&[])?
     };
+    let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let refresh_mode = UIKitDeviceRefreshMode::Native;
     let derived_data_path =
@@ -3353,6 +3368,9 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
             );
         }
     }
+
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository immediately before Oxide device report outputs")?;
 
     let json_out = if cli.write_baseline {
         Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_OXIDE_DEVICE_BASELINE_JSON)))

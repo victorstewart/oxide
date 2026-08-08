@@ -3092,10 +3092,15 @@ fn standalone_device_comparison_failures_precede_all_report_outputs()
          .map(|(body, _)| body)
          .unwrap_or_else(|| panic!("missing source body `{start}`"));
       let rejection = body.find(rejection).expect("comparison rejection gate");
+      let source_recapture = body
+         .rfind("repository.ensure_unchanged(&repository_root)")
+         .expect("final repository source recapture");
+      assert!(rejection < source_recapture, "source recapture precedes rejection in `{start}`");
       for output in ["let json_out =", "let markdown_out ="]
       {
          let output = body.find(output).unwrap_or_else(|| panic!("missing `{output}` in `{start}`"));
          assert!(rejection < output, "comparison rejection follows `{output}` in `{start}`");
+         assert!(source_recapture < output, "source recapture follows `{output}` in `{start}`");
       }
       for writer in writers
       {
@@ -3126,6 +3131,34 @@ fn device_build_for_testing_uses_release_iphoneos_configuration()
    ));
    assert!(project.contains("test:\n      config: Release"));
    assert!(scheme.contains("<TestAction\n      buildConfiguration = \"Release\""));
+}
+
+#[test]
+fn standalone_device_promotion_rejects_partial_batteries_before_device_work()
+{
+   for (command, selector, expected) in [
+      (
+         "device-perf",
+         vec!["--case", "testLabelEncode"],
+         "--write-baseline requires the canonical UIKit battery without --case",
+      ),
+      (
+         "oxide-device-perf",
+         vec!["--case", "testOxideSpinnerSpin"],
+         "--write-baseline requires the canonical Oxide battery without --case or --smoke",
+      ),
+      (
+         "oxide-device-perf",
+         vec!["--smoke"],
+         "--write-baseline requires the canonical Oxide battery without --case or --smoke",
+      ),
+   ]
+   {
+      let mut args = vec![String::from("ios"), String::from(command), String::from("--write-baseline")];
+      args.extend(selector.into_iter().map(String::from));
+      let error = run_cli(&args).expect_err("partial standalone promotion must fail");
+      assert!(error.to_string().contains(expected), "unexpected `{command}` error: {error:#}");
+   }
 }
 
 #[test]

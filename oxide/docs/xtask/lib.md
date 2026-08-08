@@ -107,7 +107,7 @@ The required-family coverage matrix is deliberately explicit:
 
 Generated device reports use `missing` when none of the selected rows represent a group, `partial` when a selected signal exists without complete required coverage, and `implemented` only when the defined complete set is present. Exact UIKit and Oxide cases remain available for touched-surface evidence without changing the canonical default.
 
-The official publication proof is one canonical `cargo xtask ios compare-device-perf --write-baseline` run: ten UIKit rows and five deduplicated Oxide rows under `uikit/` and `oxide/`. Promotion rejects `--case`, `--watchable-smoke`, `--smoke`, and `--family`, so a partial selection cannot replace the committed canonical battery. The command validates both current reports and both requested baseline comparisons before it writes either committed `latest.*` baseline. Routine publication needs no earlier stage.
+The official publication proof is one canonical `cargo xtask ios compare-device-perf --write-baseline` run: ten UIKit rows and five deduplicated Oxide rows under `uikit/` and `oxide/`. Promotion rejects `--case`, `--watchable-smoke`, `--smoke`, and `--family`, so a partial selection cannot replace the committed canonical battery. Standalone UIKit and Oxide commands likewise reject `--write-baseline` when `--case` or `--smoke` narrows their canonical selection. The command validates both current reports and both requested baseline comparisons before it writes either committed `latest.*` baseline. Routine publication needs no earlier stage.
 
 For a visibly changed build, `cargo xtask ios compare-device-perf --watchable-smoke` may run first. It captures exactly six UIKit rows—idiomatic collection component, spinner animation, button-response navigation, collection-navigation journey, and both camera surfaces—and their five deduplicated Oxide rows under `watchable/all/`. `cargo xtask ios compare-device-perf --family <component|animation|navigation|journey|camera>` remains an explicit family diagnostic under `family/<family>/`; it neither records promotion status nor gates publication.
 
@@ -115,7 +115,7 @@ Watchable smoke runs now also enable app-rendered frame capture for both Oxide a
 
 Resumable UIKit and Oxide device flows admit a completed report, checkpoint, xcresult, or trace only when a separate complete evidence-run stamp matches. That stamp binds the validated build artifacts, implementation/stage, exact ordered UIKit and Oxide mappings, device identity and OS build, native refresh mode, trace duration, watch-capture mode, effective per-case metrics/launch environments, report label, and content digests for imported power traces. A mismatch clears stale evidence while preserving only validated DerivedData, so a changed trace duration, override, power input, OS build, source revision, or run stage cannot silently reuse old results.
 
-Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. The harness revalidates cleanliness, ref, commit, and tree before current-report and committed-baseline writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
+Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. Standalone commands recapture cleanliness, ref, commit, and tree after comparison admission and immediately before output-path resolution and writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
 
 Standalone UIKit, React Native, and Oxide device commands treat a requested comparison as report admission, not post-publication diagnostics. They print the comparison summary and reject missing rows or gated regressions before resolving default paths or invoking any JSON, latest-Markdown, or dated-Markdown writer. The paired command likewise completes both comparison gates before committed-baseline promotion; its external `current.*` files remain resumable run staging.
 
@@ -160,6 +160,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: rejected partial standalone baseline promotion and moved final source-drift validation to the output boundary.
 - 2026-08-07: required exact source/toolchain/artifact validation for imported DerivedData, separated full evidence-run identity from build identity, and removed unsafe React Native external reuse.
 - 2026-08-07: made device build-for-testing explicitly Release/iphoneos for the shared Oxide/UIKit and React Native device harnesses.
 - 2026-08-07: moved standalone device comparison failures ahead of all report-output resolution and writes, preserving accepted baselines on rejection.
