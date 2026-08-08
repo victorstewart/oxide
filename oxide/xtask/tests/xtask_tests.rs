@@ -15,6 +15,7 @@ use xtask::{
     compare_uikit_reports, console_output_contains_marker,
     contract_coverage_status,
     device_console_failure_line, device_process_name, device_support_dir_matches,
+    digest_device_evidence_input,
     devicectl_notification_observed, display_value_to_base, extract_oxide_device_report_json,
     extract_trace_windows_from_tables, find_device_process_ids,
     format_uikit_only_testing_identifier, is_expected_devicectl_console_termination,
@@ -51,9 +52,11 @@ use xtask::{
     uikit_power_trace_candidate_paths, uikit_report_matches_case_ids,
     validate_normalized_camera_contract, validate_oxide_device_report_metric_contract,
     validate_uikit_device_report_metric_contract, xctrace_export_input_path_for_args,
-    Entitlements, LocationMode, ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
-    UIKitContractCoverageReport, UIKitHostBuildStamp, UIKitMetricFallbackMode, UIKitMetricSource,
-    UIKitMetricSummary, UIKitPerfCase, UIKitPerfReport, XctraceCell,
+    DeviceEvidenceInputStamp, DeviceEvidenceRunStamp, Entitlements, LocationMode,
+    ExperimentCheckSummary, TraceWindow, UIKitCanonicalSignpostSource,
+    UIKitContractCoverageReport, UIKitHostBuildArtifactStamp, UIKitHostBuildStamp,
+    UIKitMetricFallbackMode, UIKitMetricSource, UIKitMetricSummary, UIKitPerfCase,
+    UIKitPerfReport, XctraceCell,
     XctraceTocTable,
 };
 
@@ -133,6 +136,49 @@ fn sample_repository_provenance(commit_digit: char) -> RepositoryProvenance
       repository_ref: Some(String::from("refs/heads/main")),
       repository_head_commit: Some(commit_digit.to_string().repeat(40)),
       repository_tree: Some(String::from("a").repeat(40)),
+   }
+}
+
+fn sample_uikit_host_build_stamp(commit_digit: char) -> UIKitHostBuildStamp
+{
+   UIKitHostBuildStamp {
+      destination: String::from("platform=iOS,id=device"),
+      development_team: String::from("TEAM123456"),
+      source_fingerprint: 1,
+      xcodebuild_version: String::from("Xcode 26.4 | Build version 17E50"),
+      sdk: String::from("iphoneos"),
+      sdk_version: String::from("26.4"),
+      build_configuration: String::from("Release"),
+      repository: sample_repository_provenance(commit_digit),
+   }
+}
+
+fn sample_device_evidence_run_stamp(commit_digit: char) -> DeviceEvidenceRunStamp
+{
+   DeviceEvidenceRunStamp {
+      schema_version: 1,
+      host_build: UIKitHostBuildArtifactStamp {
+         build: sample_uikit_host_build_stamp(commit_digit),
+         app_fingerprint: 11,
+         xctestrun_fingerprint: 12,
+      },
+      suite: String::from("standalone-uikit"),
+      case_ids: vec![String::from(
+         "uikit:testLabelEncode:uikit.component.label.encode:cpu.component.label.encode",
+      )],
+      trace_seconds: 5,
+      refresh_mode: String::from("native"),
+      watch_capture: false,
+      device_name: String::from("iPhone"),
+      device_os_version: String::from("26.4"),
+      device_os_build: String::from("23E50"),
+      device_product_type: String::from("iPhone17,1"),
+      environment: BTreeMap::from([(
+         String::from("uikit:launch:testLabelEncode:OXIDE_PERF_REFRESH_MODE"),
+         String::from("native"),
+      )]),
+      power_traces: Vec::new(),
+      generated_label: Some(String::from("2026-08-07")),
    }
 }
 
@@ -1409,26 +1455,22 @@ fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
     let result_root = dir.path().join("result-root");
     let derived_data = result_root.join("derived-data");
     fs::create_dir_all(&derived_data).expect("create derived-data");
-    let stamp = UIKitHostBuildStamp {
-        destination: String::from("platform=iOS,id=device"),
-        development_team: String::from("TEAM123456"),
-        source_fingerprint: 1,
-        repository: sample_repository_provenance('1'),
-    };
+    let stamp = sample_device_evidence_run_stamp('1');
 
-    prepare_resumable_uikit_device_result_root(
+    let seeded = prepare_resumable_uikit_device_result_root(
         &result_root,
         &[derived_data.as_path()],
         &stamp,
         "UIKit device",
     )
     .expect("seed result root");
+    assert!(!seeded);
 
     let case_dir = result_root.join("uikit").join("testLabelEncode-native");
     fs::create_dir_all(&case_dir).expect("create case dir");
     fs::write(case_dir.join("case.json"), "{}").expect("write case checkpoint");
 
-    prepare_resumable_uikit_device_result_root(
+    let resumed = prepare_resumable_uikit_device_result_root(
         &result_root,
         &[derived_data.as_path()],
         &stamp,
@@ -1436,8 +1478,24 @@ fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
     )
     .expect("reuse matching result root");
 
+    assert!(resumed);
     assert!(case_dir.join("case.json").is_file());
     assert!(derived_data.exists());
+}
+
+#[test]
+fn device_evidence_input_digest_tracks_same_length_content_changes()
+{
+   let dir = tempdir().expect("tempdir");
+   let trace = dir.path().join("power.atrc");
+   fs::write(&trace, b"first-trace").expect("write first trace");
+   let first = digest_device_evidence_input(&trace).expect("digest first trace");
+   fs::write(&trace, b"other-trace").expect("write replacement trace");
+   let second = digest_device_evidence_input(&trace).expect("digest replacement trace");
+
+   assert_ne!(first, second);
+   assert_eq!(first.len(), 64);
+   assert_eq!(second.len(), 64);
 }
 
 #[test]
@@ -1450,13 +1508,7 @@ fn prepare_resumable_uikit_device_result_root_clears_unstamped_staged_checkpoint
    fs::create_dir_all(&derived_data).expect("create derived-data");
    fs::create_dir_all(&case_dir).expect("create staged case dir");
    fs::write(case_dir.join("case.json"), "{}").expect("write staged case checkpoint");
-   let stamp = UIKitHostBuildStamp
-   {
-      destination: String::from("platform=iOS,id=device"),
-      development_team: String::from("TEAM123456"),
-      source_fingerprint: 1,
-      repository: sample_repository_provenance('1'),
-   };
+   let stamp = sample_device_evidence_run_stamp('1');
 
    prepare_resumable_uikit_device_result_root(
       &result_root,
@@ -1472,46 +1524,110 @@ fn prepare_resumable_uikit_device_result_root_clears_unstamped_staged_checkpoint
 }
 
 #[test]
-fn prepare_resumable_uikit_device_result_root_clears_stale_checkpoints_on_stamp_change() {
+fn prepare_resumable_uikit_device_result_root_clears_legacy_build_only_stamp()
+{
+   let dir = tempdir().expect("tempdir");
+   let result_root = dir.path().join("result-root");
+   let derived_data = result_root.join("derived-data");
+   let checkpoint = result_root.join("uikit/testLabelEncode-native/case.json");
+   fs::create_dir_all(&derived_data).expect("create derived-data");
+   fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
+      .expect("create checkpoint parent");
+   fs::write(&checkpoint, "{}").expect("write legacy checkpoint");
+   let legacy = serde_json::to_string_pretty(&sample_uikit_host_build_stamp('1'))
+      .expect("serialize legacy stamp");
+   fs::write(result_root.join(".oxide-device-result-root-stamp.json"), legacy)
+      .expect("write legacy stamp");
+
+   let resumed = prepare_resumable_uikit_device_result_root(
+      &result_root,
+      &[derived_data.as_path()],
+      &sample_device_evidence_run_stamp('1'),
+      "UIKit device",
+   )
+   .expect("clear legacy result root");
+
+   assert!(!resumed);
+   assert!(!checkpoint.exists());
+   assert!(derived_data.exists());
+}
+
+#[test]
+fn prepare_resumable_uikit_device_result_root_clears_every_stale_run_identity() {
+    let original = sample_device_evidence_run_stamp('1');
+    let mut variants = Vec::new();
+
+    let mut stamp = original.clone();
+    stamp.trace_seconds = 9;
+    variants.push(("trace-seconds", stamp));
+    let mut stamp = original.clone();
+    stamp.environment.insert(String::from("oxide:launch:test:OXIDE_ENABLE_DAMAGE"), String::from("0"));
+    variants.push(("environment", stamp));
+    let mut stamp = original.clone();
+    stamp.power_traces.push(DeviceEvidenceInputStamp {
+        case_id: String::from("uikit.component.label.encode"),
+        path: String::from("/tmp/power.trace"),
+        digest_sha256: String::from("a").repeat(64),
+    });
+    variants.push(("power-trace", stamp));
+    let mut stamp = original.clone();
+    stamp.device_os_build = String::from("23E51");
+    variants.push(("device-os-build", stamp));
+    let mut stamp = original.clone();
+    stamp.case_ids.push(String::from("uikit:testButtonEncode"));
+    variants.push(("case-order", stamp));
+    let mut stamp = original.clone();
+    stamp.suite = String::from("paired-watchable");
+    stamp.watch_capture = true;
+    variants.push(("stage-watch", stamp));
+    let mut stamp = original.clone();
+    stamp.generated_label = Some(String::from("2026-08-08"));
+    variants.push(("report-label", stamp));
+    let mut stamp = original.clone();
+    stamp.host_build.build.repository = sample_repository_provenance('2');
+    variants.push(("repository", stamp));
+    let mut stamp = original.clone();
+    stamp.host_build.build.xcodebuild_version = String::from("Xcode 26.5");
+    variants.push(("xcode-toolchain", stamp));
+    let mut stamp = original.clone();
+    stamp.host_build.build.sdk_version = String::from("26.5");
+    variants.push(("sdk-version", stamp));
+    let mut stamp = original.clone();
+    stamp.host_build.build.build_configuration = String::from("Debug");
+    variants.push(("build-configuration", stamp));
+    let mut stamp = original.clone();
+    stamp.host_build.app_fingerprint += 1;
+    variants.push(("app-artifact", stamp));
+
     let dir = tempdir().expect("tempdir");
-    let result_root = dir.path().join("result-root");
-    let derived_data = result_root.join("derived-data");
-    fs::create_dir_all(&derived_data).expect("create derived-data");
-    let old_stamp = UIKitHostBuildStamp {
-        destination: String::from("platform=iOS,id=device"),
-        development_team: String::from("TEAM123456"),
-        source_fingerprint: 1,
-        repository: sample_repository_provenance('1'),
-    };
-    let new_stamp = UIKitHostBuildStamp {
-        destination: String::from("platform=iOS,id=device"),
-        development_team: String::from("TEAM123456"),
-        source_fingerprint: 1,
-        repository: sample_repository_provenance('2'),
-    };
+    for (label, changed) in variants {
+        let result_root = dir.path().join(label);
+        let derived_data = result_root.join("derived-data");
+        fs::create_dir_all(&derived_data).expect("create derived-data");
+        prepare_resumable_uikit_device_result_root(
+            &result_root,
+            &[derived_data.as_path()],
+            &original,
+            "UIKit device",
+        )
+        .expect("seed result root");
+        let checkpoint = result_root.join("uikit/testAnimTimelineBars-native/case.json");
+        fs::create_dir_all(checkpoint.parent().expect("checkpoint parent"))
+            .expect("create checkpoint parent");
+        fs::write(&checkpoint, "{}").expect("write stale checkpoint");
 
-    prepare_resumable_uikit_device_result_root(
-        &result_root,
-        &[derived_data.as_path()],
-        &old_stamp,
-        "UIKit device",
-    )
-    .expect("seed result root");
+        let resumed = prepare_resumable_uikit_device_result_root(
+            &result_root,
+            &[derived_data.as_path()],
+            &changed,
+            "UIKit device",
+        )
+        .unwrap_or_else(|error| panic!("clear stale `{label}` result root: {error}"));
 
-    let case_dir = result_root.join("uikit").join("testAnimTimelineBars-native");
-    fs::create_dir_all(&case_dir).expect("create case dir");
-    fs::write(case_dir.join("case.json"), "{}").expect("write stale case checkpoint");
-
-    prepare_resumable_uikit_device_result_root(
-        &result_root,
-        &[derived_data.as_path()],
-        &new_stamp,
-        "UIKit device",
-    )
-    .expect("clear stale result root");
-
-    assert!(!case_dir.exists());
-    assert!(derived_data.exists());
+        assert!(!resumed, "stale `{label}` stamp resumed");
+        assert!(!checkpoint.exists(), "stale `{label}` checkpoint survived");
+        assert!(derived_data.exists());
+    }
 }
 
 #[test]
@@ -3010,6 +3126,44 @@ fn device_build_for_testing_uses_release_iphoneos_configuration()
    ));
    assert!(project.contains("test:\n      config: Release"));
    assert!(scheme.contains("<TestAction\n      buildConfiguration = \"Release\""));
+}
+
+#[test]
+fn react_device_perf_rejects_unstamped_external_derived_data_reuse()
+{
+   let args = ["ios", "react-device-perf", "--reuse-derived-data", "/tmp/stale"]
+      .into_iter()
+      .map(String::from)
+      .collect::<Vec<_>>();
+   let error = run_cli(&args).expect_err("React external DerivedData reuse must fail closed");
+
+   assert!(error.to_string().contains("unknown ios react-device-perf argument `--reuse-derived-data`"));
+}
+
+#[test]
+fn device_build_reuse_requires_toolchain_and_artifact_stamp()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let body = source
+      .split_once("fn prepare_uikit_host_device_build(")
+      .and_then(|(_, tail)| tail.split_once("fn uikit_device_perf_environment("))
+      .map(|(body, _)| body)
+      .expect("host build preparation body");
+   let validation = body
+      .find("uikit_host_build_can_be_reused(")
+      .expect("shared stamped reuse validation");
+   let explicit_reuse = body
+      .find("if reuse_derived_data.is_some() && !reusable")
+      .expect("explicit reuse rejection");
+   let build = body.find("run_uikit_device_build_for_testing(").expect("automatic rebuild");
+
+   assert!(validation < explicit_reuse);
+   assert!(explicit_reuse < build);
+   assert!(body.contains("current_uikit_host_build_artifact_stamp("));
+   assert!(!body.contains("derived_data_path.exists()"));
+   assert!(source.contains("xcodebuild_version: xcodebuild_version.trim()"));
+   assert!(source.contains("sdk_version: String::from(sdk_version.trim())"));
+   assert!(source.contains("build_configuration: String::from(IOS_DEVICE_BUILD_CONFIGURATION)"));
 }
 
 #[test]

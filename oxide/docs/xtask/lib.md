@@ -40,6 +40,9 @@
 - `xtask::uikit_report_matches_case_ids(report: &UIKitPerfReport, expected_case_ids: &[&str]) -> bool`
   - Validates that a checkpointed UIKit report contains exactly the case set requested by the current resumable run before reuse.
   - Main callers: device perf flow and tests.
+- `xtask::prepare_resumable_uikit_device_result_root(...) -> anyhow::Result<bool>`
+  - Reuses checkpoints only when the complete evidence-run stamp matches; returns whether the existing root was admitted.
+  - Main callers: paired and standalone UIKit/Oxide device flows and stamp regression tests.
 - `xtask::uikit_canonical_device_cases() -> &'static [UIKitCanonicalDeviceCase]`
   - Exposes the exact ten-row UIKit device contract with its test names, UIKit/Oxide ids, comparison buckets, required workload-family mappings, and styles.
   - Main callers: the canonical selector and contract tests.
@@ -71,7 +74,7 @@ Device perf runs reuse the same case mapping but add process-scoped Instruments 
 
 Official physical-device build-for-testing is explicitly `Release` against the `iphoneos` SDK for both the Oxide/UIKit host and React Native harness. The generated `OxideUIKitPerf` scheme carries the same Release test configuration, so direct scheme use and xtask builds cannot silently measure Debug code.
 
-The active device harness now trims a large amount of orchestration dead weight out of that path. Launched traces use a small case-aware time-limit buffer instead of a fixed multi-second pad, XCTest outer measurement counts are adaptive by workload family instead of a flat 10/5 policy, and the device trace-settle delay is reduced to a short default for signposted cases. Metrics shards are grouped by environment instead of forcing singleton shards for every UI-test/camera case, prepared `.xctestrun` files are hashed by their environment and only rewritten when their bytes change, and unchanged derived-data builds are reused through a persisted input fingerprint stamp. The device-side `devicectl ... -j` polling path now retries transient streaming/control-channel failures, transient launched `xctrace` wall-time watchdog overruns are retried once instead of aborting the canonical battery, and `xctrace` reduction walks one parsed trace artifact per case instead of repeatedly re-exporting overlapping table sets.
+The active device harness now trims a large amount of orchestration dead weight out of that path. Launched traces use a small case-aware time-limit buffer instead of a fixed multi-second pad, XCTest outer measurement counts are adaptive by workload family instead of a flat 10/5 policy, and the device trace-settle delay is reduced to a short default for signposted cases. Metrics shards are grouped by environment instead of forcing singleton shards for every UI-test/camera case, prepared `.xctestrun` files are hashed by their environment and only rewritten when their bytes change, and unchanged derived-data builds are reused through a persisted stamp that binds the clean source revision, selected device destination and signing team, Xcode version, `iphoneos` SDK version, Release configuration, and the built app/xctestrun artifact identities. An explicit UIKit/Oxide `--reuse-derived-data` path must pass that same validator; React Native has no imported-cache contract and always runs incremental `build-for-testing` against its preserved internal DerivedData. The device-side `devicectl ... -j` polling path now retries transient streaming/control-channel failures, transient launched `xctrace` wall-time watchdog overruns are retried once instead of aborting the canonical battery, and `xctrace` reduction walks one parsed trace artifact per case instead of repeatedly re-exporting overlapping table sets.
 
 Before any `xcodebuild test-without-building` device batch, the harness now also preflights the phone's interactive state through `devicectl device info lockState` and `devicectl device info displays`. If the phone is locked or the main display backlight is off, the run fails fast and keeps its checkpoints instead of burning time in Xcode destination-preflight limbo.
 
@@ -110,7 +113,7 @@ For a visibly changed build, `cargo xtask ios compare-device-perf --watchable-sm
 
 Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow family diagnostics or promotion.
 
-Resumable UIKit and Oxide device flows only reuse a completed `current.json` when both the report case IDs and its repository ref/HEAD/tree match the selected run. The derived-data stamp retains the same provenance in addition to its input fingerprint, so neither a prior smoke/family selection nor an earlier source revision can satisfy the current run through a stale checkpoint.
+Resumable UIKit and Oxide device flows admit a completed report, checkpoint, xcresult, or trace only when a separate complete evidence-run stamp matches. That stamp binds the validated build artifacts, implementation/stage, exact ordered UIKit and Oxide mappings, device identity and OS build, native refresh mode, trace duration, watch-capture mode, effective per-case metrics/launch environments, report label, and content digests for imported power traces. A mismatch clears stale evidence while preserving only validated DerivedData, so a changed trace duration, override, power input, OS build, source revision, or run stage cannot silently reuse old results.
 
 Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. The harness revalidates cleanliness, ref, commit, and tree before current-report and committed-baseline writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
 
@@ -157,6 +160,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: required exact source/toolchain/artifact validation for imported DerivedData, separated full evidence-run identity from build identity, and removed unsafe React Native external reuse.
 - 2026-08-07: made device build-for-testing explicitly Release/iphoneos for the shared Oxide/UIKit and React Native device harnesses.
 - 2026-08-07: moved standalone device comparison failures ahead of all report-output resolution and writes, preserving accepted baselines on rejection.
 - 2026-08-07: bound paired and standalone device reports plus resumable build stamps to one clean, stable Git revision and rejected version-2 reports with missing provenance.

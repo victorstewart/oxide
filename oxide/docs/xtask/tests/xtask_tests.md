@@ -34,9 +34,11 @@ Call flow:
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
 - `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
 - `device_build_for_testing_uses_release_iphoneos_configuration()`: freezes explicit Release/iphoneos build arguments and the generated scheme configuration.
+- `react_device_perf_rejects_unstamped_external_derived_data_reuse()`: freezes the hard cut from existence-only React Native cache imports.
+- `device_build_reuse_requires_toolchain_and_artifact_stamp()`: requires the shared exact toolchain/artifact stamp validator for automatic and explicit reuse.
 - `paired_reports_serialize_identical_repository_revision()`: proves paired UIKit and Oxide reports publish the same repository ref/HEAD/tree.
 - `uikit_version_two_rejects_missing_repository_revision_and_version_one_defaults_it()`: freezes strict version-2 serialization and historical version-1 compatibility.
-- Resumable-root stamp tests prove matching revisions retain checkpoints while a changed Git revision clears them even when the file fingerprint is unchanged.
+- Resumable-root stamp tests prove only an exact full evidence identity retains checkpoints; changes to source, toolchain, configuration, artifact, device OS, stage, ordered cases, trace duration, environment, report label, or power input clear them while preserving DerivedData, and legacy build-only stamps fail closed.
 - `standalone_device_comparison_failures_precede_all_report_outputs()`: freezes pre-write comparison admission for UIKit, React Native, and Oxide JSON/latest/datestamp writers.
 - `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes arm64-only device and Simulator settings in the Oxide host and React Native camera benchmark projects and requires every scripted Rust build to honor the workspace lockfile.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
@@ -89,6 +91,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: added full evidence-run invalidation, toolchain/artifact reuse, and the React cache hard cut.
 - 2026-08-07: froze the Release/iphoneos configuration used by physical-device build-for-testing.
 - 2026-08-07: added source-order coverage proving all three standalone device comparisons reject before resolving or writing report outputs.
 - 2026-08-07: added paired-report source identity, versioned provenance, and revision-aware resumable checkpoint coverage.

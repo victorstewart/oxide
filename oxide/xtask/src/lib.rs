@@ -8,6 +8,7 @@ use oxide_perf_runner::{
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1781,7 +1782,6 @@ struct IosReactDevicePerfCli {
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
     result_root: Option<PathBuf>,
-    reuse_derived_data: Option<PathBuf>,
     team: Option<String>,
     trace_seconds: Option<u64>,
     write_baseline: bool,
@@ -2292,7 +2292,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    workflow: use `--watchable-smoke` for optional visual QA, `--family ...` for explicit diagnostics, and one canonical `--write-baseline` run as the publication proof.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    workflow: use `--watchable-smoke` for optional visual QA, `--family ...` for explicit diagnostics, and one canonical `--write-baseline` run as the publication proof.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -2689,6 +2689,17 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let refresh_mode = cli.refresh_mode;
+    validate_uikit_power_trace_inputs_for_specs(
+        trace_seconds,
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
+    let power_traces = device_evidence_power_trace_stamps(
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
     let shared_derived_data_path = result_root.join("derived-data");
     let build_context = prepare_uikit_host_device_build_context(
         &root,
@@ -2699,23 +2710,6 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         cli.team.as_deref(),
         &repository,
     )?;
-    prepare_resumable_uikit_device_result_root(
-        &stage_result_root,
-        &[shared_derived_data_path.as_path()],
-        &build_context.expected_stamp,
-        "combined device",
-    )?;
-    fs::create_dir_all(&uikit_result_root)
-        .with_context(|| format!("creating {}", uikit_result_root.display()))?;
-    fs::create_dir_all(&oxide_result_root)
-        .with_context(|| format!("creating {}", oxide_result_root.display()))?;
-
-    validate_uikit_power_trace_inputs_for_specs(
-        trace_seconds,
-        cli.power_trace.as_deref(),
-        cli.power_trace_root.as_deref(),
-        &selected_specs,
-    )?;
     let prepared_build = prepare_uikit_host_device_build(
         &root,
         &project,
@@ -2724,11 +2718,41 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         None,
         &build_context,
     )?;
+    let suite = match stage
+    {
+       CompareDeviceRunStage::Promotion => String::from("paired-promotion"),
+       CompareDeviceRunStage::WatchableSmoke => String::from("paired-watchable"),
+       CompareDeviceRunStage::FamilyDiagnostic => format!(
+          "paired-family:{}",
+          family.expect("family diagnostic stage must provide a family name"),
+       ),
+    };
+    let run_stamp = device_evidence_run_stamp(
+        &suite,
+        &prepared_build,
+        &device,
+        &selected_specs,
+        &selected_oxide_specs,
+        refresh_mode,
+        trace_seconds,
+        watch_capture,
+        power_traces,
+    );
+    let resumed = prepare_resumable_uikit_device_result_root(
+        &stage_result_root,
+        &[shared_derived_data_path.as_path()],
+        &run_stamp,
+        "combined device",
+    )?;
+    fs::create_dir_all(&uikit_result_root)
+        .with_context(|| format!("creating {}", uikit_result_root.display()))?;
+    fs::create_dir_all(&oxide_result_root)
+        .with_context(|| format!("creating {}", oxide_result_root.display()))?;
 
     let uikit_current_json = uikit_result_root.join("current.json");
     let expected_uikit_case_ids =
         selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let mut uikit_report = if uikit_current_json.is_file() {
+    let mut uikit_report = if resumed && uikit_current_json.is_file() {
         let cached = load_uikit_report(&uikit_current_json)?;
         if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids)
             && cached.repository == repository
@@ -2792,7 +2816,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let oxide_current_json = oxide_result_root.join("current.json");
     let expected_oxide_case_ids =
         selected_oxide_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let mut oxide_report = if oxide_current_json.is_file() {
+    let mut oxide_report = if resumed && oxide_current_json.is_file() {
         let cached = load_oxide_device_report(&oxide_current_json)?;
         if perf_report_matches_case_ids(&cached, &expected_oxide_case_ids)
             && cached.repository == repository
@@ -2912,6 +2936,17 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let refresh_mode = cli.refresh_mode;
+    validate_uikit_power_trace_inputs_for_specs(
+        trace_seconds,
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
+    let power_traces = device_evidence_power_trace_stamps(
+        cli.power_trace.as_deref(),
+        cli.power_trace_root.as_deref(),
+        &selected_specs,
+    )?;
     let derived_data_path =
         cli.reuse_derived_data.clone().unwrap_or_else(|| result_root.join("derived-data"));
     let preserved_paths = if derived_data_path.starts_with(&result_root) {
@@ -2928,19 +2963,6 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         cli.team.as_deref(),
         &repository,
     )?;
-    prepare_resumable_uikit_device_result_root(
-        &result_root,
-        &preserved_paths,
-        &build_context.expected_stamp,
-        "UIKit device",
-    )?;
-
-    validate_uikit_power_trace_inputs_for_specs(
-        trace_seconds,
-        cli.power_trace.as_deref(),
-        cli.power_trace_root.as_deref(),
-        &selected_specs,
-    )?;
     let prepared_build = prepare_uikit_host_device_build(
         &root,
         &project,
@@ -2949,9 +2971,26 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         cli.reuse_derived_data.as_deref(),
         &build_context,
     )?;
+    let run_stamp = device_evidence_run_stamp(
+        "standalone-uikit",
+        &prepared_build,
+        &device,
+        &selected_specs,
+        &[],
+        refresh_mode,
+        trace_seconds,
+        false,
+        power_traces,
+    );
+    let resumed = prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &preserved_paths,
+        &run_stamp,
+        "UIKit device",
+    )?;
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let mut report = if current_json.is_file() {
+    let mut report = if resumed && current_json.is_file() {
         let cached = load_uikit_report(&current_json)?;
         if uikit_report_matches_case_ids(&cached, &expected_case_ids)
             && cached.repository == repository
@@ -3049,8 +3088,7 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
     let workspace = root.join(DEFAULT_REACT_DEVICE_WORKSPACE_RELATIVE_PATH);
     let result_root =
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_REACT_DEVICE_RESULT_ROOT));
-    let derived_data_path =
-        cli.reuse_derived_data.clone().unwrap_or_else(|| result_root.join("derived-data"));
+    let derived_data_path = result_root.join("derived-data");
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let destination = format!("platform=iOS,id={}", device.udid);
@@ -3059,30 +3097,19 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
     } else {
         Vec::new()
     };
-    if result_root_has_resumable_device_artifacts(&result_root)? {
-        println!("Resuming existing Oxide device result root at {}.", result_root.display());
-    } else {
-        prepare_result_root(&result_root, &preserved_paths)?;
-    }
+    prepare_result_root(&result_root, &preserved_paths)?;
 
     ensure_uikit_device_ready(&root, &device)?;
     ensure_uikit_device_support_available(&root, &device)?;
     let development_team =
         resolve_uikit_development_team(&root, cli.team.as_deref(), Some(device.udid.as_str()))?;
 
-    if cli.reuse_derived_data.is_none() {
-        run_react_device_build_for_testing(
-            &root,
-            &workspace,
-            &development_team,
-            &derived_data_path,
-        )?;
-    } else if !derived_data_path.exists() {
-        bail!(
-            "requested --reuse-derived-data path does not exist: {}",
-            derived_data_path.display()
-        );
-    }
+    run_react_device_build_for_testing(
+        &root,
+        &workspace,
+        &development_team,
+        &derived_data_path,
+    )?;
 
     let built_app = resolve_built_uikit_app(&derived_data_path)?;
     let xctestrun_path =
@@ -3240,13 +3267,6 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
         cli.team.as_deref(),
         &repository,
     )?;
-    prepare_resumable_uikit_device_result_root(
-        &result_root,
-        &preserved_paths,
-        &build_context.expected_stamp,
-        "Oxide device",
-    )?;
-
     let prepared_build = prepare_uikit_host_device_build(
         &root,
         &project,
@@ -3255,10 +3275,27 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
         cli.reuse_derived_data.as_deref(),
         &build_context,
     )?;
+    let run_stamp = device_evidence_run_stamp(
+        "standalone-oxide",
+        &prepared_build,
+        &device,
+        &[],
+        &selected_specs,
+        refresh_mode,
+        trace_seconds,
+        false,
+        Vec::new(),
+    );
+    let resumed = prepare_resumable_uikit_device_result_root(
+        &result_root,
+        &preserved_paths,
+        &run_stamp,
+        "Oxide device",
+    )?;
 
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let mut report = if current_json.is_file() {
+    let mut report = if resumed && current_json.is_file() {
         let cached = load_oxide_device_report(&current_json)?;
         if perf_report_matches_case_ids(&cached, &expected_case_ids)
             && cached.repository == repository
@@ -3381,6 +3418,7 @@ struct PreparedUIKitHostBuild {
     destination: String,
     built_app: BuiltUIKitApp,
     uikit_xctestrun_path: PathBuf,
+    artifact_stamp: UIKitHostBuildArtifactStamp,
 }
 
 #[derive(Debug, Clone)]
@@ -3408,12 +3446,59 @@ struct ParsedDeviceTrace {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Build inputs that must match before iOS DerivedData may be reused.
 pub struct UIKitHostBuildStamp {
     pub destination: String,
     pub development_team: String,
     pub source_fingerprint: u64,
     #[serde(default)]
+    pub xcodebuild_version: String,
+    #[serde(default)]
+    pub sdk: String,
+    #[serde(default)]
+    pub sdk_version: String,
+    #[serde(default)]
+    pub build_configuration: String,
+    #[serde(default)]
     pub repository: RepositoryProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Build identity plus fingerprints of the exact app and xctestrun artifacts.
+pub struct UIKitHostBuildArtifactStamp
+{
+   pub build: UIKitHostBuildStamp,
+   pub app_fingerprint: u64,
+   pub xctestrun_fingerprint: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One external evidence input bound to a case by canonical path and content digest.
+pub struct DeviceEvidenceInputStamp
+{
+   pub case_id: String,
+   pub path: String,
+   pub digest_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Complete identity required to reuse a physical-device evidence root.
+pub struct DeviceEvidenceRunStamp
+{
+   pub schema_version: u32,
+   pub host_build: UIKitHostBuildArtifactStamp,
+   pub suite: String,
+   pub case_ids: Vec<String>,
+   pub trace_seconds: u64,
+   pub refresh_mode: String,
+   pub watch_capture: bool,
+   pub device_name: String,
+   pub device_os_version: String,
+   pub device_os_build: String,
+   pub device_product_type: String,
+   pub environment: BTreeMap<String, String>,
+   pub power_traces: Vec<DeviceEvidenceInputStamp>,
+   pub generated_label: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -4120,6 +4205,31 @@ fn validate_uikit_power_trace_inputs_for_specs(
         }
     }
     Ok(())
+}
+
+fn device_evidence_power_trace_stamps(
+   power_trace: Option<&Path>,
+   power_trace_root: Option<&Path>,
+   selected_specs: &[&'static UIKitCaseSpec],
+) -> Result<Vec<DeviceEvidenceInputStamp>>
+{
+   if power_trace.is_none() && power_trace_root.is_none()
+   {
+      return Ok(Vec::new());
+   }
+   let mut stamps = Vec::with_capacity(selected_specs.len());
+   for spec in selected_specs
+   {
+      let path = resolve_uikit_power_trace_path(power_trace, power_trace_root, spec)?;
+      let canonical = fs::canonicalize(&path)
+         .with_context(|| format!("canonicalizing power trace {}", path.display()))?;
+      stamps.push(DeviceEvidenceInputStamp {
+         case_id: String::from(spec.case_id),
+         path: canonical.to_string_lossy().into_owned(),
+         digest_sha256: digest_device_evidence_input(&canonical)?,
+      });
+   }
+   Ok(stamps)
 }
 
 fn load_uikit_device_case_power_trace_from_paths(
@@ -5386,22 +5496,37 @@ fn uikit_result_root_stamp_path(result_root: &Path) -> PathBuf {
     result_root.join(UIKIT_RESULT_ROOT_STAMP_FILE)
 }
 
-fn load_uikit_result_root_build_stamp(result_root: &Path) -> Result<Option<UIKitHostBuildStamp>> {
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredDeviceEvidenceRunStamp
+{
+   Current(DeviceEvidenceRunStamp),
+   Legacy(UIKitHostBuildStamp),
+}
+
+fn load_device_evidence_run_stamp(result_root: &Path) -> Result<Option<DeviceEvidenceRunStamp>> {
     let path = uikit_result_root_stamp_path(result_root);
     match fs::read_to_string(&path) {
         Ok(text) => {
-            let stamp = serde_json::from_str(&text)
+            let stamp: StoredDeviceEvidenceRunStamp = serde_json::from_str(&text)
                 .with_context(|| format!("parsing {}", path.display()))?;
-            Ok(Some(stamp))
+            match stamp
+            {
+               StoredDeviceEvidenceRunStamp::Current(stamp) => Ok(Some(stamp)),
+               StoredDeviceEvidenceRunStamp::Legacy(stamp) => {
+                  drop(stamp);
+                  Ok(None)
+               }
+            }
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
     }
 }
 
-fn write_uikit_result_root_build_stamp(
+fn write_device_evidence_run_stamp(
     result_root: &Path,
-    stamp: &UIKitHostBuildStamp,
+    stamp: &DeviceEvidenceRunStamp,
 ) -> Result<()> {
     fs::create_dir_all(result_root)
         .with_context(|| format!("creating {}", result_root.display()))?;
@@ -5411,25 +5536,25 @@ fn write_uikit_result_root_build_stamp(
     fs::write(&path, json).with_context(|| format!("writing {}", path.display()))
 }
 
-pub fn prepare_resumable_uikit_device_result_root(result_root: &Path, preserved_paths: &[&Path], expected_stamp: &UIKitHostBuildStamp, label: &str) -> Result<()>
+pub fn prepare_resumable_uikit_device_result_root(result_root: &Path, preserved_paths: &[&Path], expected_stamp: &DeviceEvidenceRunStamp, label: &str) -> Result<bool>
 {
    let has_resumable_artifacts = result_root_has_resumable_device_artifacts(result_root)?;
-   let saved_stamp = load_uikit_result_root_build_stamp(result_root)?;
+   let saved_stamp = load_device_evidence_run_stamp(result_root)?;
    if has_resumable_artifacts
       && saved_stamp.as_ref() == Some(expected_stamp)
    {
       println!("Resuming existing {} result root at {}.", label, result_root.display());
-      return Ok(());
+      return Ok(true);
    }
    if has_resumable_artifacts
    {
       let reason = if saved_stamp.is_some()
       {
-         "the host build fingerprint changed"
+         "the evidence-run identity changed"
       }
       else
       {
-         "it predates resumable build fingerprinting"
+         "it predates complete evidence-run fingerprinting"
       };
       println!(
          "Discarding stale {} result root at {} because {}.",
@@ -5439,7 +5564,8 @@ pub fn prepare_resumable_uikit_device_result_root(result_root: &Path, preserved_
       );
    }
    prepare_result_root(result_root, preserved_paths)?;
-   write_uikit_result_root_build_stamp(result_root, expected_stamp)
+   write_device_evidence_run_stamp(result_root, expected_stamp)?;
+   Ok(false)
 }
 
 fn result_root_has_resumable_device_artifacts(result_root: &Path) -> Result<bool> {
@@ -5725,13 +5851,30 @@ fn uikit_host_build_stamp_path(derived_data_path: &Path) -> PathBuf {
     derived_data_path.join(UIKIT_HOST_BUILD_STAMP_FILE)
 }
 
-fn load_uikit_host_build_stamp(derived_data_path: &Path) -> Result<Option<UIKitHostBuildStamp>> {
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredUIKitHostBuildArtifactStamp
+{
+   Current(UIKitHostBuildArtifactStamp),
+   Legacy(UIKitHostBuildStamp),
+}
+
+fn load_uikit_host_build_stamp(
+    derived_data_path: &Path,
+) -> Result<Option<UIKitHostBuildArtifactStamp>> {
     let path = uikit_host_build_stamp_path(derived_data_path);
     match fs::read_to_string(&path) {
         Ok(text) => {
-            let stamp = serde_json::from_str(&text)
+            let stamp: StoredUIKitHostBuildArtifactStamp = serde_json::from_str(&text)
                 .with_context(|| format!("parsing {}", path.display()))?;
-            Ok(Some(stamp))
+            match stamp
+            {
+               StoredUIKitHostBuildArtifactStamp::Current(stamp) => Ok(Some(stamp)),
+               StoredUIKitHostBuildArtifactStamp::Legacy(stamp) => {
+                  drop(stamp);
+                  Ok(None)
+               }
+            }
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
@@ -5740,7 +5883,7 @@ fn load_uikit_host_build_stamp(derived_data_path: &Path) -> Result<Option<UIKitH
 
 fn write_uikit_host_build_stamp(
     derived_data_path: &Path,
-    stamp: &UIKitHostBuildStamp,
+    stamp: &UIKitHostBuildArtifactStamp,
 ) -> Result<()> {
     fs::create_dir_all(derived_data_path)
         .with_context(|| format!("creating {}", derived_data_path.display()))?;
@@ -5758,12 +5901,105 @@ fn expected_uikit_host_build_stamp(
     development_team: &str,
     repository: &RepositoryProvenance,
 ) -> Result<UIKitHostBuildStamp> {
+    let xcodebuild_version = run_command_capture_owned(
+        root,
+        "xcodebuild",
+        &[String::from("-version")],
+    )?;
+    let sdk_version = run_command_capture_owned(
+        root,
+        "xcrun",
+        &[
+            String::from("--sdk"),
+            String::from(IOS_DEVICE_BUILD_SDK),
+            String::from("--show-sdk-version"),
+        ],
+    )?;
     Ok(UIKitHostBuildStamp {
         destination: String::from(destination),
         development_team: String::from(development_team),
         source_fingerprint: fingerprint_uikit_host_build_inputs(root, spec, project)?,
+        xcodebuild_version: xcodebuild_version.trim().replace('\n', " | "),
+        sdk: String::from(IOS_DEVICE_BUILD_SDK),
+        sdk_version: String::from(sdk_version.trim()),
+        build_configuration: String::from(IOS_DEVICE_BUILD_CONFIGURATION),
         repository: repository.clone(),
     })
+}
+
+fn fingerprint_path_metadata(path: &Path) -> Result<u64>
+{
+   let mut hasher = DefaultHasher::new();
+   hash_file_metadata_recursive(path, &mut hasher)?;
+   Ok(hasher.finish())
+}
+
+fn hash_path_contents_recursive(path: &Path, root: &Path, hasher: &mut Sha256) -> Result<()>
+{
+   let metadata = fs::symlink_metadata(path)
+      .with_context(|| format!("reading {}", path.display()))?;
+   let relative = path.strip_prefix(root).unwrap_or(path);
+   hasher.update(relative.to_string_lossy().as_bytes());
+   if metadata.file_type().is_symlink()
+   {
+      hasher.update(b"symlink\0");
+      let target = fs::read_link(path)
+         .with_context(|| format!("reading symlink {}", path.display()))?;
+      hasher.update(target.to_string_lossy().as_bytes());
+      return Ok(());
+   }
+   if metadata.is_dir()
+   {
+      hasher.update(b"directory\0");
+      let mut children = fs::read_dir(path)
+         .with_context(|| format!("reading {}", path.display()))?
+         .collect::<std::result::Result<Vec<_>, _>>()
+         .with_context(|| format!("reading {}", path.display()))?;
+      children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+      for child in children
+      {
+         hash_path_contents_recursive(&child.path(), root, hasher)?;
+      }
+      return Ok(());
+   }
+   hasher.update(b"file\0");
+   let mut file = fs::File::open(path)
+      .with_context(|| format!("reading {}", path.display()))?;
+   let mut buffer = [0u8; 64 * 1024];
+   loop
+   {
+      let read = file.read(&mut buffer)
+         .with_context(|| format!("reading {}", path.display()))?;
+      if read == 0
+      {
+         break;
+      }
+      hasher.update(&buffer[..read]);
+   }
+   Ok(())
+}
+
+/// Returns a deterministic content/tree digest for an external device-evidence input.
+pub fn digest_device_evidence_input(path: &Path) -> Result<String>
+{
+   let mut hasher = Sha256::new();
+   hash_path_contents_recursive(path, path, &mut hasher)?;
+   Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn current_uikit_host_build_artifact_stamp(
+   derived_data_path: &Path,
+   build: &UIKitHostBuildStamp,
+) -> Result<UIKitHostBuildArtifactStamp>
+{
+   let built_app = resolve_built_uikit_app(derived_data_path)?;
+   let xctestrun_path =
+      resolve_built_xctestrun_path(derived_data_path, DEFAULT_UIKIT_SCHEME)?;
+   Ok(UIKitHostBuildArtifactStamp {
+      build: build.clone(),
+      app_fingerprint: fingerprint_path_metadata(&built_app.app_path)?,
+      xctestrun_fingerprint: fingerprint_path_metadata(&xctestrun_path)?,
+   })
 }
 
 fn prepare_uikit_host_device_build_context(
@@ -5802,17 +6038,16 @@ fn uikit_host_build_can_be_reused(
     let Some(saved_stamp) = load_uikit_host_build_stamp(derived_data_path)? else {
         return Ok(false);
     };
-    if &saved_stamp != expected_stamp {
+    if &saved_stamp.build != expected_stamp {
         return Ok(false);
     }
-    if resolve_built_uikit_app(derived_data_path).is_err() {
+    let Ok(current_stamp) = current_uikit_host_build_artifact_stamp(
+        derived_data_path,
+        expected_stamp,
+    ) else {
         return Ok(false);
-    }
-    if resolve_built_xctestrun_path(derived_data_path, DEFAULT_UIKIT_SCHEME).is_err() {
-        return Ok(false);
-    }
-    let built_app = resolve_built_uikit_app(derived_data_path)?;
-    if !built_app.app_path.exists() || !built_app.info_plist_path.exists() {
+    };
+    if saved_stamp != current_stamp {
         return Ok(false);
     }
     println!("reusing unchanged iOS build artifacts at {}", derived_data_path.display());
@@ -5827,14 +6062,18 @@ fn prepare_uikit_host_device_build(
     reuse_derived_data: Option<&Path>,
     context: &UIKitHostBuildContext,
 ) -> Result<PreparedUIKitHostBuild> {
-    if reuse_derived_data.is_some() {
-        if !derived_data_path.exists() {
-            bail!(
-                "requested --reuse-derived-data path does not exist: {}",
-                derived_data_path.display()
-            );
-        }
-    } else if !uikit_host_build_can_be_reused(derived_data_path, &context.expected_stamp)? {
+    let reusable = uikit_host_build_can_be_reused(
+        derived_data_path,
+        &context.expected_stamp,
+    )?;
+    if reuse_derived_data.is_some() && !reusable
+    {
+        bail!(
+            "requested --reuse-derived-data path does not contain artifacts matching the current source, Release toolchain configuration, and artifact fingerprints: {}",
+            derived_data_path.display()
+        );
+    }
+    if !reusable {
         run_uikit_device_build_for_testing(
             root,
             project,
@@ -5842,16 +6081,25 @@ fn prepare_uikit_host_device_build(
             &context.development_team,
             derived_data_path,
         )?;
-        write_uikit_host_build_stamp(derived_data_path, &context.expected_stamp)?;
+        let artifact_stamp = current_uikit_host_build_artifact_stamp(
+            derived_data_path,
+            &context.expected_stamp,
+        )?;
+        write_uikit_host_build_stamp(derived_data_path, &artifact_stamp)?;
     }
     let built_app = resolve_built_uikit_app(derived_data_path)?;
     let uikit_xctestrun_path =
         resolve_built_xctestrun_path(derived_data_path, DEFAULT_UIKIT_SCHEME)?;
+    let artifact_stamp = current_uikit_host_build_artifact_stamp(
+        derived_data_path,
+        &context.expected_stamp,
+    )?;
     install_uikit_device_app(root, device, &built_app)?;
     Ok(PreparedUIKitHostBuild {
         destination: context.destination.clone(),
         built_app,
         uikit_xctestrun_path,
+        artifact_stamp,
     })
 }
 
@@ -5872,6 +6120,97 @@ fn uikit_device_perf_environment_for_specs(
         append_uikit_case_specific_perf_environment(&mut env, spec);
     }
     env.into_iter().collect()
+}
+
+fn append_device_evidence_environment(
+   identity: &mut BTreeMap<String, String>,
+   implementation: &str,
+   phase: &str,
+   test_name: &str,
+   environment: impl IntoIterator<Item = (String, String)>,
+)
+{
+   for (key, value) in environment
+   {
+      identity.insert(
+         format!("{}:{}:{}:{}", implementation, phase, test_name, key),
+         value,
+      );
+   }
+}
+
+fn device_evidence_run_stamp(
+   suite: &str,
+   build: &PreparedUIKitHostBuild,
+   device: &UIKitPhysicalDevice,
+   uikit_specs: &[&'static UIKitCaseSpec],
+   oxide_specs: &[&'static OxideOnscreenCaseSpec],
+   refresh_mode: UIKitDeviceRefreshMode,
+   trace_seconds: u64,
+   watch_capture: bool,
+   power_traces: Vec<DeviceEvidenceInputStamp>,
+) -> DeviceEvidenceRunStamp
+{
+   let mut case_ids = Vec::with_capacity(uikit_specs.len() + oxide_specs.len());
+   let mut environment = BTreeMap::new();
+   for spec in uikit_specs
+   {
+      case_ids.push(format!(
+         "uikit:{}:{}:{}",
+         spec.test_name,
+         spec.case_id,
+         spec.oxide_case_id,
+      ));
+      append_device_evidence_environment(
+         &mut environment,
+         "uikit",
+         "metrics",
+         spec.test_name,
+         uikit_device_perf_environment_for_specs(refresh_mode, &[*spec]),
+      );
+      append_device_evidence_environment(
+         &mut environment,
+         "uikit",
+         "launch",
+         spec.test_name,
+         uikit_perf_launch_environment(spec, refresh_mode, false, watch_capture),
+      );
+   }
+   for spec in oxide_specs
+   {
+      case_ids.push(format!("oxide:{}:{}", spec.test_name, spec.case_id));
+      let launch_spec = oxide_onscreen_launch_spec(spec);
+      append_device_evidence_environment(
+         &mut environment,
+         "oxide",
+         "launch",
+         spec.test_name,
+         uikit_perf_launch_environment(
+            &launch_spec,
+            refresh_mode,
+            false,
+            watch_capture,
+         ),
+      );
+   }
+   DeviceEvidenceRunStamp {
+      schema_version: 1,
+      host_build: build.artifact_stamp.clone(),
+      suite: String::from(suite),
+      case_ids,
+      trace_seconds,
+      refresh_mode: String::from(refresh_mode.report_value()),
+      watch_capture,
+      device_name: device.name.clone(),
+      device_os_version: device.os_version.clone(),
+      device_os_build: device.os_build.clone(),
+      device_product_type: device.product_type.clone(),
+      environment,
+      power_traces,
+      generated_label: std::env::var("PERF_REPORT_DATE")
+         .ok()
+         .filter(|value| !value.trim().is_empty()),
+   }
 }
 
 pub fn uikit_device_perf_environment_for_test_name(
@@ -9379,10 +9718,6 @@ fn parse_ios_react_device_perf_cli(args: &[String]) -> Result<IosReactDevicePerf
             "--result-root" => {
                 let path = it.next().context("missing value for --result-root")?;
                 cli.result_root = Some(PathBuf::from(path));
-            }
-            "--reuse-derived-data" => {
-                let path = it.next().context("missing value for --reuse-derived-data")?;
-                cli.reuse_derived_data = Some(PathBuf::from(path));
             }
             "--team" => {
                 let value = it.next().context("missing value for --team")?;
