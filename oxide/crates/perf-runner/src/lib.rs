@@ -20,6 +20,7 @@ use std::fs;
 use std::hint::black_box;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
@@ -746,16 +747,153 @@ struct Cli {
     write_baseline: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RepositoryProvenance
+{
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_ref: Option<String>,
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_head_commit: Option<String>,
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_tree: Option<String>,
+}
+
+impl RepositoryProvenance
+{
+   pub fn resolve_root(path: &Path) -> Result<PathBuf>
+   {
+      let root = PathBuf::from(repository_git_output(path, &["rev-parse", "--show-toplevel"])?);
+      ensure!(root.is_absolute(), "Git top level is not an absolute path");
+      fs::canonicalize(&root).with_context(|| format!("resolving Git top level {}", root.display()))
+   }
+
+   pub fn capture(root: &Path) -> Result<Self>
+   {
+      let repository_root = Self::resolve_root(root)?;
+      let status = repository_git_output(&repository_root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+      ensure!(status.is_empty(), "repository worktree is not clean at evidence capture");
+      let repository_ref = repository_git_output(&repository_root, &["symbolic-ref", "--quiet", "HEAD"])?;
+      let repository_head_commit = repository_git_output(&repository_root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+      let repository_tree = repository_git_output(&repository_root, &["rev-parse", "--verify", "HEAD^{tree}"])?;
+      let provenance = Self {
+         repository_ref: Some(repository_ref),
+         repository_head_commit: Some(repository_head_commit),
+         repository_tree: Some(repository_tree),
+      };
+      provenance.validate()?;
+      Ok(provenance)
+   }
+
+   pub fn validate(&self) -> Result<()>
+   {
+      let repository_ref = self.repository_ref.as_deref().context("missing repository ref")?;
+      let repository_head_commit = self.repository_head_commit.as_deref().context("missing repository HEAD commit")?;
+      let repository_tree = self.repository_tree.as_deref().context("missing repository tree")?;
+      ensure!(
+         repository_ref.starts_with("refs/heads/") && repository_ref.len() > "refs/heads/".len(),
+         "repository ref is not a named branch"
+      );
+      ensure!(is_git_object_id(repository_head_commit), "repository HEAD commit is malformed");
+      ensure!(is_git_object_id(repository_tree), "repository tree is malformed");
+      Ok(())
+   }
+
+   pub fn ensure_unchanged(&self, root: &Path) -> Result<()>
+   {
+      self.validate()?;
+      let current = Self::capture(root).context("recapturing repository source revision")?;
+      ensure!(current == *self, "repository ref, HEAD commit, or tree changed during evidence capture");
+      Ok(())
+   }
+}
+
+fn repository_git_output(root: &Path, args: &[&str]) -> Result<String>
+{
+   let output = Command::new("git")
+      .arg("-C")
+      .arg(root)
+      .args(args)
+      .output()
+      .with_context(|| format!("running git {}", args.join(" ")))?;
+   ensure!(
+      output.status.success(),
+      "git {} failed: {}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr).trim()
+   );
+   String::from_utf8(output.stdout)
+      .map(|text| text.trim().to_string())
+      .with_context(|| format!("decoding git {} output", args.join(" ")))
+}
+
+fn is_git_object_id(value: &str) -> bool
+{
+   matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub fn assert_report_repository_provenance(version: u32, repository: &RepositoryProvenance) -> Result<()>
+{
+   match version
+   {
+      1 => ensure!(
+         repository == &RepositoryProvenance::default(),
+         "version 1 perf reports cannot carry version 2 repository provenance"
+      ),
+      2 => repository.validate().context("validating version 2 perf report repository provenance")?,
+      _ => bail!("unsupported perf report version {}", version),
+   }
+   Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct PerfReport {
     pub version: u32,
     pub suite: String,
     pub generated_label: Option<String>,
+    #[serde(flatten, default)]
+    pub repository: RepositoryProvenance,
     pub cases: Vec<PerfCaseResult>,
     pub coverage: CoverageReport,
     #[serde(default)]
     pub contract: ContractCoverageReport,
     pub findings: Vec<AuditFinding>,
+}
+
+#[derive(Serialize)]
+struct SerializablePerfReport<'a>
+{
+   version: u32,
+   suite: &'a str,
+   generated_label: &'a Option<String>,
+   #[serde(flatten)]
+   repository: &'a RepositoryProvenance,
+   cases: &'a [PerfCaseResult],
+   coverage: &'a CoverageReport,
+   contract: &'a ContractCoverageReport,
+   findings: &'a [AuditFinding],
+}
+
+impl Serialize for PerfReport
+{
+   fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+   where
+      S: serde::Serializer,
+   {
+      assert_report_repository_provenance(self.version, &self.repository)
+         .map_err(serde::ser::Error::custom)?;
+      SerializablePerfReport {
+         version: self.version,
+         suite: &self.suite,
+         generated_label: &self.generated_label,
+         repository: &self.repository,
+         cases: &self.cases,
+         coverage: &self.coverage,
+         contract: &self.contract,
+         findings: &self.findings,
+      }
+      .serialize(serializer)
+   }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -2385,8 +2523,26 @@ fn run_suite(cli: Cli) -> Result<()>
       !(cli.write_baseline && !perf_case_filters().is_empty()),
       "--write-baseline cannot be combined with OXIDE_PERF_RUNNER_FILTER"
    );
+   let working_directory = std::env::current_dir().context("resolving performance-runner working directory")?;
+   let repository_root = RepositoryProvenance::resolve_root(&working_directory)
+      .context("resolving performance-runner Git top level")?;
+   let repository = match RepositoryProvenance::capture(&repository_root)
+   {
+      Ok(repository) => Some(repository),
+      Err(error) if cli.write_baseline =>
+      {
+         return Err(error).context("capturing clean repository source revision for baseline promotion");
+      }
+      Err(_) => None,
+   };
    let scope = perf_suite_scope();
-   let report = collect_suite(cli.smoke)?;
+   let mut report = collect_suite(cli.smoke)?;
+   if let Some(repository) = repository.as_ref()
+   {
+      repository.ensure_unchanged(&repository_root)?;
+      report.version = 2;
+      report.repository = repository.clone();
+   }
    if scope == PerfSuiteScope::Canonical
    {
       assert_canonical_case_inventory(&report.cases)?;
@@ -2421,6 +2577,10 @@ fn run_suite(cli: Cli) -> Result<()>
       cli.markdown_out
    };
 
+   if let Some(repository) = repository.as_ref()
+   {
+      repository.ensure_unchanged(&repository_root)?;
+   }
    if let Some(path) = json_out.as_ref()
    {
       write_report_json(path, &report)?;
@@ -2673,6 +2833,7 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
            (PerfSuiteScope::Touched, true) => "touched-smoke",
         }),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         cases,
         coverage,
         contract,
@@ -10021,7 +10182,11 @@ fn push_missing_metric(case: &PerfCaseResult, key: &str, missing: &mut Vec<Strin
 
 fn load_report(path: &Path) -> Result<PerfReport> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    let report: PerfReport =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    assert_report_repository_provenance(report.version, &report.repository)
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(report)
 }
 
 fn write_report_json(path: &Path, report: &PerfReport) -> Result<()> {
@@ -10051,6 +10216,8 @@ fn write_markdown_outputs(
     report: &PerfReport,
     comparison: Option<&PerfComparison>,
 ) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating perf report repository provenance before markdown write")?;
     ensure_parent(latest_path)?;
     let body = render_markdown(report, comparison);
     fs::write(latest_path, body.as_bytes())
@@ -10072,6 +10239,24 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Suite: `{}`\n", report.suite));
     if let Some(label) = report.generated_label.as_ref() {
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Label: `{}`\n", label));
+    }
+    if let (Some(repository_ref), Some(repository_head_commit), Some(repository_tree)) = (
+        report.repository.repository_ref.as_ref(),
+        report.repository.repository_head_commit.as_ref(),
+        report.repository.repository_tree.as_ref(),
+    ) {
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository ref: `{}`\n", repository_ref),
+        );
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository HEAD: `{}`\n", repository_head_commit),
+        );
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository tree: `{}`\n", repository_tree),
+        );
     }
    let _ = std::fmt::Write::write_fmt(
       &mut out,

@@ -1,8 +1,9 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use oxide_perf_runner::{
-    compare_reports, render_report_markdown, AuditFinding, ContractCoverageEntry,
-    ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
+    assert_report_repository_provenance, compare_reports, render_report_markdown,
+    AuditFinding, ContractCoverageEntry, ContractCoverageReport, CoverageReport,
+    PerfCaseResult, PerfReport, RepositoryProvenance,
 };
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
@@ -1822,17 +1823,69 @@ impl UIKitDeviceRefreshMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct UIKitPerfReport {
     pub version: u32,
     pub suite: String,
     pub generated_label: Option<String>,
+    #[serde(flatten, default)]
+    pub repository: RepositoryProvenance,
     pub device_name: String,
     pub energy_status: String,
     #[serde(default)]
     pub contract: UIKitContractCoverageReport,
     pub cases: Vec<UIKitPerfCase>,
     pub notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SerializableUIKitPerfReport<'a>
+{
+   version: u32,
+   suite: &'a str,
+   generated_label: &'a Option<String>,
+   #[serde(flatten)]
+   repository: &'a RepositoryProvenance,
+   device_name: &'a str,
+   energy_status: &'a str,
+   contract: &'a UIKitContractCoverageReport,
+   cases: &'a [UIKitPerfCase],
+   notes: &'a [String],
+}
+
+impl Serialize for UIKitPerfReport
+{
+   fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+   where
+      S: serde::Serializer,
+   {
+      assert_report_repository_provenance(self.version, &self.repository)
+         .map_err(serde::ser::Error::custom)?;
+      SerializableUIKitPerfReport {
+         version: self.version,
+         suite: &self.suite,
+         generated_label: &self.generated_label,
+         repository: &self.repository,
+         device_name: &self.device_name,
+         energy_status: &self.energy_status,
+         contract: &self.contract,
+         cases: &self.cases,
+         notes: &self.notes,
+      }
+      .serialize(serializer)
+   }
+}
+
+fn bind_perf_report_repository(report: &mut PerfReport, repository: &RepositoryProvenance)
+{
+   report.version = 2;
+   report.repository = repository.clone();
+}
+
+fn bind_uikit_report_repository(report: &mut UIKitPerfReport, repository: &RepositoryProvenance)
+{
+   report.version = 2;
+   report.repository = repository.clone();
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2627,6 +2680,10 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let watch_capture = stage == CompareDeviceRunStage::WatchableSmoke;
     let selected_specs = selected_uikit_case_specs_for_compare_stage(&cli.cases, stage, family)?;
     let selected_oxide_specs = selected_oxide_onscreen_case_specs_for_uikit_specs(&selected_specs)?;
+    let repository_root = RepositoryProvenance::resolve_root(&root)
+        .with_context(|| "resolving paired device evidence Git top level")?;
+    let repository = RepositoryProvenance::capture(&repository_root)
+        .with_context(|| "capturing clean repository source revision for paired device evidence")?;
     let device = resolve_uikit_physical_device(&root, cli.device.as_deref())?;
     let trace_seconds = cli.trace_seconds.unwrap_or(DEFAULT_UIKIT_DEVICE_TRACE_SECONDS);
     let refresh_mode = cli.refresh_mode;
@@ -2638,6 +2695,7 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
         &device,
         trace_seconds,
         cli.team.as_deref(),
+        &repository,
     )?;
     prepare_resumable_uikit_device_result_root(
         &stage_result_root,
@@ -2668,14 +2726,16 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let uikit_current_json = uikit_result_root.join("current.json");
     let expected_uikit_case_ids =
         selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let uikit_report = if uikit_current_json.is_file() {
+    let mut uikit_report = if uikit_current_json.is_file() {
         let cached = load_uikit_report(&uikit_current_json)?;
-        if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids) {
+        if uikit_report_matches_case_ids(&cached, &expected_uikit_case_ids)
+            && cached.repository == repository
+        {
             println!("Reusing completed UIKit device report at {}.", uikit_current_json.display());
             cached
         } else {
             println!(
-                "Discarding completed UIKit device report at {} because its case set does not match the selected run.",
+                "Discarding completed UIKit device report at {} because its case set or repository revision does not match the selected run.",
                 uikit_current_json.display()
             );
             capture_uikit_device_report(
@@ -2705,6 +2765,9 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
             watch_capture,
         )?
     };
+    bind_uikit_report_repository(&mut uikit_report, &repository);
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository before UIKit device report write")?;
     validate_uikit_device_report_metric_contract(&uikit_report)
         .with_context(|| "validating UIKit device current report metric contract")?;
     let uikit_comparison = if let Some(path) = cli.uikit_compare.as_ref() {
@@ -2727,14 +2790,16 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     let oxide_current_json = oxide_result_root.join("current.json");
     let expected_oxide_case_ids =
         selected_oxide_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let oxide_report = if oxide_current_json.is_file() {
+    let mut oxide_report = if oxide_current_json.is_file() {
         let cached = load_oxide_device_report(&oxide_current_json)?;
-        if perf_report_matches_case_ids(&cached, &expected_oxide_case_ids) {
+        if perf_report_matches_case_ids(&cached, &expected_oxide_case_ids)
+            && cached.repository == repository
+        {
             println!("Reusing completed Oxide device report at {}.", oxide_current_json.display());
             cached
         } else {
             println!(
-                "Discarding completed Oxide device report at {} because its case set does not match the selected run.",
+                "Discarding completed Oxide device report at {} because its case set or repository revision does not match the selected run.",
                 oxide_current_json.display()
             );
             capture_oxide_onscreen_device_report(
@@ -2760,6 +2825,9 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
             watch_capture,
         )?
     };
+    bind_perf_report_repository(&mut oxide_report, &repository);
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository before Oxide device report write")?;
     validate_oxide_device_report_metric_contract(&oxide_report)
         .with_context(|| "validating Oxide device current report metric contract")?;
     let oxide_comparison = if let Some(path) = cli.oxide_compare.as_ref() {
@@ -2795,6 +2863,8 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
     }
 
     if cli.write_baseline {
+        repository.ensure_unchanged(&repository_root)
+            .with_context(|| "validating repository before paired device baseline promotion")?;
         write_uikit_report_json(Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_JSON), &uikit_report)?;
         write_uikit_markdown(
             Path::new(DEFAULT_UIKIT_DEVICE_BASELINE_MARKDOWN),
@@ -2828,6 +2898,10 @@ fn ios_compare_device_perf(args: &[String]) -> Result<()> {
 fn ios_device_perf(args: &[String]) -> Result<()> {
     let cli = parse_ios_device_perf_cli(args)?;
     let root = locate_workspace_root()?;
+    let repository_root = RepositoryProvenance::resolve_root(&root)
+        .with_context(|| "resolving UIKit device evidence Git top level")?;
+    let repository = RepositoryProvenance::capture(&repository_root)
+        .with_context(|| "capturing clean repository source revision for UIKit device evidence")?;
     let spec = root.join("host/ios-app/App/project.yml");
     let project = root.join("host/ios-app/App/OxideHost.xcodeproj");
     let result_root =
@@ -2850,6 +2924,7 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
         &device,
         trace_seconds,
         cli.team.as_deref(),
+        &repository,
     )?;
     prepare_resumable_uikit_device_result_root(
         &result_root,
@@ -2874,14 +2949,16 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
     )?;
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let report = if current_json.is_file() {
+    let mut report = if current_json.is_file() {
         let cached = load_uikit_report(&current_json)?;
-        if uikit_report_matches_case_ids(&cached, &expected_case_ids) {
+        if uikit_report_matches_case_ids(&cached, &expected_case_ids)
+            && cached.repository == repository
+        {
             println!("Reusing completed UIKit device report at {}.", current_json.display());
             cached
         } else {
             println!(
-                "Discarding completed UIKit device report at {} because its case set does not match the selected run.",
+                "Discarding completed UIKit device report at {} because its case set or repository revision does not match the selected run.",
                 current_json.display()
             );
             capture_uikit_device_report(
@@ -2911,6 +2988,9 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
             false,
         )?
     };
+    bind_uikit_report_repository(&mut report, &repository);
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository before UIKit device report write")?;
     validate_uikit_device_report_metric_contract(&report)
         .with_context(|| "validating UIKit device current report metric contract")?;
     let comparison = if let Some(path) = cli.compare.as_ref() {
@@ -2961,6 +3041,10 @@ fn ios_device_perf(args: &[String]) -> Result<()> {
 fn ios_react_device_perf(args: &[String]) -> Result<()> {
     let cli = parse_ios_react_device_perf_cli(args)?;
     let root = locate_workspace_root()?;
+    let repository_root = RepositoryProvenance::resolve_root(&root)
+        .with_context(|| "resolving React device evidence Git top level")?;
+    let repository = RepositoryProvenance::capture(&repository_root)
+        .with_context(|| "capturing clean repository source revision for React device evidence")?;
     let workspace = root.join(DEFAULT_REACT_DEVICE_WORKSPACE_RELATIVE_PATH);
     let result_root =
         cli.result_root.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_REACT_DEVICE_RESULT_ROOT));
@@ -3029,13 +3113,12 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
 
     let stdout = fs::read_to_string(&react_run.stdout_path)
         .with_context(|| format!("reading {}", react_run.stdout_path.display()))?;
-    let report = parse_react_native_device_report_json(
+    let mut report = parse_react_native_device_report_json(
         &metrics_json,
         &stdout,
         device.name.as_str(),
         built_app.executable_name.as_str(),
     )?;
-    let mut report = report;
     if let Some(case) = report.cases.first_mut() {
         let parsed_trace = ParsedDeviceTrace::parse(
             &root,
@@ -3072,6 +3155,9 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
         "GPU trace: all-processes Metal System Trace + Points of Interest, filtered back to the `{}` process with shared PerfWorkload windows.",
         built_app.executable_name
     ));
+    bind_perf_report_repository(&mut report, &repository);
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository before React device report write")?;
     let comparison = if let Some(path) = cli.compare.as_ref() {
         let baseline = load_oxide_device_report(path)?;
         Some(compare_reports(&report, &baseline))
@@ -3117,6 +3203,10 @@ fn ios_react_device_perf(args: &[String]) -> Result<()> {
 fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     let cli = parse_ios_oxide_device_perf_cli(args)?;
     let root = locate_workspace_root()?;
+    let repository_root = RepositoryProvenance::resolve_root(&root)
+        .with_context(|| "resolving Oxide device evidence Git top level")?;
+    let repository = RepositoryProvenance::capture(&repository_root)
+        .with_context(|| "capturing clean repository source revision for Oxide device evidence")?;
     let spec = root.join("host/ios-app/App/project.yml");
     let project = root.join("host/ios-app/App/OxideHost.xcodeproj");
     let result_root =
@@ -3148,6 +3238,7 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
         &device,
         trace_seconds,
         cli.team.as_deref(),
+        &repository,
     )?;
     prepare_resumable_uikit_device_result_root(
         &result_root,
@@ -3167,14 +3258,16 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
 
     let current_json = result_root.join("current.json");
     let expected_case_ids = selected_specs.iter().map(|spec| spec.case_id).collect::<Vec<_>>();
-    let report = if current_json.is_file() {
+    let mut report = if current_json.is_file() {
         let cached = load_oxide_device_report(&current_json)?;
-        if perf_report_matches_case_ids(&cached, &expected_case_ids) {
+        if perf_report_matches_case_ids(&cached, &expected_case_ids)
+            && cached.repository == repository
+        {
             println!("Reusing completed Oxide device report at {}.", current_json.display());
             cached
         } else {
             println!(
-                "Discarding completed Oxide device report at {} because its case set does not match the selected run.",
+                "Discarding completed Oxide device report at {} because its case set or repository revision does not match the selected run.",
                 current_json.display()
             );
             capture_oxide_onscreen_device_report(
@@ -3200,6 +3293,9 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
             false,
         )?
     };
+    bind_perf_report_repository(&mut report, &repository);
+    repository.ensure_unchanged(&repository_root)
+        .with_context(|| "validating repository before Oxide device report write")?;
     validate_oxide_device_report_metric_contract(&report)
         .with_context(|| "validating Oxide device current report metric contract")?;
     let comparison = if let Some(path) = cli.compare.as_ref() {
@@ -3317,6 +3413,8 @@ pub struct UIKitHostBuildStamp {
     pub destination: String,
     pub development_team: String,
     pub source_fingerprint: u64,
+    #[serde(default)]
+    pub repository: RepositoryProvenance,
 }
 
 #[derive(Debug, Default)]
@@ -5655,11 +5753,13 @@ fn expected_uikit_host_build_stamp(
     project: &Path,
     destination: &str,
     development_team: &str,
+    repository: &RepositoryProvenance,
 ) -> Result<UIKitHostBuildStamp> {
     Ok(UIKitHostBuildStamp {
         destination: String::from(destination),
         development_team: String::from(development_team),
         source_fingerprint: fingerprint_uikit_host_build_inputs(root, spec, project)?,
+        repository: repository.clone(),
     })
 }
 
@@ -5670,6 +5770,7 @@ fn prepare_uikit_host_device_build_context(
     device: &UIKitPhysicalDevice,
     trace_seconds: u64,
     requested_team: Option<&str>,
+    repository: &RepositoryProvenance,
 ) -> Result<UIKitHostBuildContext> {
     ensure_uikit_device_ready(root, device)?;
     if uikit_device_support_required(trace_seconds) {
@@ -5679,8 +5780,15 @@ fn prepare_uikit_host_device_build_context(
     let development_team =
         resolve_uikit_development_team(root, requested_team, Some(device.udid.as_str()))?;
     ensure_generated_uikit_project(root, spec)?;
-    let expected_stamp =
-        expected_uikit_host_build_stamp(root, spec, project, &destination, &development_team)?;
+    repository.ensure_unchanged(root).context("validating repository after Xcode project generation")?;
+    let expected_stamp = expected_uikit_host_build_stamp(
+        root,
+        spec,
+        project,
+        &destination,
+        &development_team,
+        repository,
+    )?;
     Ok(UIKitHostBuildContext { destination, development_team, expected_stamp })
 }
 
@@ -6409,6 +6517,7 @@ fn capture_uikit_device_report(
         version: 1,
         suite: String::from("device"),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         device_name: device.name.clone(),
         energy_status: if !trace_enabled {
             String::from(
@@ -7439,6 +7548,7 @@ fn capture_oxide_onscreen_device_report(
         version: 1,
         suite: String::from("oxide-device"),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         coverage: build_oxide_onscreen_device_coverage(&cases),
         contract: build_oxide_onscreen_device_contract(&cases, device, built_app),
         findings: vec![AuditFinding {
@@ -12174,6 +12284,7 @@ pub fn parse_uikit_report_json(text: &str) -> Result<UIKitPerfReport> {
         version: 1,
         suite: String::from("simulator"),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         device_name,
         energy_status: String::from(
             "True energy metrics are unavailable on iOS Simulator; Apple Power Profiler is unsupported there. CPU cycles are retained as the stable on-simulator energy proxy while direct device GPU and energy reports live under benchmarks/uikit-device/.",
@@ -12416,15 +12527,25 @@ fn is_simulator_clock_proxy_case(case_id: &str) -> bool {
 
 fn load_uikit_report(path: &Path) -> Result<UIKitPerfReport> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    let report: UIKitPerfReport =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    assert_report_repository_provenance(report.version, &report.repository)
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(report)
 }
 
 fn load_oxide_device_report(path: &Path) -> Result<PerfReport> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    let report: PerfReport =
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    assert_report_repository_provenance(report.version, &report.repository)
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(report)
 }
 
 fn write_oxide_device_report_json(path: &Path, report: &PerfReport) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating Oxide device repository provenance before JSON write")?;
     validate_oxide_device_report_metric_contract(report)
         .with_context(|| "validating Oxide device report metric contract before JSON write")?;
     ensure_parent_dir(path)?;
@@ -13257,6 +13378,7 @@ pub fn parse_react_native_device_report_json(
         version: 1,
         suite: String::from("react-native-device"),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         cases: vec![case],
         coverage: CoverageReport {
             image_pipeline_total: 1,
@@ -13307,6 +13429,8 @@ fn write_oxide_device_report_markdown(
     report: &PerfReport,
     comparison: Option<&oxide_perf_runner::PerfComparison>,
 ) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating Oxide device repository provenance before markdown write")?;
     validate_oxide_device_report_metric_contract(report)
         .with_context(|| "validating Oxide device report metric contract before markdown write")?;
     ensure_parent_dir(path)?;
@@ -13325,6 +13449,8 @@ fn write_oxide_device_report_markdown(
 }
 
 fn write_react_device_report_json(path: &Path, report: &PerfReport) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating React device repository provenance before JSON write")?;
     ensure_parent_dir(path)?;
     let json = serde_json::to_string_pretty(report)
         .with_context(|| "serializing React Native perf report")?;
@@ -13336,6 +13462,8 @@ fn write_react_device_report_markdown(
     report: &PerfReport,
     comparison: Option<&oxide_perf_runner::PerfComparison>,
 ) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating React device repository provenance before markdown write")?;
     ensure_parent_dir(path)?;
     let mut markdown = render_report_markdown(report, comparison);
     markdown = markdown.replacen(
@@ -13449,12 +13577,28 @@ fn print_react_device_summary(
 }
 
 fn write_uikit_report_json(path: &Path, report: &UIKitPerfReport) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating UIKit repository provenance before JSON write")?;
     validate_uikit_device_report_metric_contract(report)
         .with_context(|| "validating UIKit report metric contract before JSON write")?;
     ensure_parent_dir(path)?;
     let json =
         serde_json::to_string_pretty(report).with_context(|| "serializing UIKit perf report")?;
     fs::write(path, json).with_context(|| format!("writing {}", path.display()))
+}
+
+fn push_repository_provenance_markdown(out: &mut String, repository: &RepositoryProvenance)
+{
+   if let (Some(repository_ref), Some(repository_head_commit), Some(repository_tree)) = (
+      repository.repository_ref.as_ref(),
+      repository.repository_head_commit.as_ref(),
+      repository.repository_tree.as_ref(),
+   )
+   {
+      out.push_str(&format!("- Repository ref: `{}`\n", repository_ref));
+      out.push_str(&format!("- Repository HEAD: `{}`\n", repository_head_commit));
+      out.push_str(&format!("- Repository tree: `{}`\n", repository_tree));
+   }
 }
 
 fn push_uikit_contract_markdown(out: &mut String, report: &UIKitPerfReport) {
@@ -13498,6 +13642,8 @@ fn write_uikit_markdown(
     report: &UIKitPerfReport,
     comparison: Option<&UIKitPerfComparison>,
 ) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating UIKit repository provenance before markdown write")?;
     validate_uikit_device_report_metric_contract(report)
         .with_context(|| "validating UIKit report metric contract before markdown write")?;
     if report.suite == "device" {
@@ -13518,6 +13664,7 @@ fn write_uikit_markdown(
     if let Some(label) = report.generated_label.as_ref() {
         out.push_str(&format!("- Label: `{}`\n", label));
     }
+    push_repository_provenance_markdown(&mut out, &report.repository);
     if let Some(comp) = comparison {
         out.push_str(&format!("- Baseline matches: `{}`\n", comp.matched));
         out.push_str(&format!("- Missing baseline cases: `{}`\n", comp.missing_baseline.len()));
@@ -13622,6 +13769,7 @@ fn write_uikit_device_markdown(
     if let Some(label) = report.generated_label.as_ref() {
         out.push_str(&format!("- Label: `{}`\n", label));
     }
+    push_repository_provenance_markdown(&mut out, &report.repository);
     if let Some(comp) = comparison {
         out.push_str(&format!("- Baseline matches: `{}`\n", comp.matched));
         out.push_str(&format!("- Missing baseline cases: `{}`\n", comp.missing_baseline.len()));

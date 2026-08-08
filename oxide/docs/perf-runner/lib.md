@@ -43,6 +43,12 @@ silently expanding into every registered permutation.
 - `oxide_perf_runner::compare_reports(current: &PerfReport, baseline: &PerfReport) -> PerfComparison`
   - Applies regression gating against the persisted baseline.
   - Main callers: suite execution and report tests.
+- `oxide_perf_runner::RepositoryProvenance::{resolve_root, capture, validate, ensure_unchanged}`
+  - Resolves the enclosing Git top level, requires a clean named branch, records its ref/HEAD/tree triple, and rejects source drift before evidence is written.
+  - Main callers: workspace and physical-device evidence entry points.
+- `oxide_perf_runner::assert_report_repository_provenance(version, repository) -> anyhow::Result<()>`
+  - Keeps historical version-1 reports readable without source fields while requiring every version-2 serialization to carry a complete, well-formed provenance triple.
+  - Main callers: report serializers, loaders, and Markdown writers.
 - `oxide_perf_runner::assert_contract_coverage(contract: &ContractCoverageReport) -> anyhow::Result<()>`
   - Enforces stable contract coverage status values and rejects implemented rows whose notes still describe unresolved gaps.
   - Main callers: suite execution and report tests.
@@ -94,6 +100,7 @@ The canonical workspace bridge signal is the app-owned permission callback fanou
 
 The canonical workspace report is serialized to JSON and Markdown, compared by gated median, and frozen by schema, case-ID, metric-key, and workload-contract tests. Serializer and comparison harnesses derive capacity and dispatch from the report they load; no historical byte count, metric-key count, or latest-versus-CI row pairing defines the current report shape.
 The publication header reports the selected suite and exact case count. It does not print catalog-wide covered/total fractions, because touched and canonical runs deliberately select only the cases they own; the contract table below the header is the authoritative coverage statement.
+Fresh official reports use version 2 and flatten `repository_ref`, `repository_head_commit`, and `repository_tree` into the report root. Collection remains version 1 until an official entry point binds one clean, stable Git revision; version 2 cannot serialize with missing or malformed source fields. Historical version-1 reports continue to deserialize with empty provenance.
 
 ### Historical implementation evidence
 
@@ -114,6 +121,7 @@ Persisted report and evidence schemas are part of the performance contract becau
 
 - `PerfReport.version`, browser WebGPU report `version`, Oxide-device report `version`, and UIKit-device report `version` must bump when a top-level JSON object adds, removes, renames, or changes the meaning of a required root key.
 - Common case-row fields must bump the owning report version when a required key is added, removed, renamed, moved between root/case/metrics, changes unit semantics, or changes aggregation semantics.
+- Version 2 adds the top-level repository ref/HEAD/tree provenance triple. Fresh official reports must bind all three fields from one clean named branch and prove the same Git top level is unchanged before writing; version-1 historical reports omit and default those fields.
 - Benchmark IDs are semantic workload identifiers. Reusing an existing ID for a different workload is forbidden; change the ID instead. Adding or retiring IDs requires refreshed persisted baselines, case-id digest updates, mapped docs, and same-workload A/B proof for any cleanup/deletion, but does not require a JSON schema version bump when the row shape and field meanings stay unchanged.
 - Metric keys inside `metrics` may grow compatibly only when old reports remain readable and the metric meaning is additive. Renaming, deleting, reuniting, moving, or redefining a metric key requires a report version bump, regenerated baselines, metric-key freeze updates, and docs that name the migration.
 - Browser WebGPU summary sections, browser startup/package evidence, backend-path coverage rows, benchmark marks, allocation-stage objects, warm-resource-churn objects, timestamp attribution sections, and pixel-check objects follow the same rule: additive compatible keys update freeze digests and docs; removals, renames, unit changes, or changed reconciliation semantics bump the browser report version.
@@ -148,6 +156,7 @@ Persisted report and evidence schemas are part of the performance contract becau
   - Missing metrics default safely through serde so older baselines remain readable while the schema grows.
 
 ## Changelog
+- 2026-08-07: bound fresh official version-2 reports to a clean, named, stable Git ref/HEAD/tree while preserving version-1 historical report readability.
 
 - 2026-08-07: tiered deep touched-case child suites behind named ignored tests while retaining canonical inventory, baseline-write safety, persisted gates, one representative touched-case child route, and the zero-work retired-alias guard in ordinary workspace tests.
 - 2026-08-07: replaced the exhaustive workspace run with an exact 23-row canonical battery plus explicit touched-case filters, removed the full-coverage gate, and named the repeated flat-rect teardown workload as a remove/rebuild cycle.

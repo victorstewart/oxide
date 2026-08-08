@@ -1,12 +1,15 @@
 use oxide_perf_runner::{
-    assert_case_metric_contract, assert_contract_coverage,
+    assert_case_metric_contract, assert_contract_coverage, assert_report_repository_provenance,
     collect_suite_report, compare_reports, render_report_markdown, AuditFinding,
     ContractCoverageEntry, ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
+    RepositoryProvenance,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn perf_runner_explicitly_enables_renderer_diagnostics()
@@ -15,6 +18,104 @@ fn perf_runner_explicitly_enables_renderer_diagnostics()
    assert!(manifest.contains(
       "oxide-renderer-web = { path = \"../renderer-web\", features = [\"diagnostic-instrumentation\"] }",
    ));
+}
+
+fn git(root: &Path, args: &[&str]) -> String
+{
+   let output = Command::new("git")
+      .arg("-C")
+      .arg(root)
+      .args(args)
+      .output()
+      .unwrap_or_else(|error| panic!("run git {}: {error}", args.join(" ")));
+   assert!(
+      output.status.success(),
+      "git {} failed: {}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr)
+   );
+   String::from_utf8(output.stdout)
+      .unwrap_or_else(|error| panic!("decode git {} output: {error}", args.join(" ")))
+      .trim()
+      .to_string()
+}
+
+fn initialized_git_repository(label: &str) -> PathBuf
+{
+   let nonce = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system clock before epoch")
+      .as_nanos();
+   let root = std::env::temp_dir().join(format!(
+      "oxide-perf-report-{label}-{}-{nonce}",
+      std::process::id(),
+   ));
+   fs::create_dir_all(&root).expect("create temporary Git repository");
+   git(&root, &["init", "-b", "main"]);
+   git(&root, &["config", "user.name", "Oxide Perf Test"]);
+   git(&root, &["config", "user.email", "oxide-perf@example.invalid"]);
+   fs::create_dir_all(root.join("oxide")).expect("create nested workspace directory");
+   fs::write(root.join("source.txt"), b"first\n").expect("write initial source");
+   fs::write(root.join("oxide/nested.txt"), b"nested\n").expect("write nested source");
+   git(&root, &["add", "."]);
+   git(&root, &["commit", "-m", "initial source"]);
+   root
+}
+
+fn sample_repository_provenance() -> RepositoryProvenance
+{
+   RepositoryProvenance {
+      repository_ref: Some(String::from("refs/heads/main")),
+      repository_head_commit: Some(String::from("1111111111111111111111111111111111111111")),
+      repository_tree: Some(String::from("2222222222222222222222222222222222222222")),
+   }
+}
+
+#[test]
+fn repository_provenance_requires_clean_named_stable_source()
+{
+   let root = initialized_git_repository("source-revision");
+   let nested = root.join("oxide");
+   let repository_root = RepositoryProvenance::resolve_root(&nested).expect("resolve Git top level");
+   let provenance = RepositoryProvenance::capture(&nested).expect("capture clean named source");
+
+   assert_eq!(repository_root, fs::canonicalize(&root).expect("canonical repository root"));
+   provenance.validate().expect("validate captured source");
+   assert_eq!(provenance.repository_ref.as_deref(), Some("refs/heads/main"));
+   provenance.ensure_unchanged(&nested).expect("unchanged source remains valid");
+
+   fs::write(root.join("source.txt"), b"dirty\n").expect("dirty tracked source");
+   let dirty = RepositoryProvenance::capture(&root).expect_err("dirty source must fail");
+   assert!(dirty.to_string().contains("not clean"), "{dirty:#}");
+
+   git(&root, &["add", "source.txt"]);
+   git(&root, &["commit", "-m", "changed source"]);
+   let drift = provenance.ensure_unchanged(&nested).expect_err("source drift must fail");
+   assert!(drift.to_string().contains("changed during evidence capture"), "{drift:#}");
+
+   git(&root, &["switch", "--detach"]);
+   let detached = RepositoryProvenance::capture(&root).expect_err("detached source must fail");
+   assert!(detached.to_string().contains("symbolic-ref"), "{detached:#}");
+
+   fs::remove_dir_all(root).expect("remove temporary Git repository");
+}
+
+#[test]
+fn repository_provenance_rejects_partial_or_malformed_triples()
+{
+   let partial = RepositoryProvenance {
+      repository_ref: Some(String::from("refs/heads/main")),
+      repository_head_commit: None,
+      repository_tree: Some(String::from("2222222222222222222222222222222222222222")),
+   };
+   assert!(partial.validate().expect_err("partial source must fail").to_string().contains("HEAD"));
+
+   let malformed = RepositoryProvenance {
+      repository_ref: Some(String::from("main")),
+      repository_head_commit: Some(String::from("not-a-commit")),
+      repository_tree: Some(String::from("not-a-tree")),
+   };
+   assert!(malformed.validate().expect_err("malformed source must fail").to_string().contains("named branch"));
 }
 
 fn sample_case(id: &str, median: f64, threshold_pct: f64, gated: bool) -> PerfCaseResult {
@@ -296,6 +397,7 @@ fn sample_report(cases: Vec<PerfCaseResult>) -> PerfReport {
         version: 1,
         suite: String::from("test"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         cases,
         coverage: CoverageReport {
             components_total: 1,
@@ -338,8 +440,20 @@ fn sample_report(cases: Vec<PerfCaseResult>) -> PerfReport {
 
 #[test]
 fn persisted_report_root_and_case_schemas_are_frozen() {
-    let perf_report_keys =
+    let perf_report_v1_keys =
         ["cases", "contract", "coverage", "findings", "generated_label", "suite", "version"];
+    let perf_report_v2_keys = [
+        "cases",
+        "contract",
+        "coverage",
+        "findings",
+        "generated_label",
+        "repository_head_commit",
+        "repository_ref",
+        "repository_tree",
+        "suite",
+        "version",
+    ];
     let perf_case_keys = [
         "cache_state",
         "family",
@@ -363,20 +477,41 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
         "variant",
     ];
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_json_object_keys(&workspace, &perf_report_keys);
+    match workspace["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&workspace, &perf_report_v1_keys),
+        Some(2) => assert_json_object_keys(&workspace, &perf_report_v2_keys),
+        version => panic!("unsupported workspace report version {version:?}"),
+    }
     assert_all_report_cases_match_keys(&workspace, "workspace latest", &perf_case_keys);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
-    assert_json_object_keys(&oxide_device, &perf_report_keys);
+    match oxide_device["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&oxide_device, &perf_report_v1_keys),
+        Some(2) => assert_json_object_keys(&oxide_device, &perf_report_v2_keys),
+        version => panic!("unsupported Oxide-device report version {version:?}"),
+    }
     assert_all_report_cases_match_keys(&oxide_device, "oxide device latest", &perf_case_keys);
 
-    let uikit_report_keys = [
+    let uikit_report_v1_keys = [
         "cases",
         "contract",
         "device_name",
         "energy_status",
         "generated_label",
         "notes",
+        "suite",
+        "version",
+    ];
+    let uikit_report_v2_keys = [
+        "cases",
+        "contract",
+        "device_name",
+        "energy_status",
+        "generated_label",
+        "notes",
+        "repository_head_commit",
+        "repository_ref",
+        "repository_tree",
         "suite",
         "version",
     ];
@@ -398,7 +533,11 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
         "threshold_pct",
     ];
     let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
-    assert_json_object_keys(&uikit_device, &uikit_report_keys);
+    match uikit_device["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&uikit_device, &uikit_report_v1_keys),
+        Some(2) => assert_json_object_keys(&uikit_device, &uikit_report_v2_keys),
+        version => panic!("unsupported UIKit-device report version {version:?}"),
+    }
     assert_all_report_cases_match_keys(&uikit_device, "uikit device latest", &uikit_case_keys);
 
     let web_report_keys = [
@@ -895,6 +1034,49 @@ fn markdown_reports_selected_case_count_without_catalog_fractions()
 
    assert!(markdown.contains("- Cases: `1`"), "{markdown}");
    assert!(!markdown.contains("- Coverage:"), "{markdown}");
+}
+
+#[test]
+fn source_bound_report_serializes_and_renders_repository_revision()
+{
+   let mut report = sample_report(vec![sample_case("cpu.report.source", 1.0, 0.10, true)]);
+   report.version = 2;
+   report.repository = sample_repository_provenance();
+   let json = serde_json::to_value(&report).expect("serialize source-bound report");
+   let markdown = render_report_markdown(&report, None);
+
+   assert_eq!(json["repository_ref"], "refs/heads/main");
+   assert_eq!(json["repository_head_commit"], "1111111111111111111111111111111111111111");
+   assert_eq!(json["repository_tree"], "2222222222222222222222222222222222222222");
+   assert!(markdown.contains("- Repository ref: `refs/heads/main`"), "{markdown}");
+   assert!(markdown.contains("- Repository HEAD: `1111111111111111111111111111111111111111`"), "{markdown}");
+   assert!(markdown.contains("- Repository tree: `2222222222222222222222222222222222222222`"), "{markdown}");
+}
+
+#[test]
+fn version_two_report_rejects_missing_repository_revision()
+{
+   let mut report = sample_report(Vec::new());
+   report.version = 2;
+
+   let validation = assert_report_repository_provenance(report.version, &report.repository)
+      .expect_err("version 2 validation without source must fail");
+   assert!(format!("{validation:#}").contains("missing repository ref"), "{validation:#}");
+   let error = serde_json::to_value(&report).expect_err("version 2 without source must fail");
+   assert!(error.to_string().contains("validating version 2"), "{error:#}");
+}
+
+#[test]
+fn historical_report_omits_and_defaults_repository_revision()
+{
+   let report = sample_report(Vec::new());
+   let json = serde_json::to_value(&report).expect("serialize historical report");
+   let decoded: PerfReport = serde_json::from_value(json.clone()).expect("decode historical report");
+
+   assert!(json.get("repository_ref").is_none());
+   assert!(json.get("repository_head_commit").is_none());
+   assert!(json.get("repository_tree").is_none());
+   assert_eq!(decoded.repository, RepositoryProvenance::default());
 }
 
 #[test]
@@ -3641,6 +3823,7 @@ fn canonical_smoke_suite_keeps_exact_inventory()
    let mut ids = report.cases.iter().map(|case| case.id.as_str()).collect::<Vec<_>>();
    ids.sort_unstable();
 
+   assert_eq!(report.version, 1);
    assert_eq!(report.suite, "canonical-smoke");
    assert_eq!(ids.len(), 23);
    assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));

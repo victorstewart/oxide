@@ -12,6 +12,10 @@ This integration suite freezes performance-report schemas, filtered execution, c
 
 ## Entry points list
 
+- `repository_provenance_requires_clean_named_stable_source()`: resolves a nested workspace to its Git top level and rejects dirty, detached, or changed source.
+- `repository_provenance_rejects_partial_or_malformed_triples()`: rejects incomplete provenance and malformed refs/object IDs.
+- `source_bound_report_serializes_and_renders_repository_revision()`, `version_two_report_rejects_missing_repository_revision()`, and `historical_report_omits_and_defaults_repository_revision()`: freeze the version-2 source contract and version-1 compatibility.
+
 - `child_run_suite_tests_keep_everyday_tiering()` freezes all 55 literal child `--run-suite` sites: 53 must carry `#[ignore = "explicit touched-case perf contract"]`; only `filtered_run_suite_runs_only_the_touched_case()` and the zero-case `retired_exact_aliases_are_not_registered()` guard remain active.
 - `metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()` verifies three-slot visible no-growth high water and eight-slot offscreen all-slot cold growth followed by zero warm growth/skips, including C26's 16 KiB completion-protected property buffer per physical slot and nonzero direct-GPU distributions for both frame rows.
 - `metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()` requires exact clean and one-dirty prepared-cache work counters, including zero clean immutable upload and one 12,288-byte dynamic uniform-ring slice.
@@ -93,6 +97,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests` for the every
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-07: added nested-top-level, dirty/detached/drift, version-2 rejection, version-1 compatibility, JSON, and Markdown provenance coverage.
 - 2026-08-07: kept one representative touched-case child route and the zero-work retired-alias guard active; marked the other 53 literal child suite contracts plus the implicit filtered-registry suite explicitly ignored for one-by-one execution.
 - 2026-08-07: froze the exact 23-row canonical smoke inventory and explicit touched-only execution after retiring the exhaustive workspace mode.
 - 2026-08-07: aligned persisted device report freezes with the five-row Oxide and ten-row UIKit canonical comparison batteries.

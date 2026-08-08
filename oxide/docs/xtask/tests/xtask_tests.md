@@ -33,6 +33,9 @@ Call flow:
 - `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
 - `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
+- `paired_reports_serialize_identical_repository_revision()`: proves paired UIKit and Oxide reports publish the same repository ref/HEAD/tree.
+- `uikit_version_two_rejects_missing_repository_revision_and_version_one_defaults_it()`: freezes strict version-2 serialization and historical version-1 compatibility.
+- Resumable-root stamp tests prove matching revisions retain checkpoints while a changed Git revision clears them even when the file fingerprint is unchanged.
 - `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes arm64-only device and Simulator settings in the Oxide host and React Native camera benchmark projects and requires every scripted Rust build to honor the workspace lockfile.
 - UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
@@ -84,6 +87,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: added paired-report source identity, versioned provenance, and revision-aware resumable checkpoint coverage.
 - 2026-08-07: extended the iOS architecture contract to pin the React Native camera benchmark to arm64 for device and retained Simulator builds.
 - 2026-08-07: froze the exact ten-row UIKit and five-row Oxide canonical device inventories, pair metadata, and explicit-only access for noncanonical cases.
 - 2026-08-07: Required `test-all` to compile, rather than rerun, the featureless workspace test graph.

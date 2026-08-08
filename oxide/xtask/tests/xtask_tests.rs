@@ -1,6 +1,7 @@
 use base64::Engine;
 use oxide_perf_runner::{
     ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
+    RepositoryProvenance,
 };
 use plist::{Dictionary, Value as PlValue};
 use std::collections::BTreeMap;
@@ -109,6 +110,7 @@ fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
         version: 1,
         suite: String::from("oxide-device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         cases: case_ids
             .iter()
             .map(|id| PerfCaseResult {
@@ -123,6 +125,15 @@ fn sample_perf_report(case_ids: &[&str]) -> PerfReport {
         contract: ContractCoverageReport::default(),
         findings: Vec::new(),
     }
+}
+
+fn sample_repository_provenance(commit_digit: char) -> RepositoryProvenance
+{
+   RepositoryProvenance {
+      repository_ref: Some(String::from("refs/heads/main")),
+      repository_head_commit: Some(commit_digit.to_string().repeat(40)),
+      repository_tree: Some(String::from("a").repeat(40)),
+   }
 }
 
 #[test]
@@ -444,6 +455,7 @@ fn sample_uikit_report(case_ids: &[&str]) -> UIKitPerfReport {
         version: 1,
         suite: String::from("uikit-device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone"),
         energy_status: String::from("manual-pending"),
         contract: UIKitContractCoverageReport::default(),
@@ -453,6 +465,40 @@ fn sample_uikit_report(case_ids: &[&str]) -> UIKitPerfReport {
             .collect(),
         notes: Vec::new(),
     }
+}
+
+#[test]
+fn paired_reports_serialize_identical_repository_revision()
+{
+   let repository = sample_repository_provenance('1');
+   let mut oxide = sample_perf_report(&[]);
+   oxide.version = 2;
+   oxide.repository = repository.clone();
+   let mut uikit = sample_uikit_report(&[]);
+   uikit.version = 2;
+   uikit.repository = repository;
+
+   let oxide_json = serde_json::to_value(&oxide).expect("serialize Oxide report");
+   let uikit_json = serde_json::to_value(&uikit).expect("serialize UIKit report");
+   for key in ["repository_ref", "repository_head_commit", "repository_tree"]
+   {
+      assert_eq!(oxide_json[key], uikit_json[key], "paired source field {key}");
+   }
+}
+
+#[test]
+fn uikit_version_two_rejects_missing_repository_revision_and_version_one_defaults_it()
+{
+   let mut report = sample_uikit_report(&[]);
+   let historical_json = serde_json::to_value(&report).expect("serialize historical UIKit report");
+   let historical: UIKitPerfReport =
+      serde_json::from_value(historical_json.clone()).expect("decode historical UIKit report");
+   assert!(historical_json.get("repository_ref").is_none());
+   assert_eq!(historical.repository, RepositoryProvenance::default());
+
+   report.version = 2;
+   let error = serde_json::to_value(&report).expect_err("version 2 without source must fail");
+   assert!(error.to_string().contains("validating version 2"), "{error:#}");
 }
 
 #[test]
@@ -1367,6 +1413,7 @@ fn prepare_resumable_uikit_device_result_root_keeps_matching_checkpoints() {
         destination: String::from("platform=iOS,id=device"),
         development_team: String::from("TEAM123456"),
         source_fingerprint: 1,
+        repository: sample_repository_provenance('1'),
     };
 
     prepare_resumable_uikit_device_result_root(
@@ -1408,6 +1455,7 @@ fn prepare_resumable_uikit_device_result_root_clears_unstamped_staged_checkpoint
       destination: String::from("platform=iOS,id=device"),
       development_team: String::from("TEAM123456"),
       source_fingerprint: 1,
+      repository: sample_repository_provenance('1'),
    };
 
    prepare_resumable_uikit_device_result_root(
@@ -1433,11 +1481,13 @@ fn prepare_resumable_uikit_device_result_root_clears_stale_checkpoints_on_stamp_
         destination: String::from("platform=iOS,id=device"),
         development_team: String::from("TEAM123456"),
         source_fingerprint: 1,
+        repository: sample_repository_provenance('1'),
     };
     let new_stamp = UIKitHostBuildStamp {
         destination: String::from("platform=iOS,id=device"),
         development_team: String::from("TEAM123456"),
-        source_fingerprint: 2,
+        source_fingerprint: 1,
+        repository: sample_repository_provenance('2'),
     };
 
     prepare_resumable_uikit_device_result_root(
@@ -1812,6 +1862,7 @@ fn compare_uikit_reports_flags_regressions() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -1841,6 +1892,7 @@ fn compare_uikit_reports_flags_regressions() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -1878,6 +1930,7 @@ fn compare_uikit_reports_allows_tiny_simulator_bridge_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -1907,6 +1960,7 @@ fn compare_uikit_reports_allows_tiny_simulator_bridge_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -1943,6 +1997,7 @@ fn compare_uikit_reports_ignores_simulator_peak_memory_drift() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -1972,6 +2027,7 @@ fn compare_uikit_reports_ignores_simulator_peak_memory_drift() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2008,6 +2064,7 @@ fn compare_uikit_reports_allows_tiny_simulator_component_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2037,6 +2094,7 @@ fn compare_uikit_reports_allows_tiny_simulator_component_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2073,6 +2131,7 @@ fn compare_uikit_reports_allows_small_simulator_microbench_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2102,6 +2161,7 @@ fn compare_uikit_reports_allows_small_simulator_microbench_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2138,6 +2198,7 @@ fn compare_uikit_reports_still_flags_small_simulator_microbench_regressions() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2167,6 +2228,7 @@ fn compare_uikit_reports_still_flags_small_simulator_microbench_regressions() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2203,6 +2265,7 @@ fn compare_uikit_reports_ignores_spinner_encode_simulator_clock_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2232,6 +2295,7 @@ fn compare_uikit_reports_ignores_spinner_encode_simulator_clock_jitter() {
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2268,6 +2332,7 @@ fn compare_uikit_reports_ignores_button_press_response_simulator_clock_jitter() 
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -2297,6 +2362,7 @@ fn compare_uikit_reports_ignores_button_press_response_simulator_clock_jitter() 
         version: 1,
         suite: String::from("simulator"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("iPhone 16"),
         energy_status: String::from("simulator proxy"),
         contract: UIKitContractCoverageReport::default(),
@@ -3074,6 +3140,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -3109,6 +3176,7 @@ fn compare_uikit_reports_device_suite_gates_direct_counters() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -3324,6 +3392,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -3359,6 +3428,7 @@ fn compare_uikit_reports_device_suite_gates_energy_when_present() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -3401,6 +3471,7 @@ fn compare_uikit_reports_keys_device_rows_by_refresh_mode() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -3432,6 +3503,7 @@ fn compare_uikit_reports_keys_device_rows_by_refresh_mode() {
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -4560,6 +4632,7 @@ fn sample_uikit_device_report(metrics: BTreeMap<String, UIKitMetricSummary>) -> 
         version: 1,
         suite: String::from("device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         device_name: String::from("Victor’s iPhone"),
         energy_status: String::from("direct device"),
         contract: UIKitContractCoverageReport::default(),
@@ -4620,6 +4693,7 @@ fn sample_oxide_device_report(metrics: BTreeMap<String, f64>) -> PerfReport {
         version: 1,
         suite: String::from("oxide-device"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         cases: vec![PerfCaseResult {
             id: String::from("cpu.animation.spinner_spin"),
             refresh_mode: String::from("native"),

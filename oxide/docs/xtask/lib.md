@@ -108,7 +108,9 @@ For a visibly changed build, `cargo xtask ios compare-device-perf --watchable-sm
 
 Watchable smoke runs now also enable app-rendered frame capture for both Oxide and UIKit. Each watched case can persist a small PNG sequence under `<case-dir>/rendered-frames/`, copied back from the app's data container after the case finishes. Those frames are diagnostic artifacts for visual parity and black/blank-scene debugging; they are intentionally limited to watchable smoke so they do not slow family diagnostics or promotion.
 
-Resumable UIKit and Oxide device flows only reuse a completed `current.json` when the report case IDs exactly match the selected case set. This keeps a prior smoke, family, or explicit `--case` run from satisfying a different requested run through a stale checkpoint.
+Resumable UIKit and Oxide device flows only reuse a completed `current.json` when both the report case IDs and its repository ref/HEAD/tree match the selected run. The derived-data stamp retains the same provenance in addition to its input fingerprint, so neither a prior smoke/family selection nor an earlier source revision can satisfy the current run through a stale checkpoint.
+
+Every official device entry point resolves the enclosing Git top level before capture, requires a clean named branch, and binds the same revision triple to its fresh version-2 report. Paired comparison binds one captured triple to both UIKit and Oxide outputs. The harness revalidates cleanliness, ref, commit, and tree before current-report and committed-baseline writes; historical version-1 reports remain readable but cannot be reused as current version-2 evidence.
 
 For camera preview, the official today bucket is the parked microscope pair: the pure custom Oxide-owned NV12 live preview path and the matching `AVCaptureVideoPreviewLayer` baseline. Actual app-host camera runs and hybrid visible-preview-layer variants remain callable by explicit `--case`, but they are separate diagnostic or shipping-oriented buckets and are not part of the default committed camera baseline.
 
@@ -151,6 +153,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-07: bound paired and standalone device reports plus resumable build stamps to one clean, stable Git revision and rejected version-2 reports with missing provenance.
 - 2026-08-07: Renamed the repeated flat-rect teardown workload and parity mapping to a remove/rebuild cycle so report IDs match timed work.
 - 2026-08-07: Replaced the 38-row UIKit default with an exact ten-row/five-pair canonical selector, matched the standalone Oxide default to its five unique rows, and kept every other registered row exact-`--case` only.
 - 2026-08-07: Replaced the duplicate featureless workspace test pass with an all-target compile check.
