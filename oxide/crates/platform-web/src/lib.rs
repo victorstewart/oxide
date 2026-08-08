@@ -1311,10 +1311,6 @@ fn web_view_create(
     let id = web_view_next_id();
 
     iframe.set_name(&format!("oxide-web-view-{id}"));
-    let element: &web_sys::Element = iframe.unchecked_ref();
-    element
-        .set_attribute("aria-hidden", "true")
-        .map_err(|value| js_unknown("iframe attribute set failed", value))?;
     let style = iframe.style();
     let _ = style.set_property("position", "absolute");
     let _ = style.set_property("width", "1px");

@@ -7408,7 +7408,6 @@ mod wasm_host {
             .create_element("textarea")?
             .dyn_into::<HtmlTextAreaElement>()
             .map_err(|_| JsValue::from_str("created element was not a textarea"))?;
-        textarea.set_attribute("aria-hidden", "true")?;
         textarea.set_attribute("autocomplete", "off")?;
         textarea.set_attribute("autocapitalize", "off")?;
         textarea.set_attribute("spellcheck", "false")?;

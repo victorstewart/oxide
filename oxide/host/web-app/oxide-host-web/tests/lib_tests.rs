@@ -2,6 +2,14 @@ use oxide_host_web::generate_checker_rgba;
 use std::io::Cursor;
 
 #[test]
+fn web_host_runtime_omits_accessibility_attributes()
+{
+   let source = include_str!("../src/lib.rs");
+   let forbidden_prefix = ["ar", "ia-"].concat();
+   assert!(!source.contains(&forbidden_prefix));
+}
+
+#[test]
 fn browser_benchmark_host_explicitly_enables_renderer_diagnostics_and_snapshots()
 {
    let manifest = include_str!("../Cargo.toml");
