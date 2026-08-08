@@ -53,6 +53,7 @@ pub enum ConfidenceIntervalMethod
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MedianConfidenceInterval
 {
    pub method: ConfidenceIntervalMethod,
@@ -98,6 +99,7 @@ impl WorkloadKind
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExperimentIdentity
 {
    pub baseline_sha: String,
@@ -108,6 +110,7 @@ pub struct ExperimentIdentity
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentFingerprint
 {
    pub hardware: String,
@@ -124,6 +127,7 @@ pub struct EnvironmentFingerprint
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SamplePair
 {
    pub index: usize,
@@ -141,6 +145,7 @@ pub struct SamplePair
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedExperimentInput
 {
    pub schema_version: u32,
@@ -155,6 +160,7 @@ pub struct PairedExperimentInput
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributionSummary
 {
    pub p50: f64,
@@ -169,6 +175,7 @@ pub struct DistributionSummary
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedDecision
 {
    pub accepted: bool,
@@ -180,6 +187,7 @@ pub struct PairedDecision
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedExperimentReport
 {
    pub schema_version: u32,
@@ -377,6 +385,13 @@ fn validate_input(input: &PairedExperimentInput) -> Result<()>
    ensure!(!input.experiment_id.trim().is_empty(), "experiment id is empty");
    ensure!(!input.metric.trim().is_empty(), "primary metric is empty");
    validate_identity(&input.identity)?;
+   if input.acceptance_policy == AcceptancePolicy::NoiseControl
+   {
+      ensure!(
+         input.identity.baseline_binary_sha256 == input.identity.candidate_binary_sha256,
+         "noise-control requires identical baseline and candidate binary hashes",
+      );
+   }
 
    let expected_orders = balanced_pair_order(input.seed, input.pairs.len());
    let mut valid_pairs = 0;
@@ -389,7 +404,7 @@ fn validate_input(input: &PairedExperimentInput) -> Result<()>
    for (expected_index, pair) in input.pairs.iter().enumerate()
    {
       ensure!(pair.index == expected_index, "pair index {} is not contiguous at position {}", pair.index, expected_index);
-      ensure!(pair.order == expected_orders[expected_index], "pair {} order does not match fixed-seed balanced order", pair.index);
+      ensure!(pair.order == expected_orders[expected_index], "pair {} order does not match the predeclared-seed balanced order", pair.index);
       validate_samples(&pair.warmup_samples_a, pair.index, "A warmup")?;
       validate_samples(&pair.warmup_samples_b, pair.index, "B warmup")?;
       validate_samples(&pair.samples_a, pair.index, "A")?;

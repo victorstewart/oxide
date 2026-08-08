@@ -49,6 +49,7 @@ multiple-comparison, or instrumentation-patch API is part of this module.
 
 The analyzer rejects:
 
+- unknown fields at every externally deserialized evidence-struct boundary;
 - unsupported schema versions, empty identifiers, or empty metric names;
 - malformed Git or SHA-256 identities;
 - non-contiguous pairs or orders that differ from the seed-derived schedule;
@@ -62,6 +63,7 @@ The analyzer rejects:
 - mixed A/B environments, cross-pair environment drift, or visible workloads
   not marked as production-path measurements;
 - missing or inconsistent binary and instrumentation identities;
+- a `NoiseControl` population whose baseline and candidate binary hashes differ;
 - an invalidation reason whose named condition is not present in its pair;
 - more than 10% invalid pairs, or surviving AB/BA counts that differ by more
   than one;
@@ -98,10 +100,11 @@ to satisfy the confidence lower-bound gate. Five pairs would cover only 93.75
 percent even from minimum through maximum and are rejected. Higher-variance
 browser, GPU-timestamp, and input-journey workloads retain their larger minima.
 
-The six-pair workspace evidence manifest freezes its order explicitly as `AB`,
-`BA`, `BA`, `AB`, `AB`, `BA`. The retained seed field exists for schema and
-schedule-validation compatibility; neither acquisition nor the exact interval
-performs runtime randomization or resampling.
+Each evidence producer predeclares a seed, and the analyzer derives and validates
+the corresponding balanced order. The six-pair test fixture's frozen seed yields
+`AB`, `BA`, `BA`, `AB`, `AB`, `BA`; another predeclared seed may yield another
+balanced order. Neither acquisition nor the exact interval performs runtime
+randomization or resampling.
 
 Reported p50, p95, p99, peak, p05, p01, minimum, median absolute deviation, and
 coefficient of variation use all valid raw samples. Those report fields remain
@@ -119,8 +122,9 @@ limits.
 policy. The entire exact paired interval must stay within -2% through 2%, pooled
 p95 and p99 may move by at most 3% in either direction, and pooled peak may move
 by at most 5% in either direction. A zero baseline tail accepts only an equal
-zero candidate tail. These symmetric checks prevent an apparently favorable
-same-binary drift from authorizing a later A/B claim.
+zero candidate tail. The reducer requires identical baseline and candidate binary
+hashes before applying these symmetric checks, preventing an apparently
+favorable different-binary comparison from masquerading as same-binary drift.
 
 Metric direction applies to every promotion-policy tail gate:
 
@@ -148,9 +152,11 @@ to the smallest population that supplies a finite exact interval at the 95
 percent target. There is no compatibility reader or migration path for earlier
 unpublished input shapes. Historical reports remain unchanged as evidence of
 the method used when they were created; they are not rewritten or treated as
-version-3 output. Existing all-valid pair JSON remains readable in isolation
-because `"invalid_reason": null` still maps to no invalidation; arbitrary
-free-text reasons are rejected.
+version-3 output. Version-3 input and report structs reject unknown fields,
+including retired bootstrap controls, instead of silently ignoring stale
+evidence. Existing all-valid pair JSON remains readable in isolation because
+`"invalid_reason": null` still maps to no invalidation; arbitrary free-text
+reasons are rejected.
 
 ## Runtime behavior
 
@@ -164,22 +170,25 @@ benchmark tooling and is not reachable from a shipping host or renderer path.
 `oxide/crates/perf-runner/tests/paired_experiment_tests.rs` exercises the public
 reducer API for the minimum finite six-pair workspace and physical-device
 intervals, balanced ordering, improvement and regression decisions,
-no-material-regression tails, symmetric current/current noise admission,
-both metric directions, an isolated higher-is-better lower-tail collapse with
-unchanged p50/p95/p99/maximum summaries, typed and bounded invalidation,
-survivor-order balance, equal per-pair sample counts, invalid-pair evidence
-validation, persisted-null compatibility, cold-start warmup handling,
-byte-deterministic serialization, and the reanalysis-only CLI. The CLI test
-requires exact-method metadata and the absence of legacy bootstrap fields.
+no-material-regression tails, same-binary current/current noise admission, strict
+unknown-field rejection, both metric directions, an isolated higher-is-better
+lower-tail collapse with unchanged p50/p95/p99/maximum summaries, typed and
+bounded invalidation, survivor-order balance, equal per-pair sample counts,
+invalid-pair evidence validation, persisted-null compatibility, cold-start
+warmup handling, byte-deterministic serialization, and the reanalysis-only CLI.
+The CLI test requires exact-method metadata and the absence of legacy bootstrap
+fields.
 Tests are kept outside production source and documented in
 [`tests/paired_experiment_tests.md`](tests/paired_experiment_tests.md).
 
 ## Changelog
 
+- 2026-08-07: made version-3 evidence structs reject unknown fields and required
+  identical binary hashes for current/current noise-control admission.
 - 2026-08-07: advanced the unpublished schema to version 3, reduced workspace
-  CPU studies to the requirement-minimal six balanced pairs, froze the explicit
-  three-AB/three-BA evidence order without resampling, and added symmetric
-  current/current noise admission.
+  CPU studies to the requirement-minimal six balanced pairs, required each
+  producer's predeclared-seed balanced order without resampling, and added
+  symmetric current/current noise admission.
 - 2026-08-07: replaced the fixed-seed 100,000-resample approximation with an
   exact binomial median interval, persisted achieved coverage and rank bounds,
   raised physical-device evidence from five to the requirement-minimal six

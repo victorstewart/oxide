@@ -5,7 +5,8 @@ use oxide_perf_runner::paired::{
    analyze_paired_experiment, balanced_pair_order, report_json, AcceptancePolicy,
    ConfidenceIntervalMethod,
    EnvironmentFingerprint, ExperimentIdentity, PairInvalidationReason, PairOrder,
-   PairedExperimentInput, SamplePair, WorkloadKind, PAIRED_EXPERIMENT_SCHEMA_VERSION,
+   PairedExperimentInput, PairedExperimentReport, SamplePair, WorkloadKind,
+   PAIRED_EXPERIMENT_SCHEMA_VERSION,
 };
 
 const BASE_SHA: &str = "1111111111111111111111111111111111111111";
@@ -113,6 +114,7 @@ fn noise_input(speedups: [f64; 6]) -> PairedExperimentInput
 {
    let mut input = input(1.0);
    input.acceptance_policy = AcceptancePolicy::NoiseControl;
+   input.identity.candidate_binary_sha256 = String::from(BINARY_A_SHA);
    for (pair, speedup) in input.pairs.iter_mut().zip(speedups)
    {
       let candidate = 100.0 - speedup;
@@ -120,6 +122,7 @@ fn noise_input(speedups: [f64; 6]) -> PairedExperimentInput
       pair.warmup_samples_b = vec![candidate];
       pair.samples_a = vec![100.0; 12];
       pair.samples_b = vec![candidate; 12];
+      pair.artifact_hashes_b.insert(String::from("binary"), String::from(BINARY_A_SHA));
    }
    input
 }
@@ -313,6 +316,49 @@ fn invalidation_schema_is_closed_and_null_compatible()
 }
 
 #[test]
+fn paired_evidence_schema_rejects_unknown_fields()
+{
+   for (pointer, field) in [
+      ("", "bootstrap_resamples"),
+      ("/identity", "legacy_identity"),
+      ("/pairs/0", "legacy_pair"),
+      ("/pairs/0/environment_a", "legacy_environment"),
+   ]
+   {
+      let mut value = serde_json::to_value(input(0.90)).expect("serialize strict input");
+      value
+         .pointer_mut(pointer)
+         .expect("input schema pointer")
+         .as_object_mut()
+         .expect("input schema object")
+         .insert(String::from(field), serde_json::Value::from(100_000));
+      let error = serde_json::from_value::<PairedExperimentInput>(value)
+         .expect_err("reject unknown input evidence field");
+      assert!(error.to_string().contains(field), "unexpected error for {field}: {error}");
+   }
+
+   let report = analyze_paired_experiment(input(0.90)).expect("build strict report");
+   for (pointer, field) in [
+      ("", "legacy_report"),
+      ("/baseline", "legacy_summary"),
+      ("/decision", "legacy_decision"),
+      ("/decision/confidence_interval", "legacy_interval"),
+   ]
+   {
+      let mut value = serde_json::to_value(&report).expect("serialize strict report");
+      value
+         .pointer_mut(pointer)
+         .expect("report schema pointer")
+         .as_object_mut()
+         .expect("report schema object")
+         .insert(String::from(field), serde_json::Value::from(true));
+      let error = serde_json::from_value::<PairedExperimentReport>(value)
+         .expect_err("reject unknown report evidence field");
+      assert!(error.to_string().contains(field), "unexpected error for {field}: {error}");
+   }
+}
+
+#[test]
 fn decisive_improvement_passes_statistical_gates()
 {
    let report = analyze_paired_experiment(input(0.90)).expect("analyze decisive improvement");
@@ -443,6 +489,23 @@ fn noise_control_requires_symmetric_interval_and_pooled_tails()
    assert!(peak.decision.reasons.iter().any(|reason| reason.contains("peak")));
    assert!(!peak.decision.reasons.iter().any(|reason| reason.contains("p95")));
    assert!(!peak.decision.reasons.iter().any(|reason| reason.contains("p99")));
+}
+
+#[test]
+fn noise_control_requires_identical_binaries()
+{
+   let mut mismatched = noise_input([0.0; 6]);
+   mismatched.identity.candidate_binary_sha256 = String::from(BINARY_B_SHA);
+   for pair in &mut mismatched.pairs
+   {
+      pair.artifact_hashes_b.insert(String::from("binary"), String::from(BINARY_B_SHA));
+   }
+   let error = analyze_paired_experiment(mismatched)
+      .expect_err("reject different binaries in current/current control");
+   assert_eq!(
+      error.to_string(),
+      "noise-control requires identical baseline and candidate binary hashes",
+   );
 }
 
 #[test]

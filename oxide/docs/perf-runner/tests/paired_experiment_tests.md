@@ -20,7 +20,7 @@ Call graph:
 - fixture helpers -> `balanced_pair_order` -> `PairedExperimentInput`
 - decision tests -> `analyze_paired_experiment` -> validation -> paired medians -> exact rank interval -> adverse-tail gates
 - serialization test -> `report_json`
-- CLI test -> `oxide_perf_runner::run_cli` -> paired analyzer -> atomic report output
+- CLI test -> `oxide_perf_runner::run_cli` -> paired analyzer -> report output
 
 ## Entry points list
 
@@ -42,6 +42,8 @@ Call graph:
 - `invalidation_schema_is_closed_and_null_compatible` rejects arbitrary
   free-text reasons and parses a persisted all-valid v1 pair whose reason is
   null.
+- `paired_evidence_schema_rejects_unknown_fields` rejects retired or foreign
+  fields at every input and report evidence-struct boundary.
 - `decisive_improvement_passes_statistical_gates` verifies all performance-policy gates and serialized direction for a clear lower-is-better win.
 - `workspace_cpu_minimum_supports_a_finite_exact_interval` rejects five
   workspace pairs and requires the requirement-minimal six-pair population to
@@ -55,6 +57,8 @@ Call graph:
 - `noise_control_requires_symmetric_interval_and_pooled_tails` accepts bounded
   current/current movement, then independently rejects an exact interval beyond
   2%, pooled p95/p99 movement beyond 3%, and peak movement beyond 5%.
+- `noise_control_requires_identical_binaries` rejects a structurally consistent
+  control population whose A/B binary hashes differ.
 - `higher_is_better_tail_direction_is_respected` requires p05, p01, and minimum reasons for a uniform throughput regression.
 - `higher_is_better_low_tail_regression_blocks_publication` keeps median and reported upper summaries identical while degrading only low samples, then requires publication rejection and exact JSON p05/p01/minimum/direction evidence.
 - `zero_baseline_median_is_rejected_before_report_serialization` rejects undefined relative speedup.
@@ -66,8 +70,10 @@ Call graph:
 
 ## Logic narrative
 
-The common fixture lists the requirement-minimal six-pair order explicitly as
-`AB`, `BA`, `BA`, `AB`, `AB`, `BA`, with three measured samples on each side.
+The common fixture predeclares one seed whose requirement-minimal six-pair order
+is `AB`, `BA`, `BA`, `AB`, `AB`, `BA`, with three measured samples on each side.
+Producers may predeclare another seed and balanced order; the reducer validates
+that derived schedule rather than imposing this fixture's particular order.
 Most tests scale complete distributions, while the isolated lower-tail
 test changes only the lowest candidate sample in three pairs. Their medians do
 not move, and the combined candidate p50, p95, p99, and maximum remain identical
@@ -82,11 +88,11 @@ The boundary test uses constant distributions so a value exactly at the 3% or
 selects p95/p99/maximum reason names for lower-is-better and
 p05/p01/minimum names for higher-is-better.
 
-The noise-control fixture uses the explicit six-pair schedule and twelve raw
-samples per side. Its accepted case spans negative and positive pair movement
-inside 2%. Separate cases keep pair medians fixed while moving pooled p95/p99 or
-one isolated peak, proving the symmetric current/current gate cannot be replaced
-by a one-sided no-regression decision.
+The noise-control fixture uses its predeclared seed's six-pair schedule and
+twelve raw samples per side. Its accepted case spans negative and positive pair
+movement inside 2%. Separate cases keep pair medians fixed while moving pooled
+p95/p99 or one isolated peak, proving the symmetric current/current gate cannot
+be replaced by a one-sided no-regression decision.
 
 The exact-interval fixtures assign ordered one-through-six percent pair speedups
 so their rank bounds are directly observable. The physical-device fixture
@@ -121,6 +127,8 @@ historical reports.
 
 - Zero medians, invalid hashes, missing pairs, mixed environments, and partial
   CLI arguments fail before publication.
+- Unknown evidence fields and different-binary noise controls fail before
+  statistics are computed.
 - Free-text or unevidenced invalidation reasons, exclusions above 10%,
   order-selected survivors, and unequal valid-pair populations fail before
   statistics are computed.
@@ -164,7 +172,10 @@ cargo test --locked -p oxide-perf-runner --test paired_experiment_tests \
 
 ## Changelog
 
-- 2026-08-07: reduced the common workspace fixture to the explicit
+- 2026-08-07: added strict unknown-field coverage at each evidence-struct
+  boundary, enforced same-binary noise-control fixtures, and corrected the CLI
+  output and producer-predeclared schedule descriptions.
+- 2026-08-07: reduced the common workspace fixture to its predeclared seed's
   requirement-minimal six-pair schedule and froze ranks 1 through 6 at 96.875
   percent exact coverage, including symmetric current/current noise admission.
 - 2026-08-07: replaced simulated bootstrap coverage with exact 15-pair and
