@@ -293,6 +293,23 @@ fn device_runner_binds_phone_toolchain_dependencies_and_signing()
 }
 
 #[test]
+fn device_runner_admits_each_release_target_independently()
+{
+   let runner = include_str!("../../device-pilot/run-device.sh");
+   for contract in [
+      "capture_release_build_settings()",
+      "for target in FeedV1UIKit FeedV1Oxide FeedV1Controller",
+      "-target \"$target\"",
+      "-sdk iphoneos",
+      "SUPPORTED_PLATFORMS = iphoneos",
+      "PRODUCT_NAME = $target",
+   ]
+   {
+      assert!(runner.contains(contract), "missing Release target admission: {contract}");
+   }
+}
+
+#[test]
 fn device_runner_predeclares_resource_fuses_and_proves_every_process_absent()
 {
    let runner = include_str!("../../device-pilot/run-device.sh");

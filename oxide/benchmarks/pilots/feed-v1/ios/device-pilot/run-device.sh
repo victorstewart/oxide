@@ -648,6 +648,33 @@ write_build_provenance()
    fi
 }
 
+capture_release_build_settings()
+{
+   local target="$1"
+   local target_settings="$BUILD_ROOT/release-build-settings-$target.txt"
+   if ! xcrun xcodebuild \
+      -project "$PROJECT" \
+      -target "$target" \
+      -configuration Release \
+      -sdk iphoneos \
+      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
+      CODE_SIGN_STYLE=Automatic \
+      CODE_SIGN_IDENTITY="Apple Development" \
+      -showBuildSettings >"$target_settings" 2>&1 \
+      || ! grep -Fq "    ARCHS = arm64" "$target_settings" \
+      || grep -Eq '^ +ARCHS = .*x86_64' "$target_settings" \
+      || ! grep -Fq "    CONFIGURATION = Release" "$target_settings" \
+      || ! grep -Fq "    PLATFORM_NAME = iphoneos" "$target_settings" \
+      || ! grep -Fq "    SUPPORTED_PLATFORMS = iphoneos" "$target_settings" \
+      || ! grep -Fq "    DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM_ID" "$target_settings" \
+      || ! grep -Fq "    PRODUCT_NAME = $target" "$target_settings" \
+      || ! /bin/cat "$target_settings" >>"$PROVENANCE_ROOT/release-build-settings.txt"
+   then
+      echo "$target Release arm64 build settings are not publication-admissible" >&2
+      return 1
+   fi
+}
+
 verify_fixture_contracts()
 {
    local swift_check="$BUILD_ROOT/feed-v1-swift-contract-check"
@@ -733,25 +760,10 @@ then
    echo "resolved physical hardware UDID is not an Xcode destination" >&2
    exit 1
 fi
-if ! xcrun xcodebuild \
-   -project "$PROJECT" \
-   -scheme "$SCHEME" \
-   -configuration Release \
-   -destination "id=$XCODE_DEVICE_ID" \
-   -derivedDataPath "$DERIVED_DATA" \
-   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM_ID" \
-   CODE_SIGN_STYLE=Automatic \
-   CODE_SIGN_IDENTITY="Apple Development" \
-   -showBuildSettings >"$PROVENANCE_ROOT/release-build-settings.txt" 2>&1 \
-   || ! grep -Fq "    ARCHS = arm64" "$PROVENANCE_ROOT/release-build-settings.txt" \
-   || grep -Eq '^ +ARCHS = .*x86_64' "$PROVENANCE_ROOT/release-build-settings.txt" \
-   || ! grep -Fq "    CONFIGURATION = Release" "$PROVENANCE_ROOT/release-build-settings.txt" \
-   || ! grep -Fq "    PLATFORM_NAME = iphoneos" "$PROVENANCE_ROOT/release-build-settings.txt" \
-   || ! grep -Fq "    DEVELOPMENT_TEAM = $DEVELOPMENT_TEAM_ID" "$PROVENANCE_ROOT/release-build-settings.txt"
-then
-   echo "resolved Release arm64 build settings are not publication-admissible" >&2
-   exit 1
-fi
+for target in FeedV1UIKit FeedV1Oxide FeedV1Controller
+do
+   capture_release_build_settings "$target" || exit 1
+done
 
 export FEED_V1_CARGO_TARGET_DIR="$RUST_TARGET"
 build_for_testing()

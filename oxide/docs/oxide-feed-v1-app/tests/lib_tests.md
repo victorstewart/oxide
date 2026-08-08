@@ -25,6 +25,7 @@ Call graph:
 - `complete_fixture_identity_is_a_host_preflight_not_runtime_startup_work` keeps the all-row Swift/Rust proof in the authoritative runner and rejects reintroducing it into app construction.
 - `fixture_preflight_compiles_only_existing_swift_contract_sources` requires the host preflight to compile both current Swift contract sources and rejects the removed cache-trial configuration source.
 - `device_runner_binds_phone_toolchain_dependencies_and_signing` freezes the exact CoreDevice/hardware pair and requires structured evidence for arm64 toolchains, dependency resolution, resolved Release settings, and every signed product.
+- `device_runner_admits_each_release_target_independently` requires separate Release/iphoneos/arm64 settings admission for both apps and the UI-test controller, avoiding Xcode's unsupported scheme-wide settings query for mixed buildables.
 - `device_runner_predeclares_resource_fuses_and_proves_every_process_absent` freezes build/evidence/file/result caps before launch and requires exact post-run absence for UIKit, Oxide, and the controller.
 - `frozen_app_starts_at_each_exact_contract_offset` covers both controller endpoints.
 - `measurement_begins_at_the_first_drag_offset_change` proves touch-down and sub-slop motion remain unmeasured.
@@ -45,7 +46,7 @@ Call graph:
 
 The build-contract source guards require an rlib-only crate manifest, an explicit `cargo rustc --crate-type staticlib` Xcode device command, one root workspace/lock/profile owner, and exclusion of both pilot crates from `default-members`. Runtime tests acquire one process-wide environment lock, install valid controller variables, and restore the previous values through RAII. Tests construct `FeedV1App` through `from_environment`, mount it with two public frame calls, and acknowledge the exact second frame to reach `Ready`. Gesture cases send raw start/move/end touch events through `App::event`; frame helpers then advance settlement and submit acknowledgement exactly as the production host does.
 
-`UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Its A8 counters prove that frame-scoped text publication folds cold glyphs into one atlas creation and leaves an unchanged warm frame upload-free. A focused adapter regression inspects the bounded `RuntimeTextUploader` implementation and requires both append and release forwarding. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. Tests do not access private app fields or mutate state outside public interfaces.
+`UploadProbe` records caller bytes and sampling without rewriting them while assigning stable fake handles. Its A8 counters prove that frame-scoped text publication folds cold glyphs into one atlas creation and leaves an unchanged warm frame upload-free. A focused adapter regression inspects the bounded `RuntimeTextUploader` implementation and requires both append and release forwarding. Prepared-frame assertions read the borrowed public draw list. The inertial completion helper uses one bounded frame loop and stops at the first completion-submit boundary; the paired noninertial case proves distance cannot fake a fling. The device runner first proves the physical destination is present, then queries and admits Release settings separately for the UIKit app, Oxide app, and UI-test controller because Xcode 26.6 cannot resolve scheme-wide settings for that mixed-buildable scheme. Terminal tests use an isolated temporary `HOME`, then parse the same durable file the device harness would consume. Tests do not access private app fields or mutate state outside public interfaces.
 
 ## Preconditions and postconditions
 
@@ -97,6 +98,7 @@ cargo test -p oxide-feed-v1-app --test lib_tests \
 
 ## Changelog
 
+- 2026-08-08: Replaced the unsupported scheme-wide Xcode settings query with independently admitted Release settings for all three device targets.
 - 2026-08-07: Removed the stale cache-trial Swift source from the host fixture preflight and added source-existence coverage.
 - 2026-08-07: Added a source boundary proving complete fixture derivation runs in paired host preflights rather than app startup.
 - 2026-08-07: Added a source boundary for exact phone, toolchain, dependency, build-setting, and signing provenance.
