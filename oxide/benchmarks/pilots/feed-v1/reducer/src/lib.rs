@@ -31,6 +31,7 @@ const SSIM_THRESHOLD: f64 = 0.96;
 const TILE_SIDE: u32 = 48;
 const TILE_MAE_THRESHOLD: f64 = 18.0;
 const COMPONENT_TOLERANCE_PX: i32 = 1;
+const SURFACE_BACKGROUND_RGB: [u8; 3] = [247, 244, 238];
 const PERIOD_MIN_SECONDS: f64 = 0.0075;
 const PERIOD_MAX_SECONDS: f64 = 0.0092;
 const PERIOD_ADMISSION_RATIO: f64 = 0.95;
@@ -38,7 +39,7 @@ const MINIMUM_TRAVEL_POINTS: f64 = 524.0;
 const TRAVEL_MEDIAN_EQUIVALENCE_MARGIN: f64 = 0.05;
 const TRAVEL_CONFIDENCE_EQUIVALENCE_MARGIN: f64 = 0.10;
 const TRAVEL_EQUIVALENCE_EPSILON: f64 = 1e-12;
-const ATTACHMENT_COUNT: usize = 6;
+const ATTACHMENT_COUNT: usize = 12;
 const ATTACHMENT_TEST_IDENTIFIER: &str = "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()";
 const MAX_BUILD_ROOT_BYTES: u64 = 4_294_967_296;
 const MAX_RETAINED_EVIDENCE_BYTES: u64 = 536_870_912;
@@ -590,6 +591,7 @@ struct VisualTreatmentResult
 {
    state: String,
    treatment: String,
+   capture: String,
    metrics: VisualMetrics,
 }
 
@@ -936,6 +938,17 @@ fn crop_surface(image: &RgbaImage) -> Result<RgbaImage, String>
       let start = ((y * image.width + origin_x) * 4) as usize;
       let end = start + surface_width as usize * 4;
       pixels.extend_from_slice(&image.pixels[start .. end]);
+   }
+   for pixel in pixels.chunks_exact_mut(4)
+   {
+      let alpha = u16::from(pixel[3]);
+      for channel in 0 .. 3
+      {
+         pixel[channel] = ((u16::from(pixel[channel]) * alpha
+            + u16::from(SURFACE_BACKGROUND_RGB[channel]) * (255 - alpha)
+            + 127) / 255) as u8;
+      }
+      pixel[3] = 255;
    }
    Ok(RgbaImage { width: surface_width, height: surface_height, pixels })
 }
@@ -1578,6 +1591,23 @@ fn mutate_wrong_color(reference: &RgbaImage, components: &[Component]) -> Result
    Ok(image)
 }
 
+fn mutate_wrong_text(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
+{
+   let rect = bounded_rect(component_rect(components, "title", false)?, reference.width, reference.height)?;
+   let mut image = reference.clone();
+   fill(&mut image, rect, [247, 244, 238, 255])?;
+   for x in (rect.x .. rect.x + rect.width).step_by(18)
+   {
+      fill(&mut image, Rect {
+         x,
+         y: rect.y + 6,
+         width: 9.min(rect.x + rect.width - x),
+         height: (rect.height - 12).max(1),
+      }, [35, 38, 42, 255])?;
+   }
+   Ok(image)
+}
+
 fn mutate_shifted_image(reference: &RgbaImage, components: &[Component]) -> Result<RgbaImage, String>
 {
    let source_rect = bounded_rect(component_rect(components, "image", false)?, reference.width, reference.height)?;
@@ -1658,11 +1688,12 @@ fn mutate_corrupt_tile(reference: &RgbaImage) -> Result<RgbaImage, String>
 
 fn adversarial_gate(reference: &RgbaImage, components: &[Component]) -> Result<Vec<AdversarialResult>, String>
 {
-   let mut results = Vec::with_capacity(9);
+   let mut results = Vec::with_capacity(10);
    results.push(adversarial_result("missing-row", reference, mutate_missing_row(reference, components)?)?);
    results.push(adversarial_result("sparse-missing-caption", reference, mutate_missing_caption(reference, components)?)?);
    results.push(adversarial_result("wrong-checker-variant", reference, mutate_checker(reference, components, false)?)?);
    results.push(adversarial_result("missing-image", reference, mutate_checker(reference, components, true)?)?);
+   results.push(adversarial_result("wrong-text", reference, mutate_wrong_text(reference, components)?)?);
    results.push(adversarial_result("wrong-color", reference, mutate_wrong_color(reference, components)?)?);
    results.push(adversarial_result("shifted-image", reference, mutate_shifted_image(reference, components)?)?);
    results.push(adversarial_result("half-sized-image", reference, mutate_half_image(reference, components)?)?);
@@ -2522,12 +2553,14 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       .filter(|run| run.record.run.phase == "smoke")
       .collect();
    let expected_attachment_names: BTreeSet<String> = smoke_runs.iter()
-      .map(|run| format!("feed-v1-{}.png", run.record.run.nonce))
+      .flat_map(|run| ["admission", "repeat"].map(|capture| {
+         format!("feed-v1-{}-{capture}.png", run.record.run.nonce)
+      }))
       .collect();
    let actual_attachment_names: BTreeSet<String> = attachment_exports.keys().cloned().collect();
    if actual_attachment_names != expected_attachment_names
    {
-      blockers.push("attachment manifest names are not exactly the six frozen smoke captures".to_string());
+      blockers.push("attachment manifest names are not exactly the twelve frozen smoke captures".to_string());
    }
    let population_blockers = validate_population(&measured_runs, population);
    blockers.extend(population_blockers);
@@ -2540,41 +2573,52 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
    let mut adversarial_results = Vec::new();
    if population_admitted
    {
-      let mut canonical_images: BTreeMap<(String, String), RgbaImage> = BTreeMap::new();
+      let mut canonical_images: BTreeMap<(String, String, String), RgbaImage> = BTreeMap::new();
       for run in &smoke_runs
       {
-         let capture_name = format!("feed-v1-{}.png", run.record.run.nonce);
-         let Some(capture_path) = attachment_exports.get(&capture_name).map(PathBuf::as_path) else
+         for capture_kind in ["admission", "repeat"]
          {
-            blockers.push(format!("missing smoke capture {capture_name}"));
-            continue;
-         };
-         let capture = match decode_png(capture_path).and_then(|image| crop_surface(&image))
-         {
-            Ok(capture) => capture,
-            Err(error) =>
+            let capture_name = format!("feed-v1-{}-{capture_kind}.png", run.record.run.nonce);
+            let Some(capture_path) = attachment_exports.get(&capture_name).map(PathBuf::as_path) else
             {
-               blockers.push(format!("capture decode/crop failed for {}: {error}", run.record.run.nonce));
+               blockers.push(format!("missing smoke capture {capture_name}"));
                continue;
+            };
+            let capture = match decode_png(capture_path).and_then(|image| crop_surface(&image))
+            {
+               Ok(capture) => capture,
+               Err(error) =>
+               {
+                  blockers.push(format!(
+                     "{capture_kind} capture decode/normalize/crop failed for {}: {error}",
+                     run.record.run.nonce
+                  ));
+                  continue;
+               }
+            };
+            let key = (
+               run.record.run.treatment.clone(),
+               run.record.run.start_state.clone(),
+               capture_kind.to_string(),
+            );
+            if canonical_images.insert(key, capture).is_some()
+            {
+               blockers.push(format!(
+                  "duplicate {capture_kind} smoke capture for {} {}",
+                  run.record.run.treatment,
+                  run.record.run.start_state
+               ));
             }
-         };
-         let key = (
-            run.record.run.treatment.clone(),
-            run.record.run.start_state.clone(),
-         );
-         if canonical_images.insert(key, capture).is_some()
-         {
-            blockers.push(format!(
-               "duplicate smoke capture for {} {}",
-               run.record.run.treatment,
-               run.record.run.start_state
-            ));
          }
       }
 
       for state in ["top", "bottom"]
       {
-         let reference_key = ("uikit-idiomatic".to_string(), state.to_string());
+         let reference_key = (
+            "uikit-idiomatic".to_string(),
+            state.to_string(),
+            "admission".to_string(),
+         );
          let Some(reference) = canonical_images.get(&reference_key) else
          {
             blockers.push(format!("missing idiomatic UIKit {state} visual reference"));
@@ -2582,44 +2626,58 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
          };
          for treatment in ["uikit-idiomatic", "uikit-optimized", "oxide"]
          {
-            let key = (treatment.to_string(), state.to_string());
-            let Some(candidate) = canonical_images.get(&key) else
+            let admission_key = (treatment.to_string(), state.to_string(), "admission".to_string());
+            let repeat_key = (treatment.to_string(), state.to_string(), "repeat".to_string());
+            let (Some(admission), Some(repeat)) = (
+               canonical_images.get(&admission_key),
+               canonical_images.get(&repeat_key),
+            ) else
             {
-               blockers.push(format!("missing {treatment} {state} visual"));
+               blockers.push(format!("missing {treatment} {state} admission or repeat visual"));
                continue;
             };
-            let metrics = if treatment == "uikit-idiomatic"
+            if admission.pixels != repeat.pixels
             {
-               Ok(VisualMetrics {
-                  ssim: 1.0,
-                  worst_tile_rgb_mae: 0.0,
-                  exact_rgb_mae: 0.0,
-                  passes: true,
-               })
+               blockers.push(format!("{treatment} {state} immediate normalized crops are not byte-identical"));
             }
-            else
+            for (capture_kind, candidate) in [("admission", admission), ("repeat", repeat)]
             {
-               visual_metrics(reference, candidate)
-            };
-            match metrics
-            {
-               Ok(metrics) =>
+               let metrics = if treatment == "uikit-idiomatic" && capture_kind == "admission"
                {
-                  if !metrics.passes
-                  {
-                     blockers.push(format!(
-                        "visual gate failed for {treatment} {state}: SSIM {:.6}, worst tile MAE {:.6}",
-                        metrics.ssim,
-                        metrics.worst_tile_rgb_mae
-                     ));
-                  }
-                  visual_treatments.push(VisualTreatmentResult {
-                     state: state.to_string(),
-                     treatment: treatment.to_string(),
-                     metrics,
-                  });
+                  Ok(VisualMetrics {
+                     ssim: 1.0,
+                     worst_tile_rgb_mae: 0.0,
+                     exact_rgb_mae: 0.0,
+                     passes: true,
+                  })
                }
-               Err(error) => blockers.push(format!("visual metrics {treatment} {state}: {error}")),
+               else
+               {
+                  visual_metrics(reference, candidate)
+               };
+               match metrics
+               {
+                  Ok(metrics) =>
+                  {
+                     if !metrics.passes
+                     {
+                        blockers.push(format!(
+                           "visual gate failed for {treatment} {state} {capture_kind}: SSIM {:.6}, worst tile MAE {:.6}",
+                           metrics.ssim,
+                           metrics.worst_tile_rgb_mae
+                        ));
+                     }
+                     visual_treatments.push(VisualTreatmentResult {
+                        state: state.to_string(),
+                        treatment: treatment.to_string(),
+                        capture: capture_kind.to_string(),
+                        metrics,
+                     });
+                  }
+                  Err(error) => blockers.push(format!(
+                     "visual metrics {treatment} {state} {capture_kind}: {error}"
+                  )),
+               }
             }
          }
       }
@@ -2644,7 +2702,11 @@ fn evaluate(paths: &ReducePaths, population: Population) -> Result<Report, Strin
       }
 
       if let (Some(reference), Some(reference_run)) = (
-         canonical_images.get(&("uikit-idiomatic".to_string(), "top".to_string())),
+         canonical_images.get(&(
+            "uikit-idiomatic".to_string(),
+            "top".to_string(),
+            "admission".to_string(),
+         )),
          measured_runs.iter().find(|run| run.record.run.treatment == "uikit-idiomatic" && run.record.run.start_state == "top"),
       )
       {
@@ -2952,14 +3014,15 @@ fn render_markdown(report: &Report, canonical_json_path: &str, canonical_json_sh
    if !report.visual_treatments.is_empty()
    {
       output.push_str("\n## Visual admission\n\n");
-      output.push_str("| State | Treatment | SSIM | Worst 48x48 RGB MAE | Full-surface RGB MAE | Pass |\n");
-      output.push_str("|---|---|---:|---:|---:|---:|\n");
+      output.push_str("| State | Treatment | Capture | SSIM | Worst 48x48 RGB MAE | Full-surface RGB MAE | Pass |\n");
+      output.push_str("|---|---|---|---:|---:|---:|---:|\n");
       for visual in &report.visual_treatments
       {
          output.push_str(&format!(
-            "| {} | {} | {:.6} | {:.3} | {:.3} | {} |\n",
+            "| {} | {} | {} | {:.6} | {:.3} | {:.3} | {} |\n",
             visual.state,
             visual.treatment,
+            visual.capture,
             visual.metrics.ssim,
             visual.metrics.worst_tile_rgb_mae,
             visual.metrics.exact_rgb_mae,

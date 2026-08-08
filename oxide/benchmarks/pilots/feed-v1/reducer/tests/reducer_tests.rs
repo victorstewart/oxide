@@ -339,7 +339,7 @@ fn attachment_export_verifier_requires_one_complete_manifest() -> Result<(), Str
    let root = temporary_root("attachment-export")?;
    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
    let mut attachments = Vec::new();
-   for index in 0 .. 6
+   for index in 0 .. 12
    {
       let export = format!("exported-{index}.png");
       fs::write(root.join(&export), format!("png-{index}")).map_err(|error| error.to_string())?;
@@ -429,7 +429,7 @@ fn attachment_export_rejects_hard_link_file_identity_aliases() -> Result<(), Str
    fs::hard_link(root.join("exported-0.png"), root.join("exported-1.png"))
       .map_err(|error| error.to_string())?;
    let mut attachments = Vec::new();
-   for index in 0 .. 6
+   for index in 0 .. 12
    {
       if index >= 2
       {
@@ -723,14 +723,20 @@ fn smoke_rejects_cleanup_and_artifact_provenance_mutations() -> Result<(), Strin
       &attachment_manifest_path,
       serde_json::to_vec(&attachment_manifest).map_err(|error| error.to_string())?,
    ).map_err(|error| error.to_string())?;
-   assert!(verify_smoke(&root).unwrap_err().contains("attachment manifest names are not exactly the six frozen smoke captures"));
+   assert!(verify_smoke(&root).unwrap_err().contains("attachment manifest names are not exactly the twelve frozen smoke captures"));
    fs::write(&attachment_manifest_path, &attachment_manifest_bytes).map_err(|error| error.to_string())?;
 
-   let capture_path = raw.join("attachments").join(format!("export-{nonce}.png"));
+   let capture_path = raw.join("attachments").join(format!("export-{nonce}-admission.png"));
    let capture_bytes = fs::read(&capture_path).map_err(|error| error.to_string())?;
    fs::write(&capture_path, cropped_smoke_png("top")?).map_err(|error| error.to_string())?;
    assert!(verify_smoke(&root).unwrap_err().contains("expected full XCUIScreen canvas 1320x2868"));
    fs::write(&capture_path, capture_bytes).map_err(|error| error.to_string())?;
+
+   let repeat_path = raw.join("attachments").join(format!("export-{nonce}-repeat.png"));
+   let repeat_bytes = fs::read(&repeat_path).map_err(|error| error.to_string())?;
+   fs::write(&repeat_path, smoke_png("bottom")?).map_err(|error| error.to_string())?;
+   assert!(verify_smoke(&root).unwrap_err().contains("immediate normalized crops are not byte-identical"));
+   fs::write(&repeat_path, repeat_bytes).map_err(|error| error.to_string())?;
 
    fs::copy(&cleanup_path, raw.join("oxide-feed-v1-duplicate-cleanup.json"))
       .map_err(|error| error.to_string())?;
@@ -770,6 +776,10 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    assert_eq!(report["schema_revision"], 5);
    assert_eq!(report["run_count_total"], 60);
    assert_eq!(report["run_count_primary"], 54);
+   assert_eq!(report["visual_treatments"].as_array().map(Vec::len), Some(12));
+   assert!(report["adversarial_results"].as_array().is_some_and(|results| results.iter().any(|result| {
+      result["mutation"] == "wrong-text" && result["rejected"] == true
+   })));
    let travel = report["travel_equivalence"].as_array()
       .ok_or_else(|| "report travel equivalence is not an array".to_string())?;
    assert_eq!(travel.len(), 4);
@@ -863,7 +873,7 @@ fn full_reduction_is_byte_identical_when_repeated() -> Result<(), String>
    }).count(), 60);
    assert_eq!(inventory.iter().filter(|file| {
       file["relative_path"].as_str().is_some_and(|path| path.ends_with(".png"))
-   }).count(), 6);
+   }).count(), 12);
    assert!(inventory.iter().all(|file| {
       file["relative_path"].as_str().is_some_and(|path| path.starts_with("raw/"))
          && file["bytes"].as_u64().is_some_and(|bytes| bytes > 0)
@@ -1077,13 +1087,16 @@ fn write_valid_root(root: &Path, full: bool) -> Result<(), String>
       }
 
       let png = if direction == "forward" { &top_png } else { &bottom_png };
-      let name = format!("feed-v1-{nonce}_0_01234567-89AB-CDEF-0123-456789ABCDEF.png");
-      let export = format!("export-{nonce}.png");
-      fs::write(attachments.join(&export), png).map_err(|error| error.to_string())?;
-      exported_attachments.push(json!({
-         "suggestedHumanReadableName": name,
-         "exportedFileName": export
-      }));
+      for capture in ["admission", "repeat"]
+      {
+         let name = format!("feed-v1-{nonce}-{capture}_0_01234567-89AB-CDEF-0123-456789ABCDEF.png");
+         let export = format!("export-{nonce}-{capture}.png");
+         fs::write(attachments.join(&export), png).map_err(|error| error.to_string())?;
+         exported_attachments.push(json!({
+            "suggestedHumanReadableName": name,
+            "exportedFileName": export
+         }));
+      }
    }
    fs::write(attachments.join("manifest.json"), serde_json::to_vec(&json!([{
       "testIdentifier": "FeedV1ControllerTests/testFeedV1PhysicalDevicePilot()",

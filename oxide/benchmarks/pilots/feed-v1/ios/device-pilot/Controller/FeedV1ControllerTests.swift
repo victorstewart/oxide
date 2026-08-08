@@ -1,5 +1,7 @@
 import CoreFoundation
+import CoreImage
 import Foundation
+import UIKit
 import XCTest
 
 private let feedV1UIKitBundleID = "com.oxide.feed-v1.uikit"
@@ -230,10 +232,16 @@ final class FeedV1ControllerTests: XCTestCase
 
       if phase == "smoke"
       {
-         let capture = XCUIScreen.main.screenshot()
+         let admissionCapture = XCUIScreen.main.screenshot()
+         let repeatCapture = XCUIScreen.main.screenshot()
          attach(
-            capture.pngRepresentation,
-            name: "feed-v1-\(nonce).png",
+            try normalizedCapturePNG(admissionCapture),
+            name: "feed-v1-\(nonce)-admission.png",
+            uniformTypeIdentifier: "public.png"
+         )
+         attach(
+            try normalizedCapturePNG(repeatCapture),
+            name: "feed-v1-\(nonce)-repeat.png",
             uniformTypeIdentifier: "public.png"
          )
       }
@@ -283,6 +291,44 @@ final class FeedV1ControllerTests: XCTestCase
       attachment.name = name
       attachment.lifetime = .keepAlways
       add(attachment)
+   }
+
+   private func normalizedCapturePNG(_ capture: XCUIScreenshot) throws -> Data
+   {
+      let expectedSize = CGSize(width: 1_320, height: 2_868)
+      guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+            let source = CIImage(image: capture.image, options: [.applyOrientationProperty: true]) else
+      {
+         throw controllerError("could not construct the sRGB smoke capture")
+      }
+      let extent = source.extent.integral
+      guard extent.width == expectedSize.width && extent.height == expectedSize.height else
+      {
+         throw controllerError("smoke capture is \(Int(extent.width))x\(Int(extent.height)), expected 1320x2868")
+      }
+      let normalized = source
+         .transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+         .composited(over: CIImage(color: CIColor(
+            red: 247.0 / 255.0,
+            green: 244.0 / 255.0,
+            blue: 238.0 / 255.0,
+            alpha: 1
+         )).cropped(to: CGRect(origin: .zero, size: expectedSize)))
+         .cropped(to: CGRect(origin: .zero, size: expectedSize))
+      let context = CIContext(options: [
+         .workingColorSpace: colorSpace,
+         .outputColorSpace: colorSpace,
+         .cacheIntermediates: false
+      ])
+      guard let data = context.pngRepresentation(
+         of: normalized,
+         format: .RGBA8,
+         colorSpace: colorSpace
+      ) else
+      {
+         throw controllerError("could not encode the opaque sRGB8 smoke capture")
+      }
+      return data
    }
 
    private func persistRuntime(mode: String, started: TimeInterval) throws
