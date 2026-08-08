@@ -19,6 +19,7 @@ schemes:
           - test
       buildImplicitDependencies: false
     test:
+      config: Release
       targets:
         - OxideHostPerfTests
         - OxideHostUITests

@@ -83,6 +83,8 @@ const UIKIT_SIM_SMALL_CPU_CYCLES_MAX_KC: f64 = 25_000.0;
 const UIKIT_SIM_SMALL_CPU_CYCLES_NOISE_KC: f64 = 5_000.0;
 const UIKIT_DEVICE_METRICS_BATCH_MAX_CASES: usize = 20;
 const DEFAULT_UIKIT_DEVICE_TRACE_SECONDS: u64 = 5;
+const IOS_DEVICE_BUILD_CONFIGURATION: &str = "Release";
+const IOS_DEVICE_BUILD_SDK: &str = "iphoneos";
 const UIKIT_PERF_SIGNPOST_SUBSYSTEM: &str = "com.oxide.perf";
 const UIKIT_PERF_SIGNPOST_CATEGORY: &str = "PointsOfInterest";
 const UIKIT_PERF_SIGNPOST_NAME: &str = "PerfWorkload";
@@ -5347,6 +5349,10 @@ fn run_ios_build_for_testing(
         String::from(scheme),
         String::from("-destination"),
         String::from(destination),
+        String::from("-sdk"),
+        String::from(IOS_DEVICE_BUILD_SDK),
+        String::from("-configuration"),
+        String::from(IOS_DEVICE_BUILD_CONFIGURATION),
         String::from("-derivedDataPath"),
         derived_data_path.to_string_lossy().into_owned(),
         String::from("-jobs"),

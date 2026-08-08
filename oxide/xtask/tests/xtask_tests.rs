@@ -2990,6 +2990,29 @@ fn standalone_device_comparison_failures_precede_all_report_outputs()
 }
 
 #[test]
+fn device_build_for_testing_uses_release_iphoneos_configuration()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let build_body = source
+      .split_once("fn run_ios_build_for_testing(")
+      .and_then(|(_, tail)| tail.split_once("fn prepare_result_root("))
+      .map(|(body, _)| body)
+      .expect("shared iOS build helper");
+   assert!(build_body.contains("String::from(IOS_DEVICE_BUILD_SDK)"));
+   assert!(build_body.contains("String::from(IOS_DEVICE_BUILD_CONFIGURATION)"));
+   assert!(source.contains("const IOS_DEVICE_BUILD_CONFIGURATION: &str = \"Release\";"));
+   assert!(source.contains("const IOS_DEVICE_BUILD_SDK: &str = \"iphoneos\";"));
+
+   let project = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../host/ios-app/App/project.yml"));
+   let scheme = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../host/ios-app/App/OxideHost.xcodeproj/xcshareddata/xcschemes/OxideUIKitPerf.xcscheme"
+   ));
+   assert!(project.contains("test:\n      config: Release"));
+   assert!(scheme.contains("<TestAction\n      buildConfiguration = \"Release\""));
+}
+
+#[test]
 fn compare_device_promotion_rejects_partial_case_selection()
 {
    let args = [
