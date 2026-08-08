@@ -4005,6 +4005,16 @@ fn oxide_case_in_canonical_device_battery_spec(spec: &OxideOnscreenCaseSpec) -> 
       .any(|case| case.oxide_case_id == spec.case_id)
 }
 
+fn oxide_onscreen_case_matches_request(spec: &OxideOnscreenCaseSpec, requested: &str) -> bool
+{
+   requested == spec.test_name
+      || requested == spec.case_id
+      || UIKIT_CASE_SPECS.iter().any(|uikit_spec| {
+         (requested == uikit_spec.test_name || requested == uikit_spec.case_id)
+            && uikit_spec.oxide_case_id == spec.case_id
+      })
+}
+
 pub fn oxide_canonical_device_case_ids() -> Vec<&'static str>
 {
    OXIDE_ONSCREEN_CASE_SPECS
@@ -4014,34 +4024,43 @@ pub fn oxide_canonical_device_case_ids() -> Vec<&'static str>
       .collect()
 }
 
-fn selected_oxide_onscreen_case_specs(
-    requested: &[String],
-) -> Result<Vec<&'static OxideOnscreenCaseSpec>> {
-    let mut selected = Vec::new();
-    let mut seen = BTreeSet::new();
-    for spec in OXIDE_ONSCREEN_CASE_SPECS {
-        if requested.is_empty() {
-            if oxide_case_in_canonical_device_battery_spec(spec) {
-                selected.push(spec);
-            }
-            continue;
-        }
-        let matches_requested = requested.iter().any(|value| {
-            value == spec.test_name
-                || value == spec.case_id
-                || UIKIT_CASE_SPECS.iter().any(|uikit_spec| {
-                    (value == uikit_spec.test_name || value == uikit_spec.case_id)
-                        && uikit_spec.oxide_case_id == spec.case_id
-                })
-        });
-        if matches_requested && seen.insert(spec.case_id) {
+fn selected_oxide_onscreen_case_specs(requested: &[String]) -> Result<Vec<&'static OxideOnscreenCaseSpec>>
+{
+   let unknown = requested
+      .iter()
+      .filter(|requested| {
+         !OXIDE_ONSCREEN_CASE_SPECS
+            .iter()
+            .any(|spec| oxide_onscreen_case_matches_request(spec, requested))
+      })
+      .map(String::as_str)
+      .collect::<Vec<_>>();
+   if !unknown.is_empty()
+   {
+      bail!("unknown Oxide on-screen perf case(s) `{}`", unknown.join(", "));
+   }
+
+   let mut selected = Vec::new();
+   let mut seen = BTreeSet::new();
+   for spec in OXIDE_ONSCREEN_CASE_SPECS
+   {
+      if requested.is_empty()
+      {
+         if oxide_case_in_canonical_device_battery_spec(spec)
+         {
             selected.push(spec);
-        }
-    }
-    if selected.is_empty() {
-        bail!("unknown Oxide on-screen perf case(s) `{}`", requested.join(", "));
-    }
-    Ok(selected)
+         }
+         continue;
+      }
+      if requested
+         .iter()
+         .any(|requested| oxide_onscreen_case_matches_request(spec, requested))
+         && seen.insert(spec.case_id)
+      {
+         selected.push(spec);
+      }
+   }
+   Ok(selected)
 }
 
 pub fn perf_report_matches_case_ids(report: &PerfReport, expected_case_ids: &[&str]) -> bool {
@@ -4120,6 +4139,19 @@ fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitC
          })
          .collect();
    }
+   let unknown = requested
+      .iter()
+      .filter(|requested| {
+         !UIKIT_CASE_SPECS
+            .iter()
+            .any(|spec| requested.as_str() == spec.test_name || requested.as_str() == spec.case_id)
+      })
+      .map(String::as_str)
+      .collect::<Vec<_>>();
+   if !unknown.is_empty()
+   {
+      bail!("unknown UIKit perf case(s) `{}`", unknown.join(", "));
+   }
    let mut selected = Vec::new();
    for spec in UIKIT_CASE_SPECS
    {
@@ -4129,10 +4161,6 @@ fn selected_uikit_case_specs(requested: &[String]) -> Result<Vec<&'static UIKitC
       {
          selected.push(spec);
       }
-   }
-   if selected.is_empty()
-   {
-      bail!("unknown UIKit perf case(s) `{}`", requested.join(", "));
    }
    Ok(selected)
 }

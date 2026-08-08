@@ -2968,6 +2968,33 @@ fn noncanonical_device_cases_remain_exactly_addressable()
 }
 
 #[test]
+fn mixed_valid_and_unknown_device_case_requests_fail_closed()
+{
+   for (command, valid, unknown, expected) in [
+      (
+         "device-perf",
+         "testLabelEncode",
+         "testMissingUIKitCase",
+         "unknown UIKit perf case(s) `testMissingUIKitCase`",
+      ),
+      (
+         "oxide-device-perf",
+         "testOxideSpinnerSpin",
+         "testMissingOxideCase",
+         "unknown Oxide on-screen perf case(s) `testMissingOxideCase`",
+      ),
+   ]
+   {
+      let args = ["ios", command, "--case", valid, "--case", unknown]
+         .into_iter()
+         .map(String::from)
+         .collect::<Vec<_>>();
+      let error = run_cli(&args).expect_err("mixed valid/unknown selection must fail");
+      assert!(error.to_string().contains(expected), "unexpected `{command}` error: {error:#}");
+   }
+}
+
+#[test]
 fn standalone_oxide_default_matches_the_five_unique_compare_rows()
 {
    assert_eq!(

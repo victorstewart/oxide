@@ -29,6 +29,7 @@ Call flow:
 - `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
 - `canonical_device_battery_is_exactly_five_matched_comparison_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, comparison families, required workload-family mappings, and matching Oxide ids.
 - `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.
+- `mixed_valid_and_unknown_device_case_requests_fail_closed()`: proves both UIKit and Oxide selectors reject every unresolved requested value even when another requested case is valid.
 - `standalone_oxide_default_matches_the_five_unique_compare_rows()`: prevents the no-`--case` Oxide command from silently running a broader on-screen battery than matched promotion.
 - `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
 - `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
@@ -94,6 +95,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-07: added fail-closed UIKit and Oxide selection coverage for mixed valid/unknown exact-case requests.
 - 2026-08-07: froze pre-rendering of all six paired canonical outputs before the shared atomic promotion call.
 - 2026-08-07: added runtime and source-contract coverage for Oxide device override forwarding.
 - 2026-08-07: added partial standalone promotion and final source-recapture coverage.
