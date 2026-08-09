@@ -4981,7 +4981,10 @@ pub fn is_unsupported_gpu_counter_profile_error(text: &str) -> bool {
 
 pub fn is_retryable_uikit_trace_handshake_error(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
-    (lowered.contains("timed out waiting for")
+    (lowered.contains("xcrun xctrace record")
+        && lowered.contains("--attach")
+        && lowered.contains("cannot find process for provided pid"))
+        || (lowered.contains("timed out waiting for")
         && (lowered.contains(&UIKIT_DEVICE_READY_NOTIFICATION.to_ascii_lowercase())
             || lowered.contains(&UIKIT_DEVICE_COMPLETE_NOTIFICATION.to_ascii_lowercase())))
         || (lowered.contains("exited without observing")
@@ -8452,9 +8455,8 @@ fn run_uikit_device_case_trace(
                handshake_attempt + 1,
                UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
             );
-            notes.push(format!(
-               "Trace handshake status: this case retried the attached trace after a transient `{}` handshake timeout.",
-               UIKIT_DEVICE_COMPLETE_NOTIFICATION
+            notes.push(String::from(
+               "Trace handshake status: this case retried the attached trace after a transient device ready/start/attach handshake failure.",
             ));
          }
          Err(err)

@@ -162,6 +162,7 @@ The committed `benchmarks/oxide-device/latest.json` and `benchmarks/uikit-device
 
 ## Changelog
 
+- 2026-08-09: retried one exact-PID Instruments attach lookup miss after the app had reached foreground-ready and CoreDevice had proved that device PID existed.
 - 2026-08-08: cached an optional counter-profile trace-startup timeout for the rest of the device command, alongside explicit rejection and wall-time timeout handling.
 - 2026-08-08: launched device apps through CoreDevice before attaching process-scoped Instruments, then began each workload only after the trace-started handshake.
 - 2026-08-07: moved required UIKit console-summary capture outside per-case trace retries.

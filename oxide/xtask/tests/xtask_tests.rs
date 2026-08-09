@@ -3537,6 +3537,9 @@ fn retryable_uikit_trace_handshake_error_matches_completion_timeout_text() {
     assert!(is_retryable_uikit_trace_handshake_error(
         "posted `com.oxide.perf.start` 3 times but `OXIDE_START testCameraNV12LegacyLivePreview` or `OXIDE_COMPLETE testCameraNV12LegacyLivePreview` never appeared before the acknowledgment timeout"
     ));
+    assert!(is_retryable_uikit_trace_handshake_error(
+        "xcrun xctrace record --template Metal System Trace --attach 53616 failed with status 21: Cannot find process for provided pid: 53616"
+    ));
     assert!(!is_retryable_uikit_trace_handshake_error(
         "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
     ));
