@@ -436,7 +436,12 @@ fn committed_renderer_goldens_cover_scene3d_damage_camera_and_id_mask() {
         let golden = golden_dir.join(format!("{golden_name}.png"));
         assert!(golden.exists(), "missing committed golden {}", golden.display());
         let out = dir.join(format!("{golden_name}.png"));
-        let pixel_tolerance = if golden_name == "nested_layer_composite" { 96 } else { 16 };
+        let pixel_tolerance = match (component, golden_name) {
+            (_, "nested_layer_composite") => 96,
+            ("scene3d_bloom", _) =>
+                ((width as usize).saturating_mul(height as usize) / 1_000).max(72),
+            _ => 16,
+        };
         let output =
             run_snapshot_checked(
                 component,

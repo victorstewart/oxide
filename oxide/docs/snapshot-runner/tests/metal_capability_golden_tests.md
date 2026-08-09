@@ -47,4 +47,5 @@ Set `UPDATE_GOLDENS=1` only to review an intentional capability-image update.
 
 ## Changelog
 
+- 2026-08-09: refreshed the exact single-sample, MSAA, and EDR fixtures after the source-over alpha correction.
 - 2026-07-12: added exact single-sample, 4x MSAA, and packed BGRA10_XR EDR goldens.
