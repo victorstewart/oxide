@@ -50,7 +50,7 @@ This document captures the current state of automated testing across the Oxide w
 
 - Property-based tests in `crates/ui-core/tests` run with fixed RNG seeds and persist prior failure cases under `*.proptest-regressions`.
 - GPU snapshot coverage is limited to a single rounded-rect draw; there is no end-to-end coverage for full scenes, HDR/MSAA variants, or damage-based rendering.
-- The default host UI automation is one bounded XCUITest (`testWindowLaunchSmoke`) that verifies a window launches and retains one startup screenshot. Scene and gesture behavior belongs in focused OS-level journeys rather than a broad repeated traversal battery.
+- The default host UI automation is one bounded XCUITest (`testWindowLaunchSmoke`) that verifies a window launches and retains one startup screenshot. A physical-device run forwards the established `OXIDE_IOS_DEVELOPMENT_TEAM` or `DEVELOPMENT_TEAM` signing value. Scene and gesture behavior belongs in focused OS-level journeys rather than a broad repeated traversal battery.
 - No automated smoke tests exist for the macOS host runner or the CLI harnesses (`perf-runner`, `snapshot-runner`).
 
 These gaps inform the follow-on phases outlined in the broader test plan.

@@ -327,6 +327,10 @@ fn xcui_smoke_runs_only_the_launch_test_and_reuses_derived_data()
       env!("CARGO_MANIFEST_DIR"),
       "/../../scripts/run_xcui_smoke.sh"
    ));
+   let parked_app = include_str!(concat!(
+      env!("CARGO_MANIFEST_DIR"),
+      "/../host/ios-app/App/OxidePerfParkedApp.swift"
+   ));
 
    assert_eq!(
       script
@@ -335,6 +339,9 @@ fn xcui_smoke_runs_only_the_launch_test_and_reuses_derived_data()
       1
    );
    assert!(!script.contains("OXIDE_UI_EXPORT"));
+   assert!(script.contains("OXIDE_IOS_DEVELOPMENT_TEAM:-${DEVELOPMENT_TEAM:-}"));
+   assert!(script.contains("XCB_ARGS+=(\"DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM_ID}\")"));
+   assert!(parked_app.contains("environment[\"UITEST\"] == \"1\""));
    assert!(
       script
          .lines()

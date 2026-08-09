@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="${ROOT_DIR}/oxide/host/ios-app/App/OxideHost.xcodeproj"
 SCHEME="OxideHost"
 DEFAULT_DEST="platform=iOS Simulator,name=iPhone 16"
+DEVELOPMENT_TEAM_ID="${OXIDE_IOS_DEVELOPMENT_TEAM:-${DEVELOPMENT_TEAM:-}}"
 if [[ -n "${XCUI_DESTINATION:-}" ]]
 then
    DESTINATION="${XCUI_DESTINATION}"
@@ -123,7 +124,7 @@ fi
 RESULT_BUNDLE="${ROOT_DIR}/artifacts/ui/ResultBundle"
 DERIVED_DATA="${ROOT_DIR}/artifacts/ui/DerivedData"
 
-rm -rf "${RESULT_BUNDLE}"
+rm -rf "${RESULT_BUNDLE}" "${RESULT_BUNDLE}.xcresult"
 mkdir -p "$(dirname "${RESULT_BUNDLE}")"
 
 if ! command -v xcodebuild >/dev/null 2>&1
@@ -146,6 +147,10 @@ XCB_ARGS=(
 if [[ "${USING_PHYSICAL:-0}" -eq 1 ]]
 then
    XCB_ARGS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
+   if [[ -n "${DEVELOPMENT_TEAM_ID}" ]]
+   then
+      XCB_ARGS+=("DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM_ID}")
+   fi
 fi
 xcodebuild "${XCB_ARGS[@]}"
 status=$?

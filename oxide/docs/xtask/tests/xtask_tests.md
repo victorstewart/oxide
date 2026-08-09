@@ -97,6 +97,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-09: required the bounded physical-device XCUI smoke to forward the established signing team.
 - 2026-08-09: classified one post-ready exact-PID Instruments attach lookup miss as a bounded handshake retry while retaining fail-closed name-based lookup behavior.
 - 2026-08-08: classified the trace-started handshake fuse as a bounded xctrace timeout so optional counter-profile stalls are cached command-wide.
 - 2026-08-08: required app-first process attachment and trace-ready workload start ordering for device traces.

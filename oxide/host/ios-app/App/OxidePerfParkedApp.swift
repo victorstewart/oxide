@@ -229,7 +229,8 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
                 installParkedWindow(window, rootViewController: rootViewController, environment: environment)
                 return
             }
-            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+            if environment["UITEST"] == "1" ||
+               environment["XCTestConfigurationFilePath"] != nil
             {
                 installWhiteParkedWindow(for: windowScene, environment: environment)
                 return
