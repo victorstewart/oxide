@@ -1,0 +1,716 @@
+{
+  "schema": "oxide.feed-v1.report",
+  "schema_revision": 5,
+  "fixture_sha256": "a1de9b4a914734fe21d21e9b6f8a9b61970f7e22e0fa4ef0103031e399881473",
+  "fixture_byte_count": 717745,
+  "device": null,
+  "status": "blocked",
+  "decision": "blocked",
+  "policy": {
+    "statistics": {
+      "callback_quantile_method": "one-based-nearest-rank",
+      "callback_quantile_rank_formula": "ceil(q * n), one-based",
+      "cluster_identity_fields": [
+        "treatment",
+        "session_index",
+        "pair_index"
+      ],
+      "directions_per_cluster": 2,
+      "clusters_per_treatment": 9,
+      "treatment_aggregate_method": "median-of-nine-cluster-quantiles",
+      "confidence_interval_method": "exact-binomial-median",
+      "confidence_target_coverage": 0.95,
+      "confidence_achieved_coverage": 0.9609375,
+      "confidence_sample_count": 9,
+      "confidence_lower_rank": 2,
+      "confidence_upper_rank": 8
+    },
+    "admission_thresholds": {
+      "visual_ssim_minimum": 0.96,
+      "visual_tile_side_px": 48,
+      "visual_worst_tile_rgb_mae_maximum": 18.0,
+      "component_edge_tolerance_px": 1,
+      "maximum_frame_rate_minimum_hz": 120,
+      "configured_frame_rate_hz": 120.0,
+      "target_period_minimum_ms": 7.5,
+      "target_period_maximum_ms": 9.2,
+      "target_period_admission_ratio_minimum": 0.95,
+      "minimum_travel_points": 524.0,
+      "travel_median_absolute_relative_delta_maximum": 0.05,
+      "travel_interval_absolute_bound_maximum": 0.1
+    },
+    "classification_thresholds": {
+      "slower_interval_lower_bound_exclusive": 0.05,
+      "faster_interval_upper_bound_exclusive": 0.0,
+      "faster_requires_lower_aggregate_p50": true,
+      "faster_requires_lower_aggregate_p95": true,
+      "non_inferior_interval_upper_bound_inclusive": 0.05,
+      "precedence": [
+        "slower",
+        "faster",
+        "non-inferior",
+        "inconclusive"
+      ]
+    },
+    "guardrails": {
+      "missed_deadline_ratio_maximum_comparator_delta": 0.005,
+      "missed_deadline_ratio_absolute_maximum": 0.02,
+      "callback_hitch_ms_per_second_maximum_comparator_delta": 2.0,
+      "callback_hitch_ms_per_second_absolute_maximum": 10.0
+    }
+  },
+  "blockers": [
+    "cleanup/runtime/cap proof failed",
+    "controller runtime proof population is missing, duplicated, or mislabeled",
+    "primary travel equivalence for oxide forward has 0 pairs, expected 9",
+    "primary travel equivalence for oxide reverse has 0 pairs, expected 9",
+    "primary travel equivalence for uikit-optimized forward has 0 pairs, expected 9",
+    "primary travel equivalence for uikit-optimized reverse has 0 pairs, expected 9",
+    "read lock-state evidence /private/tmp/oxide-feed-v1-0e85e6b-arm64/raw/lock-before-primary.json: No such file or directory (os error 2)",
+    "run population is 6, expected 60",
+    "run tuple population is missing, duplicated, or out of scope",
+    "runner blocked at smoke-admission: the frozen smoke reducer gate blocked",
+    "session 0 pair 0 treatment order is not balanced",
+    "session 0 pair 1 treatment order is not balanced",
+    "session 0 pair 2 treatment order is not balanced",
+    "session 1 pair 0 treatment order is not balanced",
+    "session 1 pair 1 treatment order is not balanced",
+    "session 1 pair 2 treatment order is not balanced",
+    "session 2 pair 0 treatment order is not balanced",
+    "session 2 pair 1 treatment order is not balanced",
+    "session 2 pair 2 treatment order is not balanced",
+    "visual gate failed for oxide bottom admission: SSIM 0.875600, worst tile MAE 38.421875",
+    "visual gate failed for oxide bottom repeat: SSIM 0.875600, worst tile MAE 38.421875",
+    "visual gate failed for oxide top admission: SSIM 0.874027, worst tile MAE 38.421875",
+    "visual gate failed for oxide top repeat: SSIM 0.874027, worst tile MAE 38.421875"
+  ],
+  "visual_gate_id": "feed-v1:ssim8-luma>=0.96:tile48-rgb-mae<=18:rgba8:surface1170x2532:v1",
+  "visual_gate_spec_sha256": "097ad822430981f6b6a144e493df0c51f47cf89479ba3d85cf206f77b97c180e",
+  "visual_gate_source_sha256": "3caf4cf6fd30cd78c674933811fc7e648d81c8d851ec77ac822e32c941b7c3db",
+  "repository_ref": "refs/heads/agent/oxide-final-clean-candidate",
+  "repository_head_commit": "0e85e6bbd39b64e7079cc55a5e5237015e1aaae2",
+  "repository_tree": "b11eb2c4732c0a8b198d65503d30b65c94ea96e3",
+  "visual_treatments": [
+    {
+      "state": "top",
+      "treatment": "uikit-idiomatic",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "top",
+      "treatment": "uikit-idiomatic",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "top",
+      "treatment": "uikit-optimized",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "top",
+      "treatment": "uikit-optimized",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "top",
+      "treatment": "oxide",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 0.8740274535921765,
+        "worst_tile_rgb_mae": 38.421875,
+        "exact_rgb_mae": 6.216684332284649,
+        "passes": false
+      }
+    },
+    {
+      "state": "top",
+      "treatment": "oxide",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 0.8740274535921765,
+        "worst_tile_rgb_mae": 38.421875,
+        "exact_rgb_mae": 6.216684332284649,
+        "passes": false
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "uikit-idiomatic",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "uikit-idiomatic",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "uikit-optimized",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "uikit-optimized",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 1.0,
+        "worst_tile_rgb_mae": 0.0,
+        "exact_rgb_mae": 0.0,
+        "passes": true
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "oxide",
+      "capture": "admission",
+      "metrics": {
+        "ssim": 0.875600355090576,
+        "worst_tile_rgb_mae": 38.421875,
+        "exact_rgb_mae": 6.032834870354618,
+        "passes": false
+      }
+    },
+    {
+      "state": "bottom",
+      "treatment": "oxide",
+      "capture": "repeat",
+      "metrics": {
+        "ssim": 0.875600355090576,
+        "worst_tile_rgb_mae": 38.421875,
+        "exact_rgb_mae": 6.032834870354618,
+        "passes": false
+      }
+    }
+  ],
+  "adversarial_results": [
+    {
+      "mutation": "missing-row",
+      "rejected": true,
+      "ssim": 0.9774125899702019,
+      "worst_tile_rgb_mae": 110.28703703703704
+    },
+    {
+      "mutation": "sparse-missing-caption",
+      "rejected": true,
+      "ssim": 0.9940196633602663,
+      "worst_tile_rgb_mae": 18.110677083333332
+    },
+    {
+      "mutation": "wrong-checker-variant",
+      "rejected": true,
+      "ssim": 0.9954257104366797,
+      "worst_tile_rgb_mae": 114.23148148148148
+    },
+    {
+      "mutation": "missing-image",
+      "rejected": true,
+      "ssim": 0.9941134112988371,
+      "worst_tile_rgb_mae": 110.28703703703704
+    },
+    {
+      "mutation": "wrong-text",
+      "rejected": true,
+      "ssim": 0.9850437447739174,
+      "worst_tile_rgb_mae": 100.734375
+    },
+    {
+      "mutation": "wrong-color",
+      "rejected": true,
+      "ssim": 0.9872925752388884,
+      "worst_tile_rgb_mae": 100.45298032407408
+    },
+    {
+      "mutation": "shifted-image",
+      "rejected": true,
+      "ssim": 0.992668335657559,
+      "worst_tile_rgb_mae": 100.05208333333333
+    },
+    {
+      "mutation": "half-sized-image",
+      "rejected": true,
+      "ssim": 0.9940133288417086,
+      "worst_tile_rgb_mae": 110.28703703703704
+    },
+    {
+      "mutation": "bad-clipping",
+      "rejected": true,
+      "ssim": 0.978570012394116,
+      "worst_tile_rgb_mae": 242.0
+    },
+    {
+      "mutation": "localized-corrupt-tile",
+      "rejected": true,
+      "ssim": 0.9992024378381237,
+      "worst_tile_rgb_mae": 218.80671296296296
+    }
+  ],
+  "travel_equivalence": [],
+  "treatments": [],
+  "comparisons": [],
+  "runs": [],
+  "missing_metrics": [
+    "presented-frame pacing",
+    "visible-frame pacing",
+    "input-to-visible latency",
+    "main-thread CPU",
+    "process CPU",
+    "resident memory",
+    "symmetric direct GPU time",
+    "direct energy"
+  ],
+  "cleanup": {
+    "admitted": false,
+    "proof": {
+      "schema": "oxide.feed-v1.cleanup",
+      "schema_revision": 3,
+      "test_succeeded": false,
+      "verified_attachment_count": 12,
+      "apps_uninstalled": true,
+      "controller_uninstalled": true,
+      "uikit_process_absent": true,
+      "oxide_process_absent": true,
+      "controller_process_absent": true,
+      "prelaunch_fuses_admitted": true,
+      "resource_limits": {
+        "external_build_bytes": 4294967296,
+        "result_bundle_bytes": 536870912,
+        "retained_evidence_bytes": 536870912,
+        "retained_file_count": 512,
+        "retained_file_bytes": 134217728
+      },
+      "source_snapshot_preserved": true,
+      "external_build_removed": true,
+      "result_bundle_removed": false,
+      "reducer_binary_absent_from_result_root": true,
+      "external_build_bytes": 1294725120,
+      "result_bundle_bytes": 3051520,
+      "raw_evidence_bytes": 7106560,
+      "retained_file_count": 73,
+      "largest_retained_file_bytes": 649501,
+      "runtime_seconds": 53.0
+    }
+  },
+  "evidence_inventory": [
+    {
+      "relative_path": "raw/attachment-export.log",
+      "bytes": 2607,
+      "sha256": "41e6f77afca341908c9255825a361db9bf1a7743ca2b2b91c2fc44f5198b70ea"
+    },
+    {
+      "relative_path": "raw/attachments/280E8042-FA04-4DE7-BB71-C2906B627580.png",
+      "bytes": 397643,
+      "sha256": "84a6beaa4799173e985a03dd546838d0c02a813c1f2ac9824556546382b87fdf"
+    },
+    {
+      "relative_path": "raw/attachments/3FC26009-D165-4A36-A4D1-16E8E509F843.png",
+      "bytes": 562447,
+      "sha256": "d3961e18e44247f70ba84288a20c2bbd988721a2d33a2b4c507c9bd6a0baef2b"
+    },
+    {
+      "relative_path": "raw/attachments/55C5217E-D6E5-47F0-9339-21E13D3E8CFB.png",
+      "bytes": 585647,
+      "sha256": "ac46cc82ffcae660f16e4943f7e13566ac035d9b337cb61a000a6c3e8be9629d"
+    },
+    {
+      "relative_path": "raw/attachments/6ABB255C-E26B-47EF-A294-D3DBD84769CD.png",
+      "bytes": 397643,
+      "sha256": "84a6beaa4799173e985a03dd546838d0c02a813c1f2ac9824556546382b87fdf"
+    },
+    {
+      "relative_path": "raw/attachments/6B20A9C4-426C-4FE6-8546-9E94CBED8911.png",
+      "bytes": 397240,
+      "sha256": "c4974222f9ba6f035ae09eddab329c2d726414f08d36662323ceb1f6c2aaa4e0"
+    },
+    {
+      "relative_path": "raw/attachments/6CDB1175-2907-4AB6-8005-46DB30ABF308.png",
+      "bytes": 397240,
+      "sha256": "c4974222f9ba6f035ae09eddab329c2d726414f08d36662323ceb1f6c2aaa4e0"
+    },
+    {
+      "relative_path": "raw/attachments/7B514640-1E07-4465-BB5C-16DA9D4D74BC.png",
+      "bytes": 397240,
+      "sha256": "c4974222f9ba6f035ae09eddab329c2d726414f08d36662323ceb1f6c2aaa4e0"
+    },
+    {
+      "relative_path": "raw/attachments/8A9A6B8A-C8F7-4D42-8100-7EE913071DDA.png",
+      "bytes": 562447,
+      "sha256": "d3961e18e44247f70ba84288a20c2bbd988721a2d33a2b4c507c9bd6a0baef2b"
+    },
+    {
+      "relative_path": "raw/attachments/93726CC7-FF00-4233-A867-8EC46E6BCABA.png",
+      "bytes": 397643,
+      "sha256": "84a6beaa4799173e985a03dd546838d0c02a813c1f2ac9824556546382b87fdf"
+    },
+    {
+      "relative_path": "raw/attachments/B161CF61-4E17-4A37-9553-3D17A47D32CE.png",
+      "bytes": 397240,
+      "sha256": "c4974222f9ba6f035ae09eddab329c2d726414f08d36662323ceb1f6c2aaa4e0"
+    },
+    {
+      "relative_path": "raw/attachments/C93C1BDE-024E-4752-AB3F-936AB6F29912.png",
+      "bytes": 585164,
+      "sha256": "8a34cd06f8911168f0e42654f26965f7d3b1f4c66d995257b0c1ef8b38aa30f6"
+    },
+    {
+      "relative_path": "raw/attachments/F937BBA5-7908-4D12-9E0F-A722037C27FA.png",
+      "bytes": 397643,
+      "sha256": "84a6beaa4799173e985a03dd546838d0c02a813c1f2ac9824556546382b87fdf"
+    },
+    {
+      "relative_path": "raw/attachments/manifest.json",
+      "bytes": 6156,
+      "sha256": "b92002138075478450ebe8da217ca652235ad2cf06d7fcbf27e0198fcaadba9c"
+    },
+    {
+      "relative_path": "raw/build-primary.log",
+      "bytes": 48254,
+      "sha256": "72bdff4ca57b66fbaa68fb9b67b88c5f9da95fd01d29041deebda4e4a90d57f0"
+    },
+    {
+      "relative_path": "raw/build-smoke.log",
+      "bytes": 216310,
+      "sha256": "cd4c9678d08273e6c529843db98b9ff3c38a90f45d854d0abfbbb29af7900888"
+    },
+    {
+      "relative_path": "raw/cleanup.json",
+      "bytes": 897,
+      "sha256": "b10661657528e53d3888c008f17a805f2f44a8d8f9115840ea48b95c711b52e4"
+    },
+    {
+      "relative_path": "raw/controller-documents/oxide-feed-v1-controller-runtime-smoke.json",
+      "bytes": 342,
+      "sha256": "0980c73d42dfc64bfcc7d0f7e16eb0c4141f0b7f8094fe630976ec4f0c4e79f9"
+    },
+    {
+      "relative_path": "raw/copy-smoke-controller.json",
+      "bytes": 1042,
+      "sha256": "4b7d7c7cf50d500b41ffb0853ef8594e1be1b70fab238f8f4b99db11ada23e67"
+    },
+    {
+      "relative_path": "raw/copy-smoke-oxide.json",
+      "bytes": 997,
+      "sha256": "2ac9be145d64a82c58f6212c228c6670ff7f4d6f047c49a3e953876dd3bcaa7e"
+    },
+    {
+      "relative_path": "raw/copy-smoke-uikit.json",
+      "bytes": 997,
+      "sha256": "bbdeac00dcf8c1da8fb8fce9ee58fbfb7801128a2d9607ee359f97574ee80a6d"
+    },
+    {
+      "relative_path": "raw/device-after-smoke.json",
+      "bytes": 7774,
+      "sha256": "83be94db79196fddb162d1c179ad52da15565a2b3e9388b64ea7b588ab988332"
+    },
+    {
+      "relative_path": "raw/device-after.json",
+      "bytes": 7768,
+      "sha256": "d3f7af751a75fe9d4c26ed1f7da1af4d715321b5c473a1b6a7a5f207678bcd63"
+    },
+    {
+      "relative_path": "raw/device-before.json",
+      "bytes": 7770,
+      "sha256": "fe3bb63b8315bcdfe5898f506f82e5091f41a5c411dc0e86380459ac34dee0f8"
+    },
+    {
+      "relative_path": "raw/evidence-manifest.json",
+      "bytes": 6200,
+      "sha256": "0cd05ba067c3e09c174bd95cf761ff65fbd0a0b086bfcdd800cf05f177fa5ecf"
+    },
+    {
+      "relative_path": "raw/install-oxide.json",
+      "bytes": 1077,
+      "sha256": "613e1edc986e4b3bbc065e2776813ca8264ab73aeb42c1ba91aadbadc1d7d50d"
+    },
+    {
+      "relative_path": "raw/install-uikit.json",
+      "bytes": 1077,
+      "sha256": "a6a7c0862fa98c550b3e0bc3630005660d234705b5e72ef2b2fcd43de905012a"
+    },
+    {
+      "relative_path": "raw/lock-before-build.json",
+      "bytes": 625,
+      "sha256": "19d79de07f6afbb28e57a23694e01fd886d5086b7e23e158aadcaab040108d73"
+    },
+    {
+      "relative_path": "raw/lock-before-test.json",
+      "bytes": 624,
+      "sha256": "a5c16dccec7ada2cfa0f05ad5bb845de8729da05ba110914367581283cc97f55"
+    },
+    {
+      "relative_path": "raw/oxide-documents/oxide-feed-v1-smoke-s00-p00-o2-oxide-forward-3bce856c-d0b0-4aed-a37b-fe73d020ed77.json",
+      "bytes": 42654,
+      "sha256": "1647bd689b7a7c60968f81b9ffc780a0e172b84687cb0af136bd36f32ed9a941"
+    },
+    {
+      "relative_path": "raw/oxide-documents/oxide-feed-v1-smoke-s00-p00-o2-oxide-reverse-fd3e1798-62ef-4e40-b866-18ead5bd399d.json",
+      "bytes": 43556,
+      "sha256": "00b4511401cdbda66b9b29bc32fb196a1db49aa6ca0cee6a43c3576aa33b696f"
+    },
+    {
+      "relative_path": "raw/postclean-controller-after.json",
+      "bytes": 868,
+      "sha256": "797e300bc7299ea12d7bb8aa05e325b13e9772f02bdce01553f40666a8dc4282"
+    },
+    {
+      "relative_path": "raw/postclean-controller-before.json",
+      "bytes": 1368,
+      "sha256": "3cb5eb2f732dd534cb22a1ef00d1fd7e1e838586f19734524b56c8ba799f69ee"
+    },
+    {
+      "relative_path": "raw/postclean-controller-process-after.json",
+      "bytes": 702,
+      "sha256": "666b14fccf45919053e2adbe99835ed73cf9d2ea56683d0b3f2e4acb5f901626"
+    },
+    {
+      "relative_path": "raw/postclean-controller-process-before.json",
+      "bytes": 703,
+      "sha256": "f534f5cfc58b8ffc7e788e8a13ade827136b8331e271a61fda95f66a88deeebf"
+    },
+    {
+      "relative_path": "raw/postclean-oxide-after.json",
+      "bytes": 833,
+      "sha256": "628eebbcd85bebe62f3cd39424401e6b27d62406428b31985b3b2dc7a2b627b6"
+    },
+    {
+      "relative_path": "raw/postclean-oxide-before.json",
+      "bytes": 1294,
+      "sha256": "fedbe5956e4c4d6a94de99994d08a7ec30c66d7b398d5502eff1ec0692142d12"
+    },
+    {
+      "relative_path": "raw/postclean-oxide-process-after.json",
+      "bytes": 685,
+      "sha256": "fdd16c806d9ade6bf2fcf7ed97fd9a61c0347aa25566cb78bbf2908fca31429a"
+    },
+    {
+      "relative_path": "raw/postclean-oxide-process-before.json",
+      "bytes": 686,
+      "sha256": "3cf79aa21c5ace7024dfd269b175331b817e580e398ed595eb437c3927dd55d6"
+    },
+    {
+      "relative_path": "raw/postclean-uikit-after.json",
+      "bytes": 833,
+      "sha256": "f5a2fdec7ef6498e36fc619210a7c2b9aba4908238d0c8e76afb34229594bb51"
+    },
+    {
+      "relative_path": "raw/postclean-uikit-before.json",
+      "bytes": 1294,
+      "sha256": "302a85b1c1104c31f1569d9cd11c979d20262256b8670df4186a971785585d01"
+    },
+    {
+      "relative_path": "raw/postclean-uikit-process-after.json",
+      "bytes": 685,
+      "sha256": "4894fd99467380feea345efa1982fd8e0309bfa66955d160f3bfe05d48e896e8"
+    },
+    {
+      "relative_path": "raw/postclean-uikit-process-before.json",
+      "bytes": 686,
+      "sha256": "c26d71bfa559a7d67a609a0e362f71b4e7119461844719ba33b3beb3ad9efc61"
+    },
+    {
+      "relative_path": "raw/preclean-controller-before.json",
+      "bytes": 868,
+      "sha256": "aa6519d4bd314b4d4ba0f52c0be88786d24ac86bdf3dd29cda8b8acd19916185"
+    },
+    {
+      "relative_path": "raw/preclean-controller-process-after.json",
+      "bytes": 701,
+      "sha256": "766d69c55374959129e9403217548477eea0174a1eb0415af3490f364a8ff8b5"
+    },
+    {
+      "relative_path": "raw/preclean-controller-process-before.json",
+      "bytes": 702,
+      "sha256": "d4430dad7ed0c041a0154c307d26a2bb3890560d4ed3327b7d10cfe8ee0b6d60"
+    },
+    {
+      "relative_path": "raw/preclean-oxide-before.json",
+      "bytes": 833,
+      "sha256": "2e2ed3e3c995513c51bc6b395f7c891ce293dfbd0c91e21be1ee9e7ff79bf31f"
+    },
+    {
+      "relative_path": "raw/preclean-oxide-process-after.json",
+      "bytes": 684,
+      "sha256": "ddd15f53f9df14582c66b2fd69e1afd72b2983f8d4e2e928fa7888da723e01fd"
+    },
+    {
+      "relative_path": "raw/preclean-oxide-process-before.json",
+      "bytes": 685,
+      "sha256": "af1502836a7d2d1c29e61001b0514dd6c8a9a66f75f6a2f947a9617b983db900"
+    },
+    {
+      "relative_path": "raw/preclean-uikit-before.json",
+      "bytes": 833,
+      "sha256": "156c0363b525401d7baeaf3c52680011494d7ce0db097f94978d632acbe38f59"
+    },
+    {
+      "relative_path": "raw/preclean-uikit-process-after.json",
+      "bytes": 684,
+      "sha256": "f9faa7039c5a75e6fa63eedc7440e972b610f9945ee1644e040207dbaa526601"
+    },
+    {
+      "relative_path": "raw/preclean-uikit-process-before.json",
+      "bytes": 685,
+      "sha256": "80436ebe2d8f0a7a6a11a63dc71a4c0f258f689f1a86789150f5c2372e782fe7"
+    },
+    {
+      "relative_path": "raw/provenance/cargo-version.txt",
+      "bytes": 36,
+      "sha256": "fc575754e0a420c536173642b06e9f041004113fbf14ceeba399098546da77c9"
+    },
+    {
+      "relative_path": "raw/provenance/controller-runner-codesign.txt",
+      "bytes": 1159,
+      "sha256": "cabc1ecb348c8d1ff6553ad8fb2178f57549658db7728c83fbb1f7fff7afba8c"
+    },
+    {
+      "relative_path": "raw/provenance/controller-xctest-codesign.txt",
+      "bytes": 1164,
+      "sha256": "8ec376441044de7b27cfe85955b6a43901e92955bd9322b94794d6d78c3accbd"
+    },
+    {
+      "relative_path": "raw/provenance/iphoneos-sdk-build.txt",
+      "bytes": 7,
+      "sha256": "1d4160292cd4d7f0aed4836156a2de1e172e52f81509fd1ca179154ace7881a8"
+    },
+    {
+      "relative_path": "raw/provenance/iphoneos-sdk-version.txt",
+      "bytes": 5,
+      "sha256": "25205f2e2f02dc71036ee827e19c49b893b231a3d1af240e35a3ac55aa8cdcb6"
+    },
+    {
+      "relative_path": "raw/provenance/oxide-codesign.txt",
+      "bytes": 1119,
+      "sha256": "7e669a221c400a5395132b7a42210cb2e71340cb68917d1251bb9f557399828f"
+    },
+    {
+      "relative_path": "raw/provenance/production-cargo-metadata.json",
+      "bytes": 649501,
+      "sha256": "838ec6c468dc98ff9a508c761f3ee74142fa803361c34bdc009570445e2aef51"
+    },
+    {
+      "relative_path": "raw/provenance/production-cargo-metadata.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "raw/provenance/release-build-settings.txt",
+      "bytes": 107778,
+      "sha256": "6e222c193c1977aedc56e3cc3c03f123eaf6916c0a4c6d69126a3a291e33ec00"
+    },
+    {
+      "relative_path": "raw/provenance/rustc-version.txt",
+      "bytes": 192,
+      "sha256": "ebe812d6e926c97df1951aaef20d865a7fadd2f7e154aa0399237c009119e834"
+    },
+    {
+      "relative_path": "raw/provenance/uikit-codesign.txt",
+      "bytes": 1117,
+      "sha256": "3a93794d7f273b0c032abea47af14a4254e6fa266b39fe44b4e60852e6e4d3bc"
+    },
+    {
+      "relative_path": "raw/provenance/xcode-version.txt",
+      "bytes": 32,
+      "sha256": "18730ed2ae28a2c9cf0c2d5db549033a4f07089331391a7133b7b32187454fa9"
+    },
+    {
+      "relative_path": "raw/runner.json",
+      "bytes": 388,
+      "sha256": "3b99958746204fc602ba8f496a22dbe2fec845b66563b5758873b5b423760375"
+    },
+    {
+      "relative_path": "raw/rust-contract-check.log",
+      "bytes": 8121,
+      "sha256": "021aac3e8a5cd1f6b4e7928b753378f5ae72623b343763f97564fd7862005836"
+    },
+    {
+      "relative_path": "raw/smoke-admission.log",
+      "bytes": 388,
+      "sha256": "f22efbcb11a7c80a4fb6cae261db53302a1116742b2efd03d26d0ce2e8503ce6"
+    },
+    {
+      "relative_path": "raw/swift-contract-build.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "relative_path": "raw/swift-contract-check.log",
+      "bytes": 176,
+      "sha256": "d4d987bd94722f888b45182d4d3036c1d1cb0cc16a03b2d796b01e632b655330"
+    },
+    {
+      "relative_path": "raw/test-smoke.log",
+      "bytes": 19295,
+      "sha256": "ce920e55e73f4b8abd2c55f3f6e4774c00592889fb504e5eaf799d2c478465c6"
+    },
+    {
+      "relative_path": "raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o0-uikit-idiomatic-forward-46cefc8a-9a87-4808-847c-9e2075c20f2c.json",
+      "bytes": 60268,
+      "sha256": "ba940f18e27447323ffe1fa4672ba0ed77e35c1278c4fd8bfd05b0ec425e7cd8"
+    },
+    {
+      "relative_path": "raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o0-uikit-idiomatic-reverse-baf37303-da90-4de7-92ef-caa090490684.json",
+      "bytes": 60646,
+      "sha256": "1b3e9143b01e657220d0aa168766effe27fb374408ebaa409976d94de71f1b11"
+    },
+    {
+      "relative_path": "raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o1-uikit-optimized-forward-279d498b-b28b-4e7d-b218-70f6fb073942.json",
+      "bytes": 60268,
+      "sha256": "254bd208c47c47ce62779058481fa748ed0e1459353196c42a4bd55a5c35c653"
+    },
+    {
+      "relative_path": "raw/uikit-documents/oxide-feed-v1-smoke-s00-p00-o1-uikit-optimized-reverse-d6b134bd-a2b3-4ea4-b8e4-910512c131cf.json",
+      "bytes": 61130,
+      "sha256": "69a2248b27d7d97340c2c92b479dcc5d4cbf5f57b8e98a8ece32f2ad87920b6f"
+    },
+    {
+      "relative_path": "raw/xcode-destinations.txt",
+      "bytes": 1126,
+      "sha256": "9cdacc2258157ddccb39bc97b76f04454b98c087bf33442fe7cd256973b14edd"
+    }
+  ],
+  "evidence_manifest_sha256": "0cd05ba067c3e09c174bd95cf761ff65fbd0a0b086bfcdd800cf05f177fa5ecf",
+  "retained_input_bytes": 6923192,
+  "run_count_total": 6,
+  "run_count_primary": 0
+}
