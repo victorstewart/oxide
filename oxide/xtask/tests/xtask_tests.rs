@@ -3527,6 +3527,21 @@ fn device_trace_launches_before_process_attachment_and_starts_after_trace_ready(
 }
 
 #[test]
+fn oxide_device_trace_retries_transient_attachment_failure_once()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let trace = source
+      .split_once("fn run_oxide_onscreen_case_trace(")
+      .and_then(|(_, tail)| tail.split_once("fn summary_value_seconds("))
+      .map(|(body, _)| body)
+      .expect("on-screen Oxide trace body");
+
+   assert!(trace.contains("UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES"));
+   assert!(trace.contains("is_retryable_uikit_trace_handshake_error"));
+   assert!(trace.contains("handshake_attempt += 1"));
+}
+
+#[test]
 fn retryable_uikit_trace_handshake_error_matches_completion_timeout_text() {
     assert!(is_retryable_uikit_trace_handshake_error(
         "Error: xcrun devicectl device notification observe --device 00008150-001529C434F8401C --name com.oxide.perf.complete --session-timeout 30 --timeout 35 exited without observing `com.oxide.perf.complete` and console marker `OXIDE_COMPLETE testOptimizedCollectionViewEncode` never appeared before the timeout"

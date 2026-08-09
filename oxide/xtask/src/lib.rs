@@ -7059,6 +7059,7 @@ fn run_oxide_onscreen_case_trace(
       watch_capture,
    )?;
    let mut include_gpu_counters = gpu_counter_capability.should_request();
+   let mut handshake_attempt = 0usize;
    let mut timeout_attempt = 0usize;
    let mut notes = console_run
       .notes
@@ -7125,6 +7126,23 @@ fn run_oxide_onscreen_case_trace(
             include_gpu_counters = false;
             notes.push(String::from(
                "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
+            ));
+            continue;
+         }
+         Err(err)
+            if handshake_attempt + 1 < UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+               && is_retryable_uikit_trace_handshake_error(&err.to_string()) =>
+         {
+            handshake_attempt += 1;
+            println!(
+               "On-screen Oxide trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the attached trace.",
+               spec.test_name,
+               refresh_mode.report_value(),
+               handshake_attempt + 1,
+               UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
+            );
+            notes.push(String::from(
+               "Trace handshake status: this on-screen Oxide case retried the attached trace after a transient device ready/start/attach handshake failure.",
             ));
             continue;
          }
