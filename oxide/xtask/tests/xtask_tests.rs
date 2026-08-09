@@ -3547,6 +3547,9 @@ fn retryable_xctrace_record_timeout_error_matches_watchdog_text() {
     assert!(is_retryable_xctrace_record_timeout_error(
         "Error: xcrun xctrace record --template Metal System Trace --device 00008150-001529C434F8401C --time-limit 6s --output /tmp/test.trace --no-prompt --instrument Points of Interest --launch -- com.oxide.host exceeded wall-time timeout of 21.0s before xctrace finished. stdout: Starting recording with the Metal System Trace template and Points of Interest Instruments. Launching process: com.oxide.host. Time limit: 6.0 s stderr: "
     ));
+    assert!(is_retryable_xctrace_record_timeout_error(
+        "xcrun xctrace record --template Metal System Trace --instrument Metal GPU Counters --attach 53609 did not emit `com.oxide.perf.xctrace.started` within 5000 ms"
+    ));
     assert!(!is_retryable_xctrace_record_timeout_error(
         "xcrun xctrace record failed with status 19: Cannot find process matching name: OxideHost"
     ));

@@ -4996,8 +4996,11 @@ pub fn is_retryable_uikit_trace_handshake_error(text: &str) -> bool {
 pub fn is_retryable_xctrace_record_timeout_error(text: &str) -> bool {
     let lowered = text.to_ascii_lowercase();
     lowered.contains("xcrun xctrace record")
-        && lowered.contains("exceeded wall-time timeout")
-        && lowered.contains("before xctrace finished")
+        && ((lowered.contains("exceeded wall-time timeout")
+            && lowered.contains("before xctrace finished"))
+            || (lowered.contains("did not emit")
+                && lowered.contains(&UIKIT_TRACE_STARTED_NOTIFICATION.to_ascii_lowercase())
+                && lowered.contains("within")))
 }
 
 pub fn format_uikit_only_testing_identifier(
