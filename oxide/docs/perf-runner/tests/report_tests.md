@@ -100,6 +100,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests` for the every
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-08-09: refreshed the frozen five-row Oxide and ten-row UIKit device metric-key digests after the reviewed physical-device baseline and removed the obsolete pre-atomic paired-sample writer marker from the publication-order guard.
 - 2026-08-07: froze canonical workspace publication behind one atomic promotion; library unit tests inject failure at each of its three output slots and each of the six paired-device slots.
 - 2026-08-07: added pre-write comparison-order coverage and an explicit sentinel test proving rejected comparisons preserve prior JSON and Markdown.
 - 2026-08-07: added nested-top-level, dirty/detached/drift, version-2 rejection, version-1 compatibility, JSON, and Markdown provenance coverage.
