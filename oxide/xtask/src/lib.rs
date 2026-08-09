@@ -5252,21 +5252,6 @@ fn uikit_perf_launch_environment_json_with_trace_phases(
     )
 }
 
-fn uikit_perf_xctrace_launch_env_args_with_autostart(
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    camera_trace_phases: bool,
-    autostart: bool,
-    watch_capture: bool,
-) -> Vec<String> {
-    let mut env =
-        uikit_perf_launch_environment(spec, refresh_mode, camera_trace_phases, watch_capture);
-    if autostart {
-        env.insert(String::from("OXIDE_PERF_TRACE_AUTOSTART"), String::from("1"));
-    }
-    environment_as_xctrace_args(env)
-}
-
 fn uikit_perf_launch_args(
     device: &UIKitPhysicalDevice,
     built_app: &BuiltUIKitApp,
@@ -5373,15 +5358,6 @@ fn append_forwarded_uikit_perf_environment(env: &mut BTreeMap<String, String>) {
 
 fn encode_environment_json(env: &BTreeMap<String, String>, context: &str) -> Result<String> {
     serde_json::to_string(env).with_context(|| String::from(context))
-}
-
-fn environment_as_xctrace_args(env: BTreeMap<String, String>) -> Vec<String> {
-    let mut args = Vec::with_capacity(env.len() * 2);
-    for (key, value) in env {
-        args.push(String::from("--env"));
-        args.push(format!("{}={}", key, value));
-    }
-    args
 }
 
 fn uikit_device_notification_observe_args(
@@ -7085,7 +7061,7 @@ fn run_oxide_onscreen_case_trace(
       .cloned()
       .collect::<Vec<_>>();
    notes.push(String::from(
-      "GPU trace source: collected through a separate launched Metal trace after the console-summary on-screen Oxide run, so in-app renderer stage summaries remain available when xctrace target stdout is empty.",
+      "GPU trace source: collected through a separate process-attached Metal trace after the console-summary on-screen Oxide run, so in-app renderer stage summaries remain available independently of Instruments output.",
    ));
    if !include_gpu_counters
    {
@@ -7100,7 +7076,7 @@ fn run_oxide_onscreen_case_trace(
       {
          extra_instruments.push(String::from("Metal GPU Counters"));
       }
-      let trace_attempt = run_uikit_device_launched_trace(
+      let trace_attempt = run_uikit_device_attached_trace(
          root,
          device,
          built_app,
@@ -7111,7 +7087,6 @@ fn run_oxide_onscreen_case_trace(
          "Metal System Trace",
          &extra_instruments,
          trace_seconds,
-         true,
          watch_capture,
       );
       let (trace_path, _trace_stdout_path, stderr_path) = match trace_attempt
@@ -7128,7 +7103,7 @@ fn run_oxide_onscreen_case_trace(
             gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
-               "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+               "GPU counter status: the attached device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
             ));
             continue;
          }
@@ -7143,7 +7118,7 @@ fn run_oxide_onscreen_case_trace(
             gpu_counter_capability.record_unavailable();
             include_gpu_counters = false;
             notes.push(String::from(
-               "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
+               "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
             ));
             continue;
          }
@@ -7153,7 +7128,7 @@ fn run_oxide_onscreen_case_trace(
          {
             timeout_attempt += 1;
             println!(
-               "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+               "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the attached trace.",
                spec.test_name,
                refresh_mode.report_value(),
                timeout_attempt + 1,
@@ -7176,7 +7151,7 @@ fn run_oxide_onscreen_case_trace(
          gpu_counter_capability.record_unavailable();
          include_gpu_counters = false;
          notes.push(String::from(
-            "GPU counter status: the launched device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
+            "GPU counter status: the attached device trace explicitly rejected the Metal GPU Counters profile, so this case was retried with direct GPU time and GPU latency only.",
          ));
          continue;
       }
@@ -7189,7 +7164,7 @@ fn run_oxide_onscreen_case_trace(
          gpu_counter_capability.record_unavailable();
          include_gpu_counters = false;
          notes.push(String::from(
-            "GPU counter status: the launched device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
+            "GPU counter status: the attached device trace timed out while requesting the Metal GPU Counters profile, so this and later cases in the command use direct GPU time and GPU latency only.",
          ));
          continue;
       }
@@ -7198,7 +7173,7 @@ fn run_oxide_onscreen_case_trace(
       {
          timeout_attempt += 1;
          println!(
-            "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+            "On-screen Oxide trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the attached trace.",
             spec.test_name,
             refresh_mode.report_value(),
             timeout_attempt + 1,
@@ -8468,14 +8443,14 @@ fn run_uikit_device_case_trace(
          {
             handshake_attempt += 1;
             println!(
-               "UIKit device trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the launched trace.",
+               "UIKit device trace handshake flaked for `{}` on {} (attempt {}/{}); retrying the attached trace.",
                spec.test_name,
                refresh_mode.report_value(),
                handshake_attempt + 1,
                UIKIT_DEVICE_TRACE_HANDSHAKE_RETRIES
             );
             notes.push(format!(
-               "Trace handshake status: this case retried the launched trace after a transient `{}` handshake timeout.",
+               "Trace handshake status: this case retried the attached trace after a transient `{}` handshake timeout.",
                UIKIT_DEVICE_COMPLETE_NOTIFICATION
             ));
          }
@@ -8485,7 +8460,7 @@ fn run_uikit_device_case_trace(
          {
             timeout_attempt += 1;
             println!(
-               "UIKit device trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the launched trace.",
+               "UIKit device trace for `{}` on {} hit a transient xctrace wall-time timeout (attempt {}/{}); retrying the attached trace.",
                spec.test_name,
                refresh_mode.report_value(),
                timeout_attempt + 1,
@@ -8746,7 +8721,7 @@ fn run_uikit_device_case_trace_attempt(
    {
       extra_instruments.push(String::from("Metal GPU Counters"));
    }
-   let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_launched_trace(
+   let (trace_path, launch_stdout_path, stderr_path) = run_uikit_device_attached_trace(
       root,
       device,
       built_app,
@@ -8757,7 +8732,6 @@ fn run_uikit_device_case_trace_attempt(
       "Metal System Trace",
       &extra_instruments,
       trace_seconds,
-      true,
       watch_capture,
    )?;
    let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
@@ -8769,258 +8743,360 @@ fn run_uikit_device_case_trace_attempt(
    ))
 }
 
-fn run_uikit_device_launched_trace(
-    root: &Path,
-    device: &UIKitPhysicalDevice,
-    built_app: &BuiltUIKitApp,
-    spec: &UIKitCaseSpec,
-    refresh_mode: UIKitDeviceRefreshMode,
-    case_dir: &Path,
-    trace_label: &str,
-    template_name: &str,
-    extra_instruments: &[String],
-    trace_seconds: u64,
-    autostart: bool,
-    watch_capture: bool,
-) -> Result<(PathBuf, PathBuf, PathBuf)> {
-    let launched_trace_seconds = trace_seconds.saturating_add(uikit_launch_trace_buffer_secs(spec));
-    let trace_wall_timeout = Duration::from_secs(
-        launched_trace_seconds.saturating_add(XCTRACE_RECORD_TIMEOUT_GRACE_SECS),
-    );
-    let trace_path = case_dir.join(format!("{}.trace", trace_label));
-    let stdout_path = case_dir.join(format!("{}.stdout.log", trace_label));
-    let target_stdout_path = case_dir.join(format!("{}.target.stdout.log", trace_label));
-    let stderr_path = case_dir.join(format!("{}.stderr.log", trace_label));
-    let ready_stdout_path = case_dir.join(format!("{}.ready.stdout.log", trace_label));
-    let ready_stderr_path = case_dir.join(format!("{}.ready.stderr.log", trace_label));
-    let complete_stdout_path = case_dir.join(format!("{}.complete.stdout.log", trace_label));
-    let complete_stderr_path = case_dir.join(format!("{}.complete.stderr.log", trace_label));
-    let failed_stdout_path = case_dir.join(format!("{}.failed.stdout.log", trace_label));
-    let failed_stderr_path = case_dir.join(format!("{}.failed.stderr.log", trace_label));
-    let trace_started_stdout_path =
-        case_dir.join(format!("{}.trace-started.stdout.log", trace_label));
-    let trace_started_stderr_path =
-        case_dir.join(format!("{}.trace-started.stderr.log", trace_label));
-    remove_existing_path(&trace_path)?;
-    remove_existing_path(&stdout_path)?;
-    remove_existing_path(&target_stdout_path)?;
-    remove_existing_path(&stderr_path)?;
-    remove_existing_path(&ready_stdout_path)?;
-    remove_existing_path(&ready_stderr_path)?;
-    remove_existing_path(&complete_stdout_path)?;
-    remove_existing_path(&complete_stderr_path)?;
-    remove_existing_path(&failed_stdout_path)?;
-    remove_existing_path(&failed_stderr_path)?;
-    remove_existing_path(&trace_started_stdout_path)?;
-    remove_existing_path(&trace_started_stderr_path)?;
+fn run_uikit_device_attached_trace(
+   root: &Path,
+   device: &UIKitPhysicalDevice,
+   built_app: &BuiltUIKitApp,
+   spec: &UIKitCaseSpec,
+   refresh_mode: UIKitDeviceRefreshMode,
+   case_dir: &Path,
+   trace_label: &str,
+   template_name: &str,
+   extra_instruments: &[String],
+   trace_seconds: u64,
+   watch_capture: bool,
+) -> Result<(PathBuf, PathBuf, PathBuf)>
+{
+   let attached_trace_seconds = trace_seconds.saturating_add(uikit_launch_trace_buffer_secs(spec));
+   let trace_wall_timeout = Duration::from_secs(
+      attached_trace_seconds.saturating_add(XCTRACE_RECORD_TIMEOUT_GRACE_SECS),
+   );
+   let trace_path = case_dir.join(format!("{}.trace", trace_label));
+   let trace_stdout_path = case_dir.join(format!("{}.stdout.log", trace_label));
+   let trace_stderr_path = case_dir.join(format!("{}.stderr.log", trace_label));
+   let launch_stdout_path = case_dir.join(format!("{}.target.stdout.log", trace_label));
+   let launch_stderr_path = case_dir.join(format!("{}.target.stderr.log", trace_label));
+   let ready_stdout_path = case_dir.join(format!("{}.ready.stdout.log", trace_label));
+   let ready_stderr_path = case_dir.join(format!("{}.ready.stderr.log", trace_label));
+   let complete_stdout_path = case_dir.join(format!("{}.complete.stdout.log", trace_label));
+   let complete_stderr_path = case_dir.join(format!("{}.complete.stderr.log", trace_label));
+   let failed_stdout_path = case_dir.join(format!("{}.failed.stdout.log", trace_label));
+   let failed_stderr_path = case_dir.join(format!("{}.failed.stderr.log", trace_label));
+   let trace_started_stdout_path =
+      case_dir.join(format!("{}.trace-started.stdout.log", trace_label));
+   let trace_started_stderr_path =
+      case_dir.join(format!("{}.trace-started.stderr.log", trace_label));
+   for path in [
+      &trace_path,
+      &trace_stdout_path,
+      &trace_stderr_path,
+      &launch_stdout_path,
+      &launch_stderr_path,
+      &ready_stdout_path,
+      &ready_stderr_path,
+      &complete_stdout_path,
+      &complete_stderr_path,
+      &failed_stdout_path,
+      &failed_stderr_path,
+      &trace_started_stdout_path,
+      &trace_started_stderr_path,
+   ]
+   {
+      remove_existing_path(path)?;
+   }
 
-    drain_uikit_processes(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(5),
-        "pre-trace launch cleanup",
-    )?;
+   drain_uikit_processes(
+      root,
+      device,
+      &built_app.executable_name,
+      Duration::from_secs(5),
+      "pre-attach launch cleanup",
+   )?;
 
-    let mut ready_child = if autostart {
-        None
-    } else {
-        let ready_args = uikit_device_notification_observe_args(
+   let ready_args = uikit_device_notification_observe_args(
+      device,
+      UIKIT_DEVICE_READY_NOTIFICATION,
+      UIKIT_DEVICE_READY_TIMEOUT_SECS,
+   );
+   let mut ready_child = spawn_command_owned_with_output_paths(
+      root,
+      "xcrun",
+      &ready_args,
+      &ready_stdout_path,
+      &ready_stderr_path,
+   )?;
+   thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+   let complete_args = uikit_device_notification_observe_args(
+      device,
+      UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+      UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
+   );
+   let mut complete_child = spawn_command_owned_with_output_paths(
+      root,
+      "xcrun",
+      &complete_args,
+      &complete_stdout_path,
+      &complete_stderr_path,
+   )?;
+   thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+   let failed_args = uikit_device_notification_observe_args(
+      device,
+      UIKIT_DEVICE_FAILED_NOTIFICATION,
+      UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
+   );
+   let mut failed_child = spawn_command_owned_with_output_paths(
+      root,
+      "xcrun",
+      &failed_args,
+      &failed_stdout_path,
+      &failed_stderr_path,
+   )?;
+   thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+   let launch_args =
+      uikit_perf_launch_args(device, built_app, spec, refresh_mode, false, watch_capture)?;
+   let mut launch_child = spawn_command_owned_with_output_paths(
+      root,
+      "xcrun",
+      &launch_args,
+      &launch_stdout_path,
+      &launch_stderr_path,
+   )?;
+   let process_pid = match wait_for_uikit_process_start_or_launch_failure(
+      root,
+      device,
+      &built_app.executable_name,
+      &mut launch_child,
+      "xcrun",
+      &launch_args,
+      &launch_stdout_path,
+      &launch_stderr_path,
+      Duration::from_secs(15),
+   )
+   {
+      Ok(pid) => pid,
+      Err(err) =>
+      {
+         for child in [&mut ready_child, &mut complete_child, &mut failed_child]
+         {
+            let _ = child.kill();
+            let _ = child.wait();
+         }
+         let _ = launch_child.kill();
+         let _ = launch_child.wait();
+         let _ = drain_uikit_processes(
+            root,
             device,
-            UIKIT_DEVICE_READY_NOTIFICATION,
-            UIKIT_DEVICE_READY_TIMEOUT_SECS,
-        );
-        let child = spawn_command_owned_with_output_paths(
-            root,
-            "xcrun",
-            &ready_args,
-            &ready_stdout_path,
-            &ready_stderr_path,
-        )?;
-        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-        Some(child)
-    };
-
-    let complete_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-        UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
-    );
-    let mut complete_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &complete_args,
-        &complete_stdout_path,
-        &complete_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-    let failed_args = uikit_device_notification_observe_args(
-        device,
-        UIKIT_DEVICE_FAILED_NOTIFICATION,
-        UIKIT_DEVICE_COMPLETE_TIMEOUT_SECS,
-    );
-    let mut failed_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &failed_args,
-        &failed_stdout_path,
-        &failed_stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-
-    let mut trace_started_child = if autostart {
-        None
-    } else {
-        let trace_started_args =
-            vec![String::from("-1"), String::from(UIKIT_TRACE_STARTED_NOTIFICATION)];
-        let child = spawn_command_owned_with_output_paths(
-            root,
-            "notifyutil",
-            &trace_started_args,
-            &trace_started_stdout_path,
-            &trace_started_stderr_path,
-        )?;
-        thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
-        Some(child)
-    };
-
-    let mut trace_args = vec![
-        String::from("xctrace"),
-        String::from("record"),
-        String::from("--template"),
-        String::from(template_name),
-        String::from("--device"),
-        device.udid.clone(),
-        String::from("--time-limit"),
-        format!("{}s", launched_trace_seconds),
-        String::from("--output"),
-        trace_path.to_string_lossy().into_owned(),
-        String::from("--no-prompt"),
-    ];
-    for instrument in extra_instruments {
-        trace_args.push(String::from("--instrument"));
-        trace_args.push(instrument.clone());
-    }
-    trace_args.extend(uikit_perf_xctrace_launch_env_args_with_autostart(
-        spec,
-        refresh_mode,
-        false,
-        autostart,
-        watch_capture,
-    ));
-    if !autostart {
-        trace_args.push(String::from("--notify-tracing-started"));
-        trace_args.push(String::from(UIKIT_TRACE_STARTED_NOTIFICATION));
-    }
-    trace_args.push(String::from("--target-stdout"));
-    trace_args.push(target_stdout_path.to_string_lossy().into_owned());
-    trace_args.push(String::from("--launch"));
-    trace_args.push(String::from("--"));
-    trace_args.push(built_app.bundle_identifier.clone());
-    let mut trace_child = spawn_command_owned_with_output_paths(
-        root,
-        "xcrun",
-        &trace_args,
-        &stdout_path,
-        &stderr_path,
-    )?;
-    thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
-
-    if !autostart {
-        if let Some(ready_child) = ready_child.as_mut() {
-            let _ = wait_for_ready_notification_or_assume_ready(
-                ready_child,
-                &ready_stdout_path,
-                &ready_stderr_path,
-            )?;
-        }
-        if let Some(trace_started_child) = trace_started_child.as_mut() {
-            wait_for_trace_started_or_trace_exit(
-                "xcrun",
-                &trace_args,
-                &mut trace_child,
-                &stdout_path,
-                &stderr_path,
-                trace_started_child,
-                &trace_started_stdout_path,
-                &trace_started_stderr_path,
-            )?;
-        }
-        post_uikit_device_notification(root, device, UIKIT_DEVICE_START_NOTIFICATION)?;
-    }
-
-    let completion_marker = format!("OXIDE_COMPLETE {}", spec.test_name);
-    let observed_completion = observe_trace_completion_before_exit(
-        "xcrun",
-        &trace_args,
-        &mut trace_child,
-        &stdout_path,
-        &stderr_path,
-        &failed_args,
-        &mut failed_child,
-        &failed_stdout_path,
-        &failed_stderr_path,
-        &mut complete_child,
-        &complete_stdout_path,
-        &complete_stderr_path,
-        &target_stdout_path,
-        &completion_marker,
-        trace_wall_timeout,
-    )?;
-    if observed_completion {
-        interrupt_child_process(&mut trace_child)?;
-    }
-
-    let trace_result = wait_for_xctrace_record_with_timeout(
-        "xcrun",
-        &trace_args,
-        &mut trace_child,
-        &stdout_path,
-        &stderr_path,
-        trace_wall_timeout,
-    );
-    let clear_result = drain_uikit_processes(
-        root,
-        device,
-        &built_app.executable_name,
-        Duration::from_secs(5),
-        "launched trace cleanup",
-    );
-    let _ = failed_child.kill();
-    let _ = failed_child.wait();
-
-    trace_result?;
-    clear_result?;
-    wait_for_xctrace_bundle_settle(&trace_path)?;
-    if !autostart && !observed_completion {
-        if !launched_trace_has_bounded_workload_windows(
-            root,
-            &trace_path,
             &built_app.executable_name,
-        )? {
-            bail!(
-                "launched trace for `{}` exited before `{}` or `{}` was observed, and `{}` did not expose bounded workload signposts in {}",
-                spec.test_name,
-                UIKIT_DEVICE_COMPLETE_NOTIFICATION,
-                completion_marker,
-                built_app.executable_name,
-                trace_path.display()
-            );
-        }
-        println!(
-            "Launched trace for `{}` exited without `{}` or `{}`, but the saved trace exposed bounded workload windows for `{}`; accepting the trace.",
+            Duration::from_secs(5),
+            "failed pre-attach launch cleanup",
+         );
+         return Err(err);
+      }
+   };
+
+   let case_label = uikit_trace_console_case_label(spec);
+   let ready_marker = format!("OXIDE_READY {}", case_label);
+   let start_marker = format!("OXIDE_START {}", case_label);
+   let completion_marker = format!("OXIDE_COMPLETE {}", case_label);
+   let ready_result = (|| -> Result<()>
+   {
+      let _ = wait_for_ready_notification_or_assume_ready(
+         &mut ready_child,
+         &ready_stdout_path,
+         &ready_stderr_path,
+      )?;
+      wait_for_device_notification_or_console_marker(
+         "xcrun",
+         &ready_args,
+         &mut ready_child,
+         &ready_stdout_path,
+         &ready_stderr_path,
+         UIKIT_DEVICE_READY_NOTIFICATION,
+         &launch_stdout_path,
+         &ready_marker,
+         Duration::from_secs(UIKIT_DEVICE_READY_TIMEOUT_SECS),
+      )
+   })();
+   if let Err(err) = ready_result
+   {
+      for child in [&mut ready_child, &mut complete_child, &mut failed_child]
+      {
+         let _ = child.kill();
+         let _ = child.wait();
+      }
+      let _ = terminate_uikit_device_process(root, device, process_pid);
+      let _ = wait_for_console_launch_with_output_paths(
+         root,
+         "xcrun",
+         &launch_args,
+         &mut launch_child,
+         &launch_stdout_path,
+         &launch_stderr_path,
+      );
+      let _ = drain_uikit_processes(
+         root,
+         device,
+         &built_app.executable_name,
+         Duration::from_secs(5),
+         "failed pre-attach ready cleanup",
+      );
+      return Err(err);
+   }
+
+   let trace_started_args =
+      vec![String::from("-1"), String::from(UIKIT_TRACE_STARTED_NOTIFICATION)];
+   let mut trace_started_child = spawn_command_owned_with_output_paths(
+      root,
+      "notifyutil",
+      &trace_started_args,
+      &trace_started_stdout_path,
+      &trace_started_stderr_path,
+   )?;
+   thread::sleep(Duration::from_millis(UIKIT_DEVICE_NOTIFICATION_STARTUP_DELAY_MS));
+
+   let mut trace_args = vec![
+      String::from("xctrace"),
+      String::from("record"),
+      String::from("--template"),
+      String::from(template_name),
+      String::from("--device"),
+      device.udid.clone(),
+      String::from("--time-limit"),
+      format!("{}s", attached_trace_seconds),
+      String::from("--output"),
+      trace_path.to_string_lossy().into_owned(),
+      String::from("--no-prompt"),
+   ];
+   for instrument in extra_instruments
+   {
+      trace_args.push(String::from("--instrument"));
+      trace_args.push(instrument.clone());
+   }
+   trace_args.push(String::from("--notify-tracing-started"));
+   trace_args.push(String::from(UIKIT_TRACE_STARTED_NOTIFICATION));
+   trace_args.push(String::from("--attach"));
+   trace_args.push(process_pid.to_string());
+   let mut trace_child = spawn_command_owned_with_output_paths(
+      root,
+      "xcrun",
+      &trace_args,
+      &trace_stdout_path,
+      &trace_stderr_path,
+   )?;
+   thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
+
+   let run_result = (|| -> Result<bool>
+   {
+      wait_for_trace_started_or_trace_exit(
+         "xcrun",
+         &trace_args,
+         &mut trace_child,
+         &trace_stdout_path,
+         &trace_stderr_path,
+         &mut trace_started_child,
+         &trace_started_stdout_path,
+         &trace_started_stderr_path,
+      )?;
+      post_uikit_start_notification_until_acknowledged(
+         root,
+         device,
+         &launch_stdout_path,
+         &complete_stdout_path,
+         &start_marker,
+         &completion_marker,
+      )?;
+      observe_trace_completion_before_exit(
+         "xcrun",
+         &trace_args,
+         &mut trace_child,
+         &trace_stdout_path,
+         &trace_stderr_path,
+         &failed_args,
+         &mut failed_child,
+         &failed_stdout_path,
+         &failed_stderr_path,
+         &mut complete_child,
+         &complete_stdout_path,
+         &complete_stderr_path,
+         &launch_stdout_path,
+         &completion_marker,
+         trace_wall_timeout,
+      )
+   })();
+
+   let interrupt_result = if !matches!(run_result, Ok(false))
+   {
+      interrupt_child_process(&mut trace_child)
+   }
+   else
+   {
+      Ok(())
+   };
+   let trace_result = wait_for_xctrace_record_with_timeout(
+      "xcrun",
+      &trace_args,
+      &mut trace_child,
+      &trace_stdout_path,
+      &trace_stderr_path,
+      trace_wall_timeout,
+   );
+   let terminate_result = terminate_uikit_device_process(root, device, process_pid);
+   let launch_result = wait_for_console_launch_with_output_paths(
+      root,
+      "xcrun",
+      &launch_args,
+      &mut launch_child,
+      &launch_stdout_path,
+      &launch_stderr_path,
+   );
+   let clear_result = drain_uikit_processes(
+      root,
+      device,
+      &built_app.executable_name,
+      Duration::from_secs(5),
+      "attached trace cleanup",
+   );
+   for child in [
+      &mut ready_child,
+      &mut complete_child,
+      &mut failed_child,
+      &mut trace_started_child,
+   ]
+   {
+      let _ = child.kill();
+      let _ = child.wait();
+   }
+
+   let observed_completion = run_result?;
+   interrupt_result?;
+   trace_result?;
+   terminate_result?;
+   launch_result?;
+   clear_result?;
+   wait_for_xctrace_bundle_settle(&trace_path)?;
+   if !observed_completion
+   {
+      if !trace_has_bounded_workload_windows(
+         root,
+         &trace_path,
+         &built_app.executable_name,
+      )?
+      {
+         bail!(
+            "attached trace for `{}` exited before `{}` or `{}` was observed, and `{}` did not expose bounded workload signposts in {}",
             spec.test_name,
             UIKIT_DEVICE_COMPLETE_NOTIFICATION,
             completion_marker,
-            built_app.executable_name
-        );
-    }
+            built_app.executable_name,
+            trace_path.display()
+         );
+      }
+      println!(
+         "Attached trace for `{}` exited without `{}` or `{}`, but the saved trace exposed bounded workload windows for `{}`; accepting the trace.",
+         spec.test_name,
+         UIKIT_DEVICE_COMPLETE_NOTIFICATION,
+         completion_marker,
+         built_app.executable_name
+      );
+   }
 
-    Ok((trace_path, target_stdout_path, stderr_path))
+   Ok((trace_path, launch_stdout_path, trace_stderr_path))
 }
 
-fn launched_trace_has_bounded_workload_windows(
+fn trace_has_bounded_workload_windows(
     root: &Path,
     trace_path: &Path,
     process_name: &str,
@@ -9064,7 +9140,7 @@ fn observe_trace_completion_before_exit(
             let _ = complete_child.wait();
             let _ = failed_child.kill();
             let _ = failed_child.wait();
-            bail!("benchmark build failure during launched trace: {}", detail);
+            bail!("benchmark build failure during attached trace: {}", detail);
         }
         if devicectl_notification_observed(failed_stdout_text, UIKIT_DEVICE_FAILED_NOTIFICATION) {
             let _ = complete_child.kill();
@@ -9076,10 +9152,10 @@ fn observe_trace_completion_before_exit(
                 .unwrap_or_else(|| String::from("app posted a benchmark failure notification"));
             let stderr = stderr.trim();
             if stderr.is_empty() {
-                bail!("benchmark build failure during launched trace: {}", detail);
+                bail!("benchmark build failure during attached trace: {}", detail);
             }
             bail!(
-                "benchmark build failure during launched trace: {} (failure observer stderr: {})",
+                "benchmark build failure during attached trace: {} (failure observer stderr: {})",
                 detail,
                 stderr
             );

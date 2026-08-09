@@ -97,6 +97,7 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-08: required app-first process attachment and trace-ready workload start ordering for device traces.
 - 2026-08-07: required locked workspace comparison/publication and paired Oxide/UIKit device recipes in the root Justfile.
 - 2026-08-07: added fail-closed UIKit and Oxide selection coverage for mixed valid/unknown exact-case requests.
 - 2026-08-07: froze pre-rendering of all six paired canonical outputs before the shared atomic promotion call.

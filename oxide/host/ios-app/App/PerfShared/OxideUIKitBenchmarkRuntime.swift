@@ -21,7 +21,6 @@ let perfLaunchScenarioEnv = "OXIDE_PERF_LAUNCH_SCENARIO"
 let perfLaunchRouteEnv = "OXIDE_PERF_LAUNCH_ROUTE"
 let perfLaunchStyleEnv = "OXIDE_PERF_LAUNCH_STYLE"
 let perfTraceHandshakeEnv = "OXIDE_PERF_TRACE_HANDSHAKE"
-let perfTraceAutostartEnv = "OXIDE_PERF_TRACE_AUTOSTART"
 let perfWatchModeEnv = "OXIDE_PERF_WATCH_MODE"
 let perfFrameCaptureEnv = "OXIDE_PERF_FRAME_CAPTURE"
 let perfFrameCaptureEveryEnv = "OXIDE_PERF_FRAME_CAPTURE_EVERY"
@@ -568,10 +567,6 @@ var perfConsoleLineEmitterOverride: ((String) -> Void)?
 
 func emitConsoleLine(_ line: String)
 {
-    if ProcessInfo.processInfo.environment[perfTraceAutostartEnv] == "1"
-    {
-        NSLog("[OxidePerf] %@", line)
-    }
     if let emitter = perfConsoleLineEmitterOverride
     {
         emitter(line)

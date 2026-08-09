@@ -33,7 +33,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private var visibleTestOverlay: PerfVisibleTestOverlay?
     private var didRunBenchmark = false
     private var didFinishBenchmark = false
-    private var didScheduleTraceAutostart = false
     private var oxidePerfRunnerSmoke = false
     private var previousIdleTimerDisabled: Bool?
     private var foregroundFailure: String?
@@ -45,11 +44,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         route: String?,
         style: OxideUIKitLaunchStyle
     )?
-
-    private var traceAutostartEnabled: Bool
-    {
-        ProcessInfo.processInfo.environment[perfTraceAutostartEnv] == "1"
-    }
 
     private var watchModeEnabled: Bool
     {
@@ -94,7 +88,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         pendingReadyRetryScheduled = false
         emitConsoleLine("OXIDE_READY \(name)")
         postDarwinNotification(readyNotificationName)
-        schedulePendingTraceAutostartIfNeeded()
     }
 
     private func schedulePendingReadyRetryIfNeeded()
@@ -139,21 +132,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
             ProcessInfo.processInfo.environment[perfOxideRunnerEnv] == "1"
     }
 
-    private func scheduleTraceAutostartIfRequested(_ body: @escaping @MainActor () -> Void)
-    {
-        guard ProcessInfo.processInfo.environment[perfTraceAutostartEnv] == "1" else
-        {
-            return
-        }
-        let delay = resolvePerfTraceSettleSeconds()
-        emitConsoleLine("OXIDE_STAGE parked.autostart.schedule delay=\(delay)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay)
-        {
-            emitConsoleLine("OXIDE_STAGE parked.autostart.fire")
-            body()
-        }
-    }
-
     private func installVisibleTestOverlay(for window: UIWindow, text: String?)
     {
         let overlay = PerfVisibleTestOverlay(
@@ -192,7 +170,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
     private func scheduleWatchAutostartIfNeeded()
     {
         guard watchModeEnabled,
-              !traceAutostartEnabled,
               !didRunBenchmark,
               benchmark != nil else
         {
@@ -202,42 +179,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         {
             [weak self] in
             self?.runBenchmarkIfNeeded()
-        }
-    }
-
-    private func schedulePendingTraceAutostartIfNeeded()
-    {
-        guard traceAutostartEnabled,
-              !didScheduleTraceAutostart else
-        {
-            return
-        }
-        didScheduleTraceAutostart = true
-        if ProcessInfo.processInfo.environment[perfOxideRunnerEnv] == "1"
-        {
-            scheduleTraceAutostartIfRequested
-            {
-                [weak self] in
-                self?.runOxidePerfSuiteIfNeeded()
-            }
-            return
-        }
-        if pendingLaunchScenario != nil
-        {
-            scheduleTraceAutostartIfRequested
-            {
-                [weak self] in
-                self?.runLaunchScenarioIfNeeded()
-            }
-            return
-        }
-        if benchmark != nil
-        {
-            scheduleTraceAutostartIfRequested
-            {
-                [weak self] in
-                self?.runBenchmarkIfNeeded()
-            }
         }
     }
 
@@ -326,7 +267,6 @@ final class OxidePerfParkedSceneDelegate: UIResponder, UIWindowSceneDelegate
         emitConsoleLine("OXIDE_STAGE parked.sceneDidBecomeActive")
         holdForegroundExecution()
         publishPendingReadyIfForegroundActive()
-        schedulePendingTraceAutostartIfNeeded()
         scheduleWatchAutostartIfNeeded()
     }
 

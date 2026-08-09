@@ -3490,10 +3490,40 @@ fn uikit_console_summary_capture_is_outside_trace_retries()
 
    let attempt = source
       .split_once("fn run_uikit_device_case_trace_attempt(")
-      .and_then(|(_, tail)| tail.split_once("fn run_uikit_device_launched_trace("))
+      .and_then(|(_, tail)| tail.split_once("fn run_uikit_device_attached_trace("))
       .map(|(body, _)| body)
       .expect("UIKit trace attempt body");
    assert!(!attempt.contains("run_uikit_device_case_console_capture("));
+}
+
+#[test]
+fn device_trace_launches_before_process_attachment_and_starts_after_trace_ready()
+{
+   let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"));
+   let trace = source
+      .split_once("fn run_uikit_device_attached_trace(")
+      .and_then(|(_, tail)| tail.split_once("fn trace_has_bounded_workload_windows("))
+      .map(|(body, _)| body)
+      .expect("attached device trace body");
+   let launch = trace.find("uikit_perf_launch_args(").expect("device app launch");
+   let pid = trace
+      .find("wait_for_uikit_process_start_or_launch_failure(")
+      .expect("launched process pid");
+   let ready = trace
+      .find("wait_for_device_notification_or_console_marker(")
+      .expect("foreground-ready handshake");
+   let attach = trace.find("String::from(\"--attach\")").expect("xctrace attachment");
+   let trace_ready = trace
+      .find("wait_for_trace_started_or_trace_exit(")
+      .expect("trace-started handshake");
+   let start = trace
+      .find("post_uikit_start_notification_until_acknowledged(")
+      .expect("workload start notification");
+
+   assert!(launch < pid && pid < ready && ready < attach && attach < trace_ready && trace_ready < start);
+   assert!(!trace.contains("String::from(\"--launch\")"));
+   assert!(!trace.contains("String::from(\"--target-stdout\")"));
+   assert!(!trace.contains("OXIDE_PERF_TRACE_AUTOSTART"));
 }
 
 #[test]

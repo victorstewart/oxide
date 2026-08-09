@@ -354,10 +354,12 @@ fn parked_perf_scene_holds_foreground_execution_for_device_gpu_runs() {
     assert!(source.contains("publishReadyWhenForegroundActive"));
     assert!(source.contains("pendingReadyRetryScheduled"));
     assert!(source.contains("pendingReadyRetryCount < 300"));
-    assert!(source.contains(
-        "postDarwinNotification(readyNotificationName)\n        schedulePendingTraceAutostartIfNeeded()",
-    ));
+    assert!(source.contains("postDarwinNotification(readyNotificationName)"));
     assert!(source.contains("DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)"));
+    assert!(source.contains(
+        "postDarwinNotification(completeNotificationName)\n        restoreForegroundExecution()\n        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1)",
+    ));
+    assert!(!source.contains("traceAutostart"));
     assert!(source.contains("window?.windowScene?.activationState == .foregroundActive"));
     assert!(source.contains("markForegroundFailure"));
     assert!(source.contains("requiresForegroundHandshake"));

@@ -21,6 +21,10 @@ Protect late drawable acquisition and prepared-frame ownership in the iOS produc
 - `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection and drawable cancellation before a backpressure-skipped frame can emit observational submit feedback.
 - `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before requesting a rebuild.
 - The remaining tests protect parked benchmark launch routing and foreground execution.
+- Parked launches keep the display awake through the ready/start/completion
+  handshake, then restore the prior idle policy and exit after publishing
+  completion. The device harness attaches Instruments to the already-ready
+  process, so the app owns its normal direct-launch lifecycle.
 
 ## Logic narrative
 
@@ -59,6 +63,8 @@ assert!(source.contains("coalesce_adjacent_draws_reuse"));
 
 ## Changelog
 
+- 2026-08-08: removed trace-autostart lifecycle branching after the device
+  harness moved to app-first process attachment.
 - 2026-08-07: aligned the entry list with the current coalescing/damage tests and moved retry-policy ownership to its actual production-shell and injected-app regressions.
 - 2026-08-06: preserved production renderer-cache purging across the injected/legacy host split.
 - 2026-08-06: Rejected backpressure-skipped frames before encode/submit and froze exact prepared-frame retry plus no-feedback semantics.
