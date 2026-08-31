@@ -9,6 +9,7 @@ description = "WebAssembly canvas renderer implementation for Oxide"
 bytemuck = { version = "1.23.2", features = ["derive"] }
 oxide-image-store = { path = "../image-store" }
 oxide-renderer-api = { path = "../renderer-api" }
+oxide-renderer-wgpu = { path = "../renderer-wgpu", default-features = false, features = ["shader-source"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3.98"

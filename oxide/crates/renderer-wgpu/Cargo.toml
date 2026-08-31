@@ -1,0 +1,21 @@
+[package]
+name = "oxide-renderer-wgpu"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Target-neutral wgpu renderer core and native headless backend for Oxide"
+
+[dependencies]
+bytemuck = { version = "1.23.2", features = ["derive"] }
+oxide-image-store = { path = "../image-store" }
+oxide-renderer-api = { path = "../renderer-api" }
+pollster = { version = "0.4.0", optional = true }
+wgpu = { version = "=26.0.1", default-features = false, features = ["std", "wgsl"], optional = true }
+
+[features]
+default = ["headless-vulkan"]
+headless-vulkan = ["dep:pollster", "dep:wgpu", "wgpu/vulkan"]
+shader-source = []
+
+[lib]
+path = "src/lib.rs"

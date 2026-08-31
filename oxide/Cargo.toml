@@ -14,6 +14,7 @@ members = [
     "crates/permissions",
     "crates/renderer-metal",
     "crates/renderer-web",
+    "crates/renderer-wgpu",
     "crates/wasm-alloc-counter",
     "crates/text",
     "crates/input",

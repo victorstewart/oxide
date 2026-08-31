@@ -1,6 +1,6 @@
 use oxide_snapshot_runner::parity::{
-   ParityLayout, ParityScene, SequenceKind, BACKEND_CPU, BACKEND_METAL, BACKEND_WEBGPU,
-   PARITY_CASES, SEQUENCE_CASES,
+   BrowserNativeRgbaFixture, ParityLayout, ParityScene, PixelTolerance, RgbaImage, SequenceKind,
+   BACKEND_CPU, BACKEND_METAL, BACKEND_WEBGPU, PARITY_CASES, SEQUENCE_CASES,
 };
 use std::collections::HashSet;
 
@@ -76,4 +76,27 @@ fn sequence_manifest_freezes_every_required_transition()
       assert_ne!(case.backends & BACKEND_METAL, 0);
       assert!(case.tolerance.max_channel_error <= 3);
    }
+}
+
+#[test]
+fn browser_native_fixture_uses_manifest_tolerance_and_dimensions()
+{
+   let case = PARITY_CASES.iter().find(|case| case.id == "primitive_atlas").unwrap();
+   let pixels = vec![0_u8; case.width_px as usize * case.height_px as usize * 4];
+   let image = RgbaImage {
+      width: case.width_px,
+      height: case.height_px,
+      row_bytes: case.width_px * 4,
+      pixels: &pixels,
+   };
+   let fixture = BrowserNativeRgbaFixture {
+      id: case.id,
+      width: case.width_px,
+      height: case.height_px,
+      tolerance: case.tolerance,
+      browser: image,
+   };
+   let difference = fixture.compare_native(image).expect("identical browser/native fixture");
+   assert_eq!(case.tolerance, PixelTolerance::ANTIALIASED);
+   assert_eq!(difference.differing_pixels, 0);
 }

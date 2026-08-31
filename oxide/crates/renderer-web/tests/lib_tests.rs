@@ -468,7 +468,10 @@ fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
 #[test]
 fn wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()
 {
-   let source = include_str!("../src/wasm/webgpu.rs");
+   let source = concat!(
+      include_str!("../src/wasm/webgpu.rs"),
+      include_str!("../../renderer-wgpu/src/ui.wgsl"),
+   );
    let solid = compact_source_block(source, "fn encode_solid(", "fn encode_image(");
    let vertex = compact_source_block(source, "fn gpu_vertex(", "fn append_gpu_vertices(");
    let shader = compact_source_block(source, "struct VertexIn", "@fragment\nfn fs_rgba");
@@ -603,7 +606,10 @@ fn wasm_webgpu_id_mask_vertex_cache_is_content_hash_keyed_and_inflight_safe() {
 
 #[test]
 fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
-    let source = include_str!("../src/wasm/webgpu.rs");
+    let source = concat!(
+        include_str!("../src/wasm/webgpu.rs"),
+        include_str!("../../renderer-wgpu/src/ui.wgsl"),
+    );
     let encode_solid = source
         .split("fn encode_solid")
         .nth(1)
@@ -752,7 +758,10 @@ fn webgpu_glyphs_use_compact_ordered_instances_in_dynamic_and_prepared_paths()
 #[test]
 fn webgpu_neon_marker_uses_one_compact_analytic_instance_per_marker()
 {
-   let source = include_str!("../src/wasm/webgpu.rs");
+   let source = concat!(
+      include_str!("../src/wasm/webgpu.rs"),
+      include_str!("../../renderer-wgpu/src/ui.wgsl"),
+   );
    let metal = include_str!("../../renderer-metal/shaders/neon_marker.metal");
    let encode_markers = source
       .rsplit("pub fn encode_neon_markers")
@@ -1085,7 +1094,10 @@ fn wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()
 #[test]
 fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     let stats = include_str!("../src/lib.rs");
-    let source = include_str!("../src/wasm/webgpu.rs");
+    let source = concat!(
+        include_str!("../src/wasm/webgpu.rs"),
+        include_str!("../../renderer-wgpu/src/ui.wgsl"),
+    );
     let host = include_str!("../../../host/web-app/oxide-host-web/src/lib.rs");
 
     for field in [
@@ -1671,6 +1683,6 @@ fn wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()
    assert!(compact.contains("letlevels=rgba8_mip_chain(width,height,rgba);"));
    assert!(compact.contains("mip_level_count:levels.len()asu32"));
    assert!(compact.contains("mipmap_filter:wgpu::FilterMode::Linear"));
-   assert!(compact.contains("srgb_channel_to_linear(source.rgba[index+channel])"));
+   assert!(compact.contains("useoxide_renderer_wgpu::image::{rgba8_srgb_mip_chain,RgbaMipLevel};"));
    assert!(compact.contains("NEXT_WEBGPU_DEVICE_GENERATION.fetch_add(1,Ordering::Relaxed)"));
 }

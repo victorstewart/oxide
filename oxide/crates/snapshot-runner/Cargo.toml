@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 oxide-renderer-metal = { path = "../renderer-metal", features = ["snapshot-tests"] }
 oxide-renderer-api = { path = "../renderer-api" }
+oxide-renderer-wgpu = { path = "../renderer-wgpu", default-features = false }
 oxide-ui-core = { path = "../ui-core" }
 oxide-timing = { path = "../timing" }
 oxide-text = { path = "../text" }
