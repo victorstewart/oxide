@@ -20,6 +20,51 @@ pub mod id_mask_compositor;
 pub mod neon_marker;
 pub mod scene3d;
 
+/// Static 2D pipeline families declared by a browser host.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserDrawPipeline { Solid, RRect, ImageRgba, ImageA8, NineSliceRgba, NineSliceA8, Spinner, NeonMarker, GlyphRgba, GlyphA8, GlyphSdf, Rgba, A8, Sdf, Effect }
+
+/// Static Scene3D blend/depth pipeline families declared by a browser host.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserScene3dPipeline { AlphaDepthRead, AlphaDepthWrite, AlphaNoTestDepthWrite, AlphaNoDepth, AdditiveDepthRead, AdditiveDepthWrite, AdditiveNoTestDepthWrite, AdditiveNoDepth }
+
+impl BrowserScene3dPipeline {
+    #[must_use]
+    pub const fn from_state(blend: scene3d::BlendMode3d, depth_test: bool, depth_write: bool) -> Self {
+        match (blend, depth_test, depth_write) {
+            (scene3d::BlendMode3d::Additive, true, true) => Self::AdditiveDepthWrite,
+            (scene3d::BlendMode3d::Additive, false, true) => Self::AdditiveNoTestDepthWrite,
+            (scene3d::BlendMode3d::Additive, true, false) => Self::AdditiveDepthRead,
+            (scene3d::BlendMode3d::Additive, false, false) => Self::AdditiveNoDepth,
+            (scene3d::BlendMode3d::Alpha, true, true) => Self::AlphaDepthWrite,
+            (scene3d::BlendMode3d::Alpha, false, true) => Self::AlphaNoTestDepthWrite,
+            (scene3d::BlendMode3d::Alpha, true, false) => Self::AlphaDepthRead,
+            (scene3d::BlendMode3d::Alpha, false, false) => Self::AlphaNoDepth,
+        }
+    }
+}
+
+/// Construction-time declaration retained for WebAssembly hosts. Pipeline construction is owned
+/// by the shared browser renderer; this value remains the host's stable capability vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BrowserRendererPipelineProfile { draw: u16, scene3d: u32, id_mask_compositor: bool }
+
+impl BrowserRendererPipelineProfile {
+    #[must_use] pub const fn empty() -> Self { Self { draw: 0, scene3d: 0, id_mask_compositor: false } }
+    #[must_use] pub const fn full() -> Self { Self { draw: (1 << 15) - 1, scene3d: (1 << 24) - 1, id_mask_compositor: true } }
+    #[must_use] pub const fn with_draw(mut self, pipeline: BrowserDrawPipeline) -> Self { self.draw |= 1 << pipeline as u8; self }
+    #[must_use] pub const fn with_scene3d(mut self, pipeline: BrowserScene3dPipeline, cull: scene3d::CullMode3d) -> Self { let cull = match cull { scene3d::CullMode3d::None => 0, scene3d::CullMode3d::Front => 1, scene3d::CullMode3d::Back => 2 }; self.scene3d |= 1 << (pipeline as u32 * 3 + cull); self }
+    #[must_use] pub const fn with_id_mask_compositor(mut self) -> Self { self.id_mask_compositor = true; self }
+    #[must_use] pub const fn contains_draw(self, pipeline: BrowserDrawPipeline) -> bool { self.draw & (1 << pipeline as u8) != 0 }
+    #[must_use] pub const fn contains_scene3d(self, pipeline: BrowserScene3dPipeline, cull: scene3d::CullMode3d) -> bool { let cull = match cull { scene3d::CullMode3d::None => 0, scene3d::CullMode3d::Front => 1, scene3d::CullMode3d::Back => 2 }; self.scene3d & (1 << (pipeline as u32 * 3 + cull)) != 0 }
+    #[must_use] pub const fn includes_id_mask_compositor(self) -> bool { self.id_mask_compositor }
+    #[must_use] pub const fn declared_pipeline_count(self) -> u32 { self.draw.count_ones() + self.scene3d.count_ones() + if self.id_mask_compositor { 4 } else { 0 } }
+}
+
+impl Default for BrowserRendererPipelineProfile { fn default() -> Self { Self::full() } }
+
 const MAX_LAYER_DIMENSION: u32 = 16_384;
 
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]

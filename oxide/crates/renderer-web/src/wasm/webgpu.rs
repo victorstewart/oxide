@@ -2001,6 +2001,16 @@ impl BrowserRenderer {
       Ok(Self { inner })
    }
 
+   /// Compatibility constructor for hosts that declare a pipeline profile. The shared WebGPU
+   /// core owns pipeline creation, so this delegates to the one canonical constructor.
+   pub async fn from_canvas_webgpu_with_profile(
+      canvas: HtmlCanvasElement,
+      _profile: crate::BrowserRendererPipelineProfile,
+   ) -> Result<Self, api::RenderError>
+   {
+      Self::from_canvas_webgpu(canvas).await
+   }
+
     #[must_use]
     pub fn backend_name(&self) -> &'static str {
         "webgpu"
