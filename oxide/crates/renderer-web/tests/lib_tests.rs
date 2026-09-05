@@ -215,6 +215,10 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(rust.contains("label: Some(\"oxide-webgpu-renderer-device-v2\")"));
    assert!(!rust.contains("thread_local!"));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
+   assert!(compact_rust.contains(
+      "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
+   ));
+   assert!(compact_rust.contains("self.queue.on_submitted_work_done"));
 
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")"

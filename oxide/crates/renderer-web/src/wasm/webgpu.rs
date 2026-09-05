@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt;
 
@@ -2026,6 +2027,15 @@ impl BrowserRenderer {
         self.inner.last_stats()
     }
 
+    /// Resolves after all work submitted to this renderer's queue has completed.
+    ///
+    /// The renderer exposes the fence directly so browser hosts do not need to
+    /// intercept `requestAdapter`/`requestDevice` or retain wgpu's external
+    /// JavaScript objects outside the instance that owns them.
+    pub async fn submitted_work_done(&self) {
+        self.inner.submitted_work_done().await;
+    }
+
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
         self.inner.collect_timestamp_readbacks()
     }
@@ -3210,6 +3220,15 @@ impl WebGpuRenderer {
             callback_flag.store(true, Ordering::Release);
         });
         completed
+    }
+
+    pub async fn submitted_work_done(&self) {
+        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+            self.queue.on_submitted_work_done(move || {
+                let _ = resolve.call0(&JsValue::UNDEFINED);
+            });
+        });
+        let _ = JsFuture::from(promise).await;
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {
