@@ -58,16 +58,6 @@ function shutdown(state)
    return snapshot(state);
 }
 
-function defineSessionGlobal(symbol, value)
-{
-   Object.defineProperty(globalThis, symbol, {
-      value,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-   });
-}
-
 function createState()
 {
    const state = {
@@ -82,14 +72,30 @@ function createState()
       sessionShutdownCount: 0,
       closed: false,
       gpuPrototype: null,
+      originalRequestAdapter: null,
       patchedRequestAdapter: null,
       adapterPromises: new Map(),
       adapterDescriptorKeys: new WeakMap(),
       adapterPatches: new WeakMap(),
    };
-   defineSessionGlobal(STATE_SYMBOL, state);
-   defineSessionGlobal(SNAPSHOT_SYMBOL, () => snapshot(state));
-   defineSessionGlobal(SHUTDOWN_SYMBOL, () => shutdown(state));
+   Object.defineProperty(globalThis, STATE_SYMBOL, {
+      value: state,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+   });
+   Object.defineProperty(globalThis, SNAPSHOT_SYMBOL, {
+      value: () => snapshot(state),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+   });
+   Object.defineProperty(globalThis, SHUTDOWN_SYMBOL, {
+      value: () => shutdown(state),
+      configurable: false,
+      enumerable: false,
+      writable: false,
+   });
    if (typeof globalThis.addEventListener === "function") {
       globalThis.addEventListener("pagehide", (event) => {
          if (!event.persisted) {
@@ -163,13 +169,17 @@ function registerDevice(state, generation, device)
    state.liveDeviceCount += 1;
    const lost = device.lost;
    if (lost && typeof lost.then === "function") {
-      const markDeviceLost = () => {
+      lost.then(() => {
          markDeviceNotLive(state, generation);
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
-      };
-      lost.then(markDeviceLost, markDeviceLost);
+      }, () => {
+         markDeviceNotLive(state, generation);
+         if (state.currentGeneration === generation) {
+            state.currentGeneration = null;
+         }
+      });
    }
    if (generation.destroyWhenReady || state.closed) {
       destroyGeneration(state, generation);
@@ -257,6 +267,7 @@ function installAdapterRequestDevicePatch(state, adapter)
       writable: descriptor?.writable ?? true,
    });
    state.adapterPatches.set(adapterPrototype, {
+      original: originalRequestDevice,
       patched: patchedRequestDevice,
    });
 }
@@ -318,6 +329,7 @@ function installRequestAdapterPatch(state)
       writable: descriptor?.writable ?? true,
    });
    state.gpuPrototype = gpuPrototype;
+   state.originalRequestAdapter = originalRequestAdapter;
    state.patchedRequestAdapter = patchedRequestAdapter;
 }
 
@@ -341,5 +353,6 @@ export function releaseOxideWebGpuDeviceSession(lease)
       return;
    }
    lease.released = true;
-   MODULE_STATE.rendererLeaseCount = Math.max(0, MODULE_STATE.rendererLeaseCount - 1);
+   const state = MODULE_STATE;
+   state.rendererLeaseCount = Math.max(0, state.rendererLeaseCount - 1);
 }

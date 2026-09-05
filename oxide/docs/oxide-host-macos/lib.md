@@ -80,6 +80,7 @@
 - `tests/display_scheduling_tests.rs` and the headless demand test verify generation retention, host-owned wake sources, idle settlement, and the native pause/resume contract.
 
 ## Changelog
+- 2026-08-06: removed the product motion toggle and its private host state.
 - 2026-07-15: added generation-acknowledged demand scheduling so settled macOS scenes stop display callbacks and Rust app-state polling until a dirty source wakes them.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode while leaving eight-slot depth explicit for offscreen/perf construction.
 - 2026-06-01: retained prepared-frame damage across macOS drawable timeout or submit failure so dirty regions retry after pressure.

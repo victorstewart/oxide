@@ -23,9 +23,33 @@ Call flow:
 - `experiment_manifest_checker_requires_perf_ab_gate_for_undecided_entries()`: requires a concrete A/B gate before an experiment may remain open.
 - `experiment_manifest_checker_requires_proof_for_decided_entries()`: requires persisted proof for accepted and rejected decisions.
 - `oxide_device_contract_source_lists_canonical_families()` and `xtask_docs_describe_experiment_manifest_check()`: keep policy source and documentation wired.
-- UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, sharded merge behavior, and strict metric contracts.
+- `device_battery_policy_uses_canonical_mode_naming()`: rejects legacy mode terminology and requires the canonical-promotion/no-run-everything contract.
+- `contract_coverage_status_distinguishes_absence_from_partial_coverage()`: prevents an unselected workload family from being reported as partial evidence.
+- `test_all_checks_the_featureless_graph_without_rerunning_test_binaries()`: freezes one all-feature test execution plus a compile-only featureless graph check and requires all five Cargo subprocesses to honor the lockfile.
+- `justfile_official_recipes_use_locked_paired_publication()`: requires locked workspace comparison/publication and collapses every official device shortcut onto the paired Oxide/UIKit comparison and promotion paths.
+- `flat_rect_remove_rebuild_cycle_has_honest_parity_ids()`: requires UIKit and Oxide to publish the repeated teardown workload as a remove/rebuild cycle and rejects the misleading remove-all name.
+- `canonical_device_battery_is_exactly_five_matched_comparison_pairs()`: freezes the exact ten UIKit rows, their five idiomatic/optimized pair keys, comparison families, required workload-family mappings, and matching Oxide ids.
+- `noncanonical_device_cases_remain_exactly_addressable()`: proves retired default memberships, including the hybrid camera diagnostic, still resolve through exact case selection.
+- `mixed_valid_and_unknown_device_case_requests_fail_closed()`: proves both UIKit and Oxide selectors reject every unresolved requested value even when another requested case is valid.
+- `standalone_oxide_default_matches_the_five_unique_compare_rows()`: prevents the no-`--case` Oxide command from silently running a broader on-screen battery than matched promotion.
+- `compare_device_watchable_smoke_is_the_six_row_visual_subset()`: freezes the six UIKit visual-QA rows and their five deduplicated Oxide mappings.
+- `compare_device_promotion_validates_before_committed_baseline_writes()`: keeps report-contract and requested-comparison failures ahead of both committed baseline writes and rejects the removed proof-status gate.
+- `paired_device_promotion_prepares_all_six_canonical_outputs()`: requires paired publication to pre-render both JSON files, both latest Markdown files, and both optional dated Markdown files before promotion.
+- `compare_device_promotion_rejects_partial_case_selection()`: prevents `--write-baseline --case ...` from replacing the canonical committed reports with a partial selection.
+- `device_build_for_testing_uses_release_iphoneos_configuration()`: freezes explicit Release/iphoneos build arguments and the generated scheme configuration.
+- `standalone_device_promotion_rejects_partial_batteries_before_device_work()`: rejects narrowed UIKit/Oxide canonical writes before source, build, or device work.
+- `react_device_perf_rejects_unstamped_external_derived_data_reuse()`: freezes the hard cut from existence-only React Native cache imports.
+- `device_build_reuse_requires_toolchain_and_artifact_stamp()`: requires the shared exact toolchain/artifact stamp validator for automatic and explicit reuse.
+- `shared_device_launch_environment_forwards_oxide_overrides()`: proves every supported Oxide override reaches the shared real launch environment and freezes the Oxide-to-shared-launch call path.
+- `paired_reports_serialize_identical_repository_revision()`: proves paired UIKit and Oxide reports publish the same repository ref/HEAD/tree.
+- `uikit_version_two_rejects_missing_repository_revision_and_version_one_defaults_it()`: freezes strict version-2 serialization and historical version-1 compatibility.
+- Resumable-root stamp tests prove only an exact full evidence identity retains checkpoints; changes to source, toolchain, configuration, artifact, device OS, stage, ordered cases, trace duration, environment, report label, or power input clear them while preserving DerivedData, and legacy build-only stamps fail closed.
+- `standalone_device_comparison_failures_precede_all_report_outputs()`: freezes pre-write comparison admission and final source recapture for UIKit, React Native, and Oxide JSON/latest/datestamp writers.
+- `ios_host_simulator_architecture_contract_is_arm64_only()`: freezes arm64-only device and Simulator settings in the Oxide host and React Native camera benchmark projects and requires every scripted Rust build to honor the workspace lockfile.
+- UIKit and Oxide report-parser tests exercise JSON extraction, case classification, stage/memory/cadence/camera summaries, exact-test cadence ownership, sharded merge behavior, and strict metric contracts.
 - Device-runner tests exercise xctestrun environment generation, resumable result roots, launch/camera/watch controls, console markers, lock/display state, retry classification, process discovery, and case selection.
-- Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, promotion prerequisites, and committed-baseline status.
+- GPU-counter orchestration tests require one shared capability per device command, retain probing after transient timeouts, and freeze required console capture outside the trace retry loop.
+- Comparison tests exercise simulator-noise allowances, physical-device CPU/GPU/memory/cadence/energy gates, refresh-mode keys, case-set reuse, pre-write promotion gates, and committed-baseline status.
 - Trace tests exercise table/schema discovery, duration windows, signpost regions, CPU hotspots, GPU summaries, energy conversion, and unit normalization.
 - Private fixture helpers such as `sample_perf_report`, `sample_uikit_report`, and `sample_oxide_device_report` build deterministic inputs and are reached only by tests in this unit.
 
@@ -33,7 +57,12 @@ Call flow:
 
 Manifest tests parse the committed TOML through the same production checker used by `cargo xtask experiments check`. The acceptance test first requires important historical ids, then compares the returned summary with the exact committed population so a new experiment must intentionally update the contract. Negative tests isolate expiry, missing A/B policy, and missing decision proof.
 
-Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
+The `test-all` source guard isolates the command body and rejects a second
+featureless `cargo test` pass while requiring the all-target `cargo check`
+replacement. It validates orchestration without recursively launching the
+workspace suite from inside an integration test.
+
+Device/report tests construct minimal representative fixtures, call one production helper, and assert both preserved values and rejected gaps. Cadence fixtures carry their originating XCTest method and prove that adjacent batched summaries remain mapped to that exact test instead of being attributed by output order. Source-contract tests cover command-local counter sharing and the private device-launch boundary that cannot be exercised without a phone; the capability state test proves that only explicit unsupported evidence disables later requests. The canonical-selector tests treat row count as a consequence of five matched comparisons: four idiomatic/optimized pairs plus the mandatory pure-custom-NV12/AVCaptureVideoPreviewLayer microscope pair. Comparison tests keep simulator diagnostics separate from physical-device authority and require direct GPU plus cadence distributions where policy says they are mandatory. Trace tests reduce exported tables to bounded workload windows before attributing stages, GPU work, or energy.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -41,7 +70,7 @@ Dates use `YYYY-MM-DD`, metric distributions must be finite and ordered, report 
 
 ## Edge cases and failure modes
 
-Coverage includes empty/missing report markers, incomplete shards, stale resumable checkpoints, non-native refresh requests, absent device counters, invalid distribution fields, clipped or backdated signposts, unsupported GPU-counter profiles, retryable device streaming/install failures, and trace bundles versus raw exports. Errors must remain descriptive rather than being converted into an apparently valid empty report.
+Coverage includes empty/missing report markers, incomplete shards, stale resumable checkpoints, non-native refresh requests, absent device counters, invalid distribution fields, clipped or backdated signposts, unavailable GPU-counter profiles cached after rejection or timeout, retryable device streaming/install failures, and trace bundles versus raw exports. Errors must remain descriptive rather than being converted into an apparently valid empty report.
 
 ## Concurrency and memory behavior
 
@@ -68,6 +97,22 @@ assert_eq!(summary.undecided, 0);
 
 ## Changelog
 
+- 2026-08-09: required the bounded physical-device XCUI smoke to forward the established signing team.
+- 2026-08-09: classified one post-ready exact-PID Instruments attach lookup miss as a bounded handshake retry while retaining fail-closed name-based lookup behavior.
+- 2026-08-08: classified the trace-started handshake fuse as a bounded xctrace timeout so optional counter-profile stalls are cached command-wide.
+- 2026-08-08: required app-first process attachment and trace-ready workload start ordering for device traces.
+- 2026-08-07: required locked workspace comparison/publication and paired Oxide/UIKit device recipes in the root Justfile.
+- 2026-08-07: added fail-closed UIKit and Oxide selection coverage for mixed valid/unknown exact-case requests.
+- 2026-08-07: froze pre-rendering of all six paired canonical outputs before the shared atomic promotion call.
+- 2026-08-07: added runtime and source-contract coverage for Oxide device override forwarding.
+- 2026-08-07: added partial standalone promotion and final source-recapture coverage.
+- 2026-08-07: added full evidence-run invalidation, toolchain/artifact reuse, and the React cache hard cut.
+- 2026-08-07: froze the Release/iphoneos configuration used by physical-device build-for-testing.
+- 2026-08-07: added source-order coverage proving all three standalone device comparisons reject before resolving or writing report outputs.
+- 2026-08-07: added paired-report source identity, versioned provenance, and revision-aware resumable checkpoint coverage.
+- 2026-08-07: extended the iOS architecture contract to pin the React Native camera benchmark to arm64 for device and retained Simulator builds.
+- 2026-08-07: froze the exact ten-row UIKit and five-row Oxide canonical device inventories, pair metadata, and explicit-only access for noncanonical cases.
+- 2026-08-07: Required `test-all` to compile, rather than rerun, the featureless workspace test graph.
 - 2026-07-15: froze C60's accepted image-store experiment, two rejected UIKit proof paths, and the 190-entry, 88-accepted, 102-rejected manifest totals.
 - 2026-07-14: froze the accepted C35 WebGPU ID-mask field packing and the 170-entry, 81-accepted, 89-rejected manifest totals.
 - 2026-07-14: froze the accepted C34 Metal ID-mask field packing, three rejected compositor guardrail refinements, and the 169-entry, 80-accepted, 89-rejected manifest totals.

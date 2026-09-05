@@ -25,7 +25,7 @@
 ## Logic narrative
 - The test harness resolves the runner binary from the current Cargo profile and builds it if needed.
 - Temporary button goldens exercise mismatch behavior without changing the repo.
-- The committed renderer test asserts each required golden exists before invoking the runner so missing files cannot be silently generated during tests. It then rerenders every required component through Metal and compares dimensions with an explicit maximum of 16 changed pixels, 3 channel levels, and 0.02 MSE. `nested_layer_composite` alone permits 96 changed pixels because its transparent BGRA8 cache target introduces a one-level quantization difference along antialiased rounded edges; its max-channel and MSE gates remain unchanged, so systematic drift still fails.
+- The committed renderer test asserts each required golden exists before invoking the runner so missing files cannot be silently generated during tests. It then rerenders every required component through Metal and compares dimensions with an explicit maximum of 16 changed pixels, 3 channel levels, and 0.02 MSE. `nested_layer_composite` permits 96 changed pixels because its transparent BGRA8 cache target introduces a one-level quantization difference along antialiased rounded edges. Scene3D bloom permits a scale-aware 0.1% changed-pixel budget with a 72-pixel floor for blur/composite quantization. Both exceptions retain the max-channel and MSE gates, so systematic drift still fails.
 - Router-scene coverage uses the draw-list path rather than a direct renderer shim, because these scenes are meant to catch UI scene-state visual drift in ordinary Oxide composition. The snapshot runner disables the router HUD overlay for these cases so the committed images verify scene content instead of debug chrome.
 - Scale-specific required goldens pass their expected scale into the runner so logical-coordinate to pixel-coordinate paths are tested instead of only PNG dimensions.
 - Aspect-specific required goldens pass landscape and portrait dimensions into the runner so viewport, camera crop, ID-mask projection, and seam-coordinate paths are tested outside square-target assumptions.
@@ -65,6 +65,8 @@ cargo test --locked -p oxide-snapshot-runner --test golden_mismatch_tests
 ```
 
 ## Changelog
+- 2026-08-09: refreshed the bounded zoom and device-scale A8 fixtures after their rendering corrections.
+- 2026-08-09: made the Scene3D bloom changed-pixel budget scale with capture area while retaining strict maximum-channel and MSE limits.
 - 2026-07-12: added a fixture-specific changed-pixel budget for the BGRA8 nested-layer intermediate while retaining the existing max-channel and MSE limits.
 - 2026-07-12: added primitive, A8/Unicode glyph, crop/zoom, nested layer/transform/opacity/effect, Scene3D 3x, and ID-mask square/wide/portrait 3x goldens.
 - 2026-06-01: expanded WebGPU browser golden enforcement to include a 512x512 Scene3D capture with colored-geometry signal checks.

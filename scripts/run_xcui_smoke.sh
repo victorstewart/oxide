@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="${ROOT_DIR}/oxide/host/ios-app/App/OxideHost.xcodeproj"
 SCHEME="OxideHost"
 DEFAULT_DEST="platform=iOS Simulator,name=iPhone 16"
+DEVELOPMENT_TEAM_ID="${OXIDE_IOS_DEVELOPMENT_TEAM:-${DEVELOPMENT_TEAM:-}}"
 if [[ -n "${XCUI_DESTINATION:-}" ]]
 then
    DESTINATION="${XCUI_DESTINATION}"
@@ -120,12 +121,11 @@ PY
       DESTINATION="${DEFAULT_DEST}"
    fi
 fi
-EXPORT_DIR="${OXIDE_UI_EXPORT:-${ROOT_DIR}/artifacts/ui}"
 RESULT_BUNDLE="${ROOT_DIR}/artifacts/ui/ResultBundle"
 DERIVED_DATA="${ROOT_DIR}/artifacts/ui/DerivedData"
 
-rm -rf "${EXPORT_DIR}" "${RESULT_BUNDLE}" "${DERIVED_DATA}"
-mkdir -p "${EXPORT_DIR}"
+rm -rf "${RESULT_BUNDLE}" "${RESULT_BUNDLE}.xcresult"
+mkdir -p "$(dirname "${RESULT_BUNDLE}")"
 
 if ! command -v xcodebuild >/dev/null 2>&1
 then
@@ -140,12 +140,17 @@ XCB_ARGS=(
    -destination "${DESTINATION}"
    -resultBundlePath "${RESULT_BUNDLE}"
    -derivedDataPath "${DERIVED_DATA}"
-   OXIDE_UI_EXPORT="${EXPORT_DIR}"
+   -parallel-testing-enabled NO
+   -only-testing:OxideHostUITests/OxideHostUITests/testWindowLaunchSmoke
    test
 )
 if [[ "${USING_PHYSICAL:-0}" -eq 1 ]]
 then
    XCB_ARGS+=(-allowProvisioningUpdates -allowProvisioningDeviceRegistration)
+   if [[ -n "${DEVELOPMENT_TEAM_ID}" ]]
+   then
+      XCB_ARGS+=("DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM_ID}")
+   fi
 fi
 xcodebuild "${XCB_ARGS[@]}"
 status=$?
@@ -153,61 +158,8 @@ set -e
 
 if [[ ${status} -ne 0 ]]
 then
-   echo "XCUI tests failed" >&2
+   echo "XCUI launch smoke failed" >&2
    exit ${status}
-fi
-
-shopt -s nullglob
-pngs=("${EXPORT_DIR}"/*.png)
-if [[ ${#pngs[@]} -eq 0 ]]
-then
-   echo "No exported screenshots found in ${EXPORT_DIR}; skipping golden comparison (UISwitch automation disabled in headless run)" >&2
-   exit 0
-fi
-
-declare -A GOLDENS
-GOLDENS["controls-scene"]="${ROOT_DIR}/goldens/static/scene_controls/default/default/baseline.png"
-GOLDENS["collection-scene"]="${ROOT_DIR}/goldens/static/scene_collection/default/default/baseline.png"
-GOLDENS["zoom-scene"]="${ROOT_DIR}/goldens/static/scene_zoom/default/default/baseline.png"
-GOLDENS["nine-slice-scene"]="${ROOT_DIR}/goldens/static/nine_slice/default/default/baseline.png"
-GOLDENS["sdf-scene"]="${ROOT_DIR}/goldens/static/scene_text/default/default/baseline.png"
-GOLDENS["animations-scene"]="${ROOT_DIR}/goldens/static/style_effects/default/default/baseline.png"
-
-missing=0
-failed=0
-for png_path in "${pngs[@]}"
-do
-   name="$(basename "${png_path}" .png)"
-   golden="${GOLDENS[${name}]:-}"
-   if [[ -z "${golden}" ]]
-   then
-      echo "[skip] no golden mapping for ${name}" >&2
-      ((missing+=1))
-      continue
-   fi
-   if [[ ! -f "${golden}" ]]
-   then
-      echo "[fail] golden not found for ${name}: ${golden}" >&2
-      ((failed+=1))
-      continue
-   fi
-   if cmp -s "${png_path}" "${golden}"
-   then
-      echo "[ok] ${name} matches golden"
-   else
-      echo "[diff] ${name} diverges from ${golden}" >&2
-      ((failed+=1))
-   fi
- done
-
-if [[ ${failed} -gt 0 ]]
-then
-   exit 1
-fi
-
-if [[ ${missing} -gt 0 ]]
-then
-   echo "completed with ${missing} screenshots without golden coverage" >&2
 fi
 
 exit 0

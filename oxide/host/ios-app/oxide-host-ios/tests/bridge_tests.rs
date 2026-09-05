@@ -1,15 +1,18 @@
 use oxide_host_ios::{
-    oxide_host_app_shutdown, oxide_host_emit_ime_hidden, oxide_host_emit_ime_shown,
-    oxide_host_emit_key, oxide_host_emit_perm, oxide_host_emit_pointer,
+    oxide_host_emit_ime_hidden, oxide_host_emit_ime_shown, oxide_host_emit_key,
+    oxide_host_emit_perm, oxide_host_emit_pointer,
     oxide_host_emit_push_notify, oxide_host_emit_push_token, oxide_host_emit_text_commit,
     oxide_host_emit_text_composition, oxide_host_emit_text_selection, oxide_host_emit_touch,
-    oxide_host_emit_window_resized, oxide_host_is_overlay_visible, oxide_host_is_reduce_motion,
-    oxide_host_set_ime_callbacks, oxide_host_set_key_callback, oxide_host_set_overlay_visible,
+    oxide_host_emit_window_resized, oxide_host_set_ime_callbacks, oxide_host_set_key_callback,
     oxide_host_set_perm_callback, oxide_host_set_pointer_callback,
     oxide_host_set_push_notify_callback, oxide_host_set_push_token_callback,
-    oxide_host_set_reduce_motion, oxide_host_set_text_commit_callback,
-    oxide_host_set_text_composition_callback, oxide_host_set_text_selection_callback,
-    oxide_host_set_touch_callback, oxide_host_set_window_resized_callback,
+    oxide_host_set_text_commit_callback, oxide_host_set_text_composition_callback,
+    oxide_host_set_text_selection_callback, oxide_host_set_touch_callback,
+    oxide_host_set_window_resized_callback,
+};
+#[cfg(feature = "test-scenes-entrypoint")]
+use oxide_host_ios::{
+    oxide_host_app_shutdown, oxide_host_is_overlay_visible, oxide_host_set_overlay_visible,
 };
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -217,6 +220,7 @@ fn ime_callbacks_record_events() {
 }
 
 #[test]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn overlay_toggle_succeeds_without_router() {
     let _guard = APP_STATE_LOCK.lock().unwrap();
     oxide_host_app_shutdown();
@@ -227,19 +231,5 @@ fn overlay_toggle_succeeds_without_router() {
     assert_eq!(oxide_host_is_overlay_visible(), 0);
     assert_eq!(oxide_host_set_overlay_visible(1), 0);
     assert_eq!(oxide_host_is_overlay_visible(), 1);
-    oxide_host_app_shutdown();
-}
-
-#[test]
-fn reduce_motion_toggle_succeeds_without_router() {
-    let _guard = APP_STATE_LOCK.lock().unwrap();
-    oxide_host_app_shutdown();
-    assert_eq!(oxide_host_is_reduce_motion(), 0);
-    assert_eq!(oxide_host_set_reduce_motion(1), 0);
-    assert_eq!(oxide_host_is_reduce_motion(), 1);
-    assert_eq!(oxide_host_set_reduce_motion(1), 0);
-    assert_eq!(oxide_host_is_reduce_motion(), 1);
-    assert_eq!(oxide_host_set_reduce_motion(0), 0);
-    assert_eq!(oxide_host_is_reduce_motion(), 0);
     oxide_host_app_shutdown();
 }

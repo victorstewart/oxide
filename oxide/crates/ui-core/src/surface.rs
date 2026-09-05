@@ -44,8 +44,7 @@ pub enum DirtyClass {
     Clip = 6,
     ImageContent = 7,
     CameraFrame = 8,
-    Accessibility = 9,
-    HitTest = 10,
+    HitTest = 9,
 }
 
 impl DirtyClass {
@@ -65,8 +64,7 @@ const DRAW_DIRTY_BITS: u16 = DirtyClass::Style.bit()
     | DirtyClass::ImageContent.bit()
     | DirtyClass::CameraFrame.bit();
 
-const ALL_DIRTY_BITS: u16 =
-    DRAW_DIRTY_BITS | DirtyClass::Accessibility.bit() | DirtyClass::HitTest.bit();
+const ALL_DIRTY_BITS: u16 = DRAW_DIRTY_BITS | DirtyClass::HitTest.bit();
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DirtySet {
@@ -905,13 +903,11 @@ impl UiSurface {
         match class {
             DirtyClass::Layout => {
                 self.tree.mark_layout_dirty(id);
-                self.dirty.mark(DirtyClass::Accessibility);
                 self.dirty.mark(DirtyClass::HitTest);
             }
             DirtyClass::Transform => {
                 self.tree.mark_subtree_draw_dirty(id);
                 self.dirty.mark(DirtyClass::Paint);
-                self.dirty.mark(DirtyClass::Accessibility);
                 self.dirty.mark(DirtyClass::HitTest);
             }
             DirtyClass::Clip => {
@@ -920,7 +916,6 @@ impl UiSurface {
             }
             DirtyClass::Text => {
                 self.tree.mark_node_and_ancestors_draw_dirty(id);
-                self.dirty.mark(DirtyClass::Accessibility);
             }
             DirtyClass::Style
             | DirtyClass::Paint
@@ -929,7 +924,7 @@ impl UiSurface {
             | DirtyClass::CameraFrame => {
                 self.tree.mark_node_and_ancestors_draw_dirty(id);
             }
-            DirtyClass::Accessibility | DirtyClass::HitTest => {}
+            DirtyClass::HitTest => {}
         }
         if class.bit() & DRAW_DIRTY_BITS != 0 {
             self.retained_node_stats = RetainedNodeStats::default();
@@ -950,17 +945,14 @@ impl UiSurface {
         if style_change_affects_parent_layout(&before, &after) {
             self.tree.mark_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         } else if style_change_affects_content_layout(&before, &after) {
             self.tree.mark_node_layout_dirty(id);
             self.dirty.mark(DirtyClass::Layout);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         }
         if transform_changed(&before, &after) {
             self.dirty.mark(DirtyClass::Transform);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             self.tree.mark_subtree_draw_dirty(id);
         }
@@ -996,7 +988,6 @@ impl UiSurface {
         self.dirty.mark(DirtyClass::Style);
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
         self.tree.mark_layout_dirty(self.tree.root());
         self.force_full_damage = true;
@@ -1007,7 +998,6 @@ impl UiSurface {
         self.dirty.mark(DirtyClass::Style);
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
     }
 
@@ -1024,15 +1014,6 @@ impl UiSurface {
     }
 
     #[inline]
-    pub fn accessibility_frame(&self, id: NodeId) -> Option<gfx::RectF>
-    {
-       self.tree.accessibility_frame(
-          id,
-          (!self.animator.overrides().is_empty()).then_some(self.animator.overrides()),
-       )
-    }
-
-    #[inline]
     pub fn chrome_metrics(&self) -> ChromeMetrics {
         self.chrome
     }
@@ -1044,7 +1025,6 @@ impl UiSurface {
         self.chrome = metrics;
         self.dirty.mark(DirtyClass::Layout);
         self.dirty.mark(DirtyClass::Paint);
-        self.dirty.mark(DirtyClass::Accessibility);
         self.dirty.mark(DirtyClass::HitTest);
     }
 
@@ -1067,7 +1047,6 @@ impl UiSurface {
             style.padding.bottom = self.chrome.safe_insets.bottom;
             self.dirty.mark(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
         }
     }
@@ -1105,7 +1084,6 @@ impl UiSurface {
             self.last_layout_stats = LayoutStats::default();
             self.dirty.clear(DirtyClass::Layout);
             self.dirty.mark(DirtyClass::Paint);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             true
         } else {
@@ -1307,35 +1285,33 @@ impl UiSurface {
       self.damage_stats = self.damage_region.finish_stats(stats, effect_expansions);
    }
 
-    pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus {
-        self.encode_retained_impl(b, None)
-    }
+   pub fn encode_retained(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    pub fn encode_retained_with_text_atlas_revisions(
-        &mut self,
-        b: &mut DrawListBuilder,
-        atlases: &[(gfx::ImageHandle, u64)],
-    ) -> RetainedDrawStatus {
-        self.encode_retained_impl(b, Some(atlases))
-    }
+   /// Compatibility alias for [`Self::encode_retained`]. `UiSurface` node chunks do not own text.
+   pub fn encode_retained_with_text_atlas_revisions(
+      &mut self,
+      b: &mut DrawListBuilder,
+      _atlases: &[(gfx::ImageHandle, u64)],
+   ) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    pub fn encode_retained_with_text_ctx(
-        &mut self,
-        b: &mut DrawListBuilder,
-        text: &TextCtx,
-    ) -> RetainedDrawStatus {
-        if let Some(atlases) = text.retained_text_atlas_revisions() {
-            self.encode_retained_impl(b, Some(atlases))
-        } else {
-            self.encode_retained_impl(b, None)
-        }
-    }
+   /// Compatibility alias for [`Self::encode_retained`]. `UiSurface` node chunks do not own text.
+   pub fn encode_retained_with_text_ctx(
+      &mut self,
+      b: &mut DrawListBuilder,
+      _text: &TextCtx,
+   ) -> RetainedDrawStatus
+   {
+      self.encode_retained_impl(b)
+   }
 
-    fn encode_retained_impl(
-        &mut self,
-        b: &mut DrawListBuilder,
-        _text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-    ) -> RetainedDrawStatus {
+   fn encode_retained_impl(&mut self, b: &mut DrawListBuilder) -> RetainedDrawStatus
+   {
         let retained = if self.animator.overrides().is_empty() {
             self.tree.render_sequence(0)
         } else {
@@ -1415,7 +1391,6 @@ impl UiSurface {
         if changed {
             self.dirty.mark(DirtyClass::Transform);
             self.dirty.mark(DirtyClass::Opacity);
-            self.dirty.mark(DirtyClass::Accessibility);
             self.dirty.mark(DirtyClass::HitTest);
             for node in self.animator.overrides().paint_changed_nodes().iter().copied()
             {
@@ -1580,60 +1555,57 @@ impl SurfaceRouter {
         self.popups.set_viewport(viewport, self.device_scale);
     }
 
-    pub fn encode_with_overlays(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-    ) {
-        self.encode_with_overlays_impl(viewport, device_scale, builder, None);
-    }
+   pub fn encode_with_overlays(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    pub fn encode_with_overlays_with_text_atlas_revisions(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        atlases: &[(gfx::ImageHandle, u64)],
-    ) {
-        self.encode_with_overlays_impl(viewport, device_scale, builder, Some(atlases));
-    }
+   /// Compatibility alias for [`Self::encode_with_overlays`]; surface chunks do not own text.
+   pub fn encode_with_overlays_with_text_atlas_revisions(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+      _atlases: &[(gfx::ImageHandle, u64)],
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    pub fn encode_with_overlays_with_text_ctx(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        text: &TextCtx,
-    ) {
-        if let Some(atlases) = text.retained_text_atlas_revisions() {
-            self.encode_with_overlays_impl(
-                viewport,
-                device_scale,
-                builder,
-                Some(atlases),
-            );
-        } else {
-            self.encode_with_overlays_impl(viewport, device_scale, builder, None);
-        }
-    }
+   /// Compatibility alias for [`Self::encode_with_overlays`]; surface chunks do not own text.
+   pub fn encode_with_overlays_with_text_ctx(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+      _text: &TextCtx,
+   )
+   {
+      self.encode_with_overlays_impl(viewport, device_scale, builder);
+   }
 
-    fn encode_with_overlays_impl(
-        &mut self,
-        viewport: gfx::RectF,
-        device_scale: f32,
-        builder: &mut DrawListBuilder,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
-    ) {
-        self.set_viewport(viewport, device_scale);
-        let mut retained_stats = RetainedCompositionStats::default();
-        if let Some(surface) = self.surfaces.get_mut(self.current) {
-            retained_stats.record_current(surface.encode_retained_impl(builder, text_atlases));
-        }
-        retained_stats.record_overlays(self.overlays.encode_retained(builder, text_atlases));
-        retained_stats.record_popups(self.popups.encode_retained(builder, text_atlases));
-        self.retained_composition_stats = retained_stats;
-    }
+   fn encode_with_overlays_impl(
+      &mut self,
+      viewport: gfx::RectF,
+      device_scale: f32,
+      builder: &mut DrawListBuilder,
+   )
+   {
+      self.set_viewport(viewport, device_scale);
+      let mut retained_stats = RetainedCompositionStats::default();
+      if let Some(surface) = self.surfaces.get_mut(self.current)
+      {
+         retained_stats.record_current(surface.encode_retained_impl(builder));
+      }
+      retained_stats.record_overlays(self.overlays.encode_retained(builder, None));
+      retained_stats.record_popups(self.popups.encode_retained(builder, None));
+      self.retained_composition_stats = retained_stats;
+   }
 
     pub fn capture(&mut self, viewport: gfx::RectF, device_scale: f32) -> SurfaceCapture {
         self.set_viewport(viewport, device_scale);

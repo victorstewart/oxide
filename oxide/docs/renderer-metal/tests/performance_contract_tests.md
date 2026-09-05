@@ -32,6 +32,10 @@ This test file protects renderer performance contracts that are easy to regress 
   Confirms command-buffer GPU timestamp support is compiled for macOS and iOS.
 - `completed_gpu_duration_is_attributed_to_frame_id()`
   Confirms completed GPU timing is associated with the frame id that produced it.
+- `runtime_image_sampling_is_prebuilt_and_partitions_flat_and_prepared_batches()`
+  Confirms both samplers are created during renderer initialization, sampled RGBA uploads retain validated resource metadata, flat selectors use it, prepared image families partition mixed-mode batches, and neither encode path creates sampler objects.
+- `rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()`
+  Requires one overflow-safe RGBA layout gate shared by policy create, sampled create, and atlas append before Metal calls, upload accounting, or image-ID mutation.
 - `auxiliary_encoders_use_the_selected_frame_slot()`
   Requires ID-mask and neon encoders to use the selected frame slot, rejects the former eight-entry ID-mask target array, and freezes the completion-cleared generation metadata and busy-generation reuse guard.
 - `layer_cache_uses_one_plan_and_reports_single_ownership()`
@@ -51,7 +55,7 @@ This test file protects renderer performance contracts that are easy to regress 
 
 ## Logic narrative
 
-Source-contract tests catch forbidden APIs and required guard strings before runtime. The layer source contract rejects the former independent hash/materialization path and requires child-to-parent invalidation propagation. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime tests then exercise the actual Metal path: device resolution, command queue creation, embedded shader-library loading, default pipeline-state creation, and three consecutive cache states. A placeholder metallib, a missing shader entry point, or duplicate layer-body ownership cannot satisfy these tests.
+Source-contract tests catch forbidden APIs and required guard strings before runtime. The RGBA admission contract centralizes zero-size, narrow-stride, short-data, and overflow rejection and proves that guard precedes native calls and bookkeeping in all byte-backed create paths plus append. The sampling contract requires prebuilt linear/nearest samplers, validated sRGB RGBA storage, sampling metadata beside the texture, flat selector calls, and prepared batch partitions at mode changes; readback snapshots separately prove the prepared bindings produce the requested pixels. It rejects sampler construction in either encode path. The layer source contract rejects the former independent hash/materialization path and requires child-to-parent invalidation propagation. The debug/capture-name freeze keeps Metal's command tags deterministic for future capture and A/B packet comparisons. The macOS runtime tests then exercise the actual Metal path: device resolution, command queue creation, embedded shader-library loading, default pipeline-state creation, and three consecutive cache states. A placeholder metallib, a missing shader entry point, or duplicate layer-body ownership cannot satisfy these tests.
 
 ## Preconditions and postconditions
 
@@ -77,6 +81,7 @@ The source tests allocate only small strings borrowed from `include_str!`. The f
 
 The runtime test is an initialization guard, not a throughput benchmark. It protects the startup discipline required before frame-time A/B tests are meaningful: all default Metal pipelines must be resident before normal frame encoding.
 The debug/capture-name freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
+The sampling source contract adds no frame workload. It protects the allocation-free design that creates both sampler states once and reads immutable per-image metadata during existing batch construction.
 
 ## Feature flags and cfgs
 
@@ -110,6 +115,8 @@ fn initialize_renderer_for_contract_check() -> Result<(), oxide_renderer_metal::
 
 ## Changelog
 
+- 2026-08-06: required one checked RGBA layout admission gate ahead of Metal/resource/stat/ID mutation in policy, sampled, and append paths.
+- 2026-08-06: added the flat/prepared runtime-image sampling contract for initialization-time sampler creation, RGBA validation, resource-owned mode, bindings, and mixed-mode batch boundaries.
 - 2026-07-14: added C52 subthreshold exact and sigma-8-plus paired blur sample, exponential-tap, and table-byte contracts; corrected first-use counts to include C51's lazily allocated offscreen final target.
 - 2026-07-14: replaced the ID-mask auxiliary-slot count assertion with C36 single-snapshot-target and completion-safe generation ownership guards.
 - 2026-07-14: added C31 Metal contracts for zero-budget exact inline fallback, allocated-byte bounds, resize pooling, navigation-ID reuse, and memory-warning purge telemetry.

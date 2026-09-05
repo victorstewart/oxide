@@ -1,49 +1,67 @@
-//! Oxide iOS host static library
+//! Oxide's reusable iOS application host.
 //!
-//! Exposes `rust_entry()` for the Xcode app's `main.m` to call.
-//! On iOS, this calls into an Objective-C shim that starts UIApplication.
+//! Production applications install one [`App`] with [`install_app`] or start it
+//! directly with [`run_app`]. The legacy scene/performance entry point is
+//! available only through the `test-scenes-entrypoint` feature.
 #![allow(clippy::all, clippy::pedantic)]
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
 #[cfg(target_os = "ios")]
 use core::time::Duration;
-use oxide_input::{pointer_device_from_raw, touch_phase_from_raw, PrimaryTouchTracker};
+use oxide_input::{pointer_device_from_raw, touch_phase_from_raw};
+#[cfg(feature = "test-scenes-entrypoint")]
+use oxide_input::PrimaryTouchTracker;
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_networking::ReachabilityManager;
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 use oxide_networking::{
     HandshakeResponse, PacketKind, QuicSessionManager, ReachabilitySubscription, TimeSyncSample,
 };
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_perf_runner as perf_runner;
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_permissions::{PermissionManager, PermissionState, PermissionSubscription, SensorBridge};
-#[cfg(target_os = "ios")]
+use oxide_platform_api::{
+   App, AppEvent, FrameContext, FrameDemand, InputEvent, KeyCode, KeyEvent, Lifecycle,
+   Modifiers, MouseButtons, PointerEvent, PreparedFrame, RendererStats, TextEvent, UpdateContext,
+   WindowEvent,
+};
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 use oxide_platform_api::{
     Bluetooth, BluetoothEvent, CameraManager, LocationOptions, LocationService, MotionService,
     PermissionDomain, PermissionStatus, Permissions, PlatformError, PushManager, PushProvider,
-    PushToken, TimeService,
+    PushToken,
 };
+#[cfg(target_os = "ios")]
+use oxide_platform_api::TimeService;
 use oxide_renderer_api as gfx_api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_metal as metal;
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_telemetry::{
     MemoryPressureLevel, TelemetryAction, TelemetryCommandReason, TelemetryHub, TelemetryOperations,
 };
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_test_scenes as test_scenes;
+#[cfg(feature = "test-scenes-entrypoint")]
 use oxide_text as text;
 use oxide_timing as timing;
 use oxide_ui_core as ui;
 use std::{
-    fs::File,
-    io::Write,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+   collections::VecDeque,
+   sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", feature = "test-scenes-entrypoint"))]
+use std::sync::Arc;
+
+#[cfg(feature = "test-scenes-entrypoint")]
+use std::{fs::File, io::Write};
+
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 use std::sync::Weak;
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 use oxide_platform_ios::{
     bluetooth_with_restoration, IosBluetooth, IosCameraManager, IosLocation, IosMotion,
     IosPermissions, IosPushManager, IosReachability,
@@ -56,20 +74,72 @@ extern "C" {
         argc: ::core::ffi::c_int,
         argv: *mut *mut ::core::ffi::c_char,
     ) -> ::core::ffi::c_int;
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_host_perf_signpost_begin(ptr: *const ::core::ffi::c_char, len: usize) -> u64;
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_host_perf_signpost_end(ptr: *const ::core::ffi::c_char, len: usize, signpost_id: u64);
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_cam_start_default() -> ::libc::c_int;
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_cam_start_default_preview_only() -> ::libc::c_int;
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_cam_stop();
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_cam_set_preview_pixel_format(format: i32) -> ::libc::c_int;
     fn oxide_host_request_display_link_wake(generation: u64);
+    fn oxide_host_display_link_frame_rate_range(
+        minimum: *mut f32,
+        maximum: *mut f32,
+        preferred: *mut f32,
+    ) -> ::libc::c_int;
 }
 
 #[cfg(target_os = "ios")]
+/// Monotonic time sourced from the active iOS platform host.
 pub struct IosTime;
 
+/// The frame-rate range currently configured on the production display link.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayLinkFrameRateRange
+{
+   /// Minimum callback rate requested from Core Animation, in hertz.
+   pub minimum: f32,
+   /// Maximum callback rate requested from Core Animation, in hertz.
+   pub maximum: f32,
+   /// Preferred callback rate requested from Core Animation, in hertz.
+   pub preferred: f32,
+}
+
+/// Returns the host-published display-link range when running on iOS.
+///
+/// The native shell publishes this lock-free snapshot on the main thread, so
+/// callers never dereference UIKit or Core Animation objects.
+pub fn display_link_frame_rate_range() -> Option<DisplayLinkFrameRateRange>
+{
+   #[cfg(target_os = "ios")]
+   {
+      let mut range = DisplayLinkFrameRateRange {
+         minimum: 0.0,
+         maximum: 0.0,
+         preferred: 0.0,
+      };
+      let available = unsafe {
+         oxide_host_display_link_frame_rate_range(
+            &mut range.minimum,
+            &mut range.maximum,
+            &mut range.preferred,
+         )
+      };
+      return (available != 0).then_some(range);
+   }
+   #[cfg(not(target_os = "ios"))]
+   {
+      None
+   }
+}
+
 #[inline]
-#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn camera_perf_trace_signposts_enabled() -> bool {
     #[cfg(target_os = "ios")]
     {
@@ -83,6 +153,7 @@ fn camera_perf_trace_signposts_enabled() -> bool {
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn with_perf_signpost<T>(_name: &str, body: impl FnOnce() -> T) -> T {
     #[cfg(target_os = "ios")]
     {
@@ -112,16 +183,18 @@ fn with_perf_signpost<T>(_name: &str, body: impl FnOnce() -> T) -> T {
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn benchmark_camera_fast_path_active(app: &AppState) -> bool {
     app.benchmark_mode && app.benchmark_scene_index == benchmark_camera_scene_index()
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn benchmark_camera_scene_index() -> u32 {
     test_scenes::SceneKind::Camera as u32
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct OxideCamPerfSnapshot {
@@ -164,12 +237,12 @@ struct OxideCamPerfSnapshot {
     samples_superseded_before_present: u32,
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 const _: [(); 208] = [(); core::mem::size_of::<OxideCamPerfSnapshot>()];
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 const _: [(); 8] = [(); core::mem::align_of::<OxideCamPerfSnapshot>()];
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct OxideCamContractSnapshot {
@@ -180,12 +253,12 @@ struct OxideCamContractSnapshot {
     color_space: u32,
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 const _: [(); 20] = [(); core::mem::size_of::<OxideCamContractSnapshot>()];
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 const _: [(); 4] = [(); core::mem::align_of::<OxideCamContractSnapshot>()];
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 unsafe extern "C" {
     fn oxide_cam_get_perf_snapshot(out: *mut OxideCamPerfSnapshot) -> ::libc::c_int;
     fn oxide_cam_reset_perf_counters() -> ::libc::c_int;
@@ -193,6 +266,7 @@ unsafe extern "C" {
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn apply_camera_stage_perf(stats: &mut StatsSnapshot, perf_stats: &metal::PerfStats) {
     stats.cam_poll_submissions_ms = perf_stats.cam_poll_submissions_ms as f32;
     stats.cam_fetch_ms = perf_stats.cam_fetch_ms as f32;
@@ -239,6 +313,7 @@ fn apply_camera_stage_perf(stats: &mut StatsSnapshot, perf_stats: &metal::PerfSt
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn apply_camera_capture_perf(_stats: &mut StatsSnapshot) {
     #[cfg(target_os = "ios")]
     {
@@ -291,6 +366,7 @@ fn apply_camera_capture_perf(_stats: &mut StatsSnapshot) {
 }
 
 #[doc(hidden)]
+#[cfg(feature = "test-scenes-entrypoint")]
 pub fn merge_camera_contract_fields(
     fallback_width: u32,
     fallback_height: u32,
@@ -314,6 +390,7 @@ pub fn merge_camera_contract_fields(
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn apply_camera_contract_snapshot(_stats: &mut StatsSnapshot) {
     #[cfg(target_os = "ios")]
     {
@@ -341,6 +418,7 @@ fn apply_camera_contract_snapshot(_stats: &mut StatsSnapshot) {
 }
 
 #[inline]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn stats_snapshot_from_perf(perf_stats: metal::PerfStats, camera_running: bool) -> StatsSnapshot {
     let mut stats = StatsSnapshot {
         draws: perf_stats.draws,
@@ -371,6 +449,7 @@ fn stats_snapshot_from_perf(perf_stats: metal::PerfStats, camera_running: bool) 
     stats
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn render_camera_benchmark_fast_path(
     renderer: &mut metal::MetalRenderer,
     camera_running: bool,
@@ -388,6 +467,7 @@ fn render_camera_benchmark_fast_path(
     Ok(stats_snapshot_from_perf(perf_stats, camera_running))
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn camera_preview_plan(
     renderer: &metal::MetalRenderer,
     camera_running: bool,
@@ -402,6 +482,7 @@ fn camera_preview_plan(
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn camera_preview_plan_reason(
     renderer: &metal::MetalRenderer,
     camera_running: bool,
@@ -426,7 +507,7 @@ impl TimeService for IosTime {
     }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 struct SensorRuntime {
     bridge: Arc<SensorBridge>,
     telemetry: Weak<TelemetryHub>,
@@ -439,7 +520,7 @@ struct SensorRuntime {
     motion_running: bool,
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 impl SensorRuntime {
     fn new(
         bridge: Arc<SensorBridge>,
@@ -638,7 +719,7 @@ impl SensorRuntime {
     }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 struct NetworkRuntime {
     reachability: IosReachability,
     session: QuicSessionManager,
@@ -647,7 +728,7 @@ struct NetworkRuntime {
     paused: bool,
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 impl NetworkRuntime {
     fn new(
         manager: Arc<ReachabilityManager>,
@@ -744,13 +825,96 @@ impl NetworkRuntime {
     }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 impl Drop for NetworkRuntime {
     fn drop(&mut self) {
         self.stop();
     }
 }
 
+/// Why a production application could not be installed into the process host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallAppError
+{
+   /// Another application already owns the process-global host slot.
+   AlreadyInstalled,
+   /// The native host started before an application was installed.
+   HostAlreadyStarted,
+   /// The crate was built with the mutually exclusive legacy test host.
+   LegacyTestHostSelected,
+}
+
+/// Installs the sole application that the production iOS host will run.
+///
+/// Installation must happen before the native host initializes. The process
+/// owns exactly one application slot and never replaces an installed app.
+pub fn install_app(app: Box<dyn App>) -> Result<(), InstallAppError>
+{
+   #[cfg(feature = "test-scenes-entrypoint")]
+   {
+      let _ = app;
+      return Err(InstallAppError::LegacyTestHostSelected);
+   }
+   #[cfg(not(feature = "test-scenes-entrypoint"))]
+   {
+      let state = lock_or_recover(app_state());
+      if state.inited
+      {
+         return Err(InstallAppError::HostAlreadyStarted);
+      }
+      if INJECTED_APP_INSTALLED.load(Ordering::Acquire)
+      {
+         return Err(InstallAppError::AlreadyInstalled);
+      }
+      let mut slot = lock_or_recover(injected_app_slot());
+      *slot = Some(app);
+      INJECTED_APP_INSTALLED.store(true, Ordering::Release);
+      drop(slot);
+      drop(state);
+      request_frame_wake();
+      Ok(())
+   }
+}
+
+/// Installs `app` and enters the production iOS application event loop.
+///
+/// Returns `-2` when installation fails and `-1` on non-iOS targets without
+/// claiming the process app slot. On iOS, all other return values come from
+/// the native application entry point.
+///
+/// # Safety
+///
+/// `argc` and `argv` must satisfy the C `main` argument contract for the
+/// duration of the call. In particular, a positive `argc` requires a non-null
+/// `argv` containing at least that many valid pointers to null-terminated
+/// strings.
+pub unsafe fn run_app(
+   argc: ::libc::c_int,
+   argv: *mut *mut ::core::ffi::c_char,
+   app: Box<dyn App>,
+) -> ::libc::c_int
+{
+   #[cfg(not(target_os = "ios"))]
+   {
+      let _ = (argc, argv, app);
+      return -1;
+   }
+   #[cfg(target_os = "ios")]
+   {
+      if install_app(app).is_err()
+      {
+         return -2;
+      }
+      #[cfg(feature = "tokio-runtime")]
+      oxide_platform_ios::init_tokio_spawn();
+      unsafe
+      {
+         oxide_host_start(argc, argv) as ::libc::c_int
+      }
+   }
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn rust_entry(
     _argc: ::libc::c_int,
@@ -771,6 +935,13 @@ pub extern "C" fn rust_entry(
     {
         -1 as ::libc::c_int
     }
+}
+
+#[no_mangle]
+/// Reports whether the process-global production app slot has been claimed.
+pub extern "C" fn oxide_host_is_injected_app() -> u8
+{
+   u8::from(INJECTED_APP_INSTALLED.load(Ordering::Acquire))
 }
 
 fn lock_or_recover<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -868,14 +1039,14 @@ static PUSH_TOKEN_CB: std::sync::OnceLock<std::sync::Mutex<Option<PushTokenCb>>>
 static PUSH_NOTIFY_CB: std::sync::OnceLock<std::sync::Mutex<Option<PushNotifyCb>>> =
     std::sync::OnceLock::new();
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 static SENSOR_PUSH_BRIDGE: std::sync::OnceLock<std::sync::Mutex<Weak<SensorBridge>>> =
     std::sync::OnceLock::new();
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 static SENSOR_TELEMETRY_BRIDGE: std::sync::OnceLock<std::sync::Mutex<Weak<TelemetryHub>>> =
     std::sync::OnceLock::new();
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 fn push_provider_from_u32(value: u32) -> PushProvider {
     match value {
         1 => PushProvider::Fcm,
@@ -883,7 +1054,7 @@ fn push_provider_from_u32(value: u32) -> PushProvider {
     }
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 extern "C" fn sensor_push_token_cb(provider: u32, ptr: *const u8, len: usize) {
     unsafe {
         oxide_platform_ios::oxide_push_token_trampoline(provider, ptr, len);
@@ -1008,7 +1179,7 @@ pub extern "C" fn oxide_host_set_touch_callback(cb: Option<TouchCb>) {
     *lock_or_recover(slot) = cb;
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 const PERMISSION_DOMAINS: [PermissionDomain; 7] = [
     PermissionDomain::Camera,
     PermissionDomain::Microphone,
@@ -1019,7 +1190,7 @@ const PERMISSION_DOMAINS: [PermissionDomain; 7] = [
     PermissionDomain::MediaLibrary,
 ];
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 fn initialize_permissions(manager: &PermissionManager) -> Vec<PermissionState> {
     for domain in PERMISSION_DOMAINS {
         manager.status(domain);
@@ -1027,7 +1198,7 @@ fn initialize_permissions(manager: &PermissionManager) -> Vec<PermissionState> {
     manager.snapshot()
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 fn install_permission_subscriptions(manager: Arc<PermissionManager>) {
     let mut handles = Vec::new();
     for domain in PERMISSION_DOMAINS {
@@ -1035,6 +1206,7 @@ fn install_permission_subscriptions(manager: Arc<PermissionManager>) {
             let _ = with_app_mut(|app| {
                 app.permission_states.retain(|s| s.domain != state.domain);
                 app.permission_states.push(state);
+                #[cfg(feature = "test-scenes-entrypoint")]
                 if let Some(router) = app.router.as_mut() {
                     router.permissions_update(&app.permission_states);
                 }
@@ -1081,10 +1253,12 @@ pub extern "C" fn oxide_host_emit_touch(
     timestamp_ns: u64,
 ) {
     let callback = callback_value(&TOUCH_CB);
-    touch_log(&format!(
-        "rust ffi oxide_host_emit_touch entry id={id} phase={phase} x={x:.1} y={y:.1} callback={}",
-        callback.is_some()
-    ));
+    if touch_log_enabled() {
+        touch_log(&format!(
+            "rust ffi oxide_host_emit_touch entry id={id} phase={phase} x={x:.1} y={y:.1} callback={}",
+            callback.is_some()
+        ));
+    }
     if let Some(cb) = callback {
         cb(
             id,
@@ -1222,11 +1396,13 @@ pub extern "C" fn oxide_host_emit_ime_hidden() {
 // ===== Renderer + scene router integration =====
 
 extern "C" {
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_host_resource_read(
         name: *const ::libc::c_char,
         out_ptr: *mut *mut u8,
         out_len: *mut usize,
     ) -> ::libc::c_int;
+    #[cfg(feature = "test-scenes-entrypoint")]
     fn oxide_host_string_free(p: *mut u8);
 }
 
@@ -1273,6 +1449,257 @@ impl ui::elements::ImageUploader for MtlUploader {
     }
 }
 
+impl gfx_api::RuntimeImageUploader for MtlUploader
+{
+   fn create_a8(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   ) -> gfx_api::ImageHandle
+   {
+      unsafe { (*self.renderer).image_create_a8(w, h, data, row_bytes) }
+   }
+
+   fn try_create_rgba8(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   ) -> Option<gfx_api::ImageHandle>
+   {
+      let handle = unsafe { (*self.renderer).image_create_rgba8(w, h, data, row_bytes) };
+      (handle.0 != 0).then_some(handle)
+   }
+
+   fn try_create_rgba8_sampled(
+      &mut self,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+      sampling: gfx_api::ImageSampling,
+   ) -> Option<gfx_api::ImageHandle>
+   {
+      let handle = unsafe {
+         (*self.renderer).image_create_rgba8_sampled(w, h, data, row_bytes, sampling)
+      };
+      (handle.0 != 0).then_some(handle)
+   }
+
+   fn release_rgba8(&mut self, handle: gfx_api::ImageHandle)
+   {
+      unsafe { (*self.renderer).image_release(handle) }
+   }
+
+   fn append_a8(
+      &mut self,
+      handle: gfx_api::ImageHandle,
+      x: u32,
+      y: u32,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      unsafe { (*self.renderer).image_append_a8(handle, x, y, w, h, data, row_bytes) }
+   }
+
+   fn release_a8(&mut self, handle: gfx_api::ImageHandle)
+   {
+      unsafe { (*self.renderer).image_release(handle) }
+   }
+
+   fn update_a8(
+      &mut self,
+      handle: gfx_api::ImageHandle,
+      x: u32,
+      y: u32,
+      w: u32,
+      h: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      unsafe { (*self.renderer).image_update_a8(handle, x, y, w, h, data, row_bytes) }
+   }
+}
+
+struct LegacyDrawEncoder
+{
+   builder: ui::DrawListBuilder,
+   clip_active: bool,
+}
+
+impl LegacyDrawEncoder
+{
+   fn new() -> Self
+   {
+      Self { builder: ui::DrawListBuilder::new(), clip_active: false }
+   }
+
+   fn begin_frame(&mut self)
+   {
+      self.builder.clear();
+      self.clip_active = false;
+   }
+
+   fn finish_frame(&mut self)
+   {
+      if self.clip_active
+      {
+         self.builder.clip_pop();
+         self.clip_active = false;
+      }
+   }
+
+   fn draw_list(&self) -> &gfx_api::DrawList
+   {
+      self.builder.drawlist()
+   }
+}
+
+impl gfx_api::RenderEncoder for LegacyDrawEncoder
+{
+   fn set_viewport(&mut self, _viewport: gfx_api::RectF)
+   {
+   }
+
+   fn set_clip(&mut self, scissor: gfx_api::RectI)
+   {
+      if self.clip_active
+      {
+         self.builder.clip_pop();
+      }
+      self.builder.clip_push(scissor);
+      self.clip_active = true;
+   }
+
+   fn draw_solid(&mut self, vertices: &[gfx_api::Vertex], color: gfx_api::Color)
+   {
+      let Ok(offset) = u32::try_from(self.builder.drawlist().vertices.len()) else {
+         return;
+      };
+      let Ok(len) = u32::try_from(vertices.len()) else {
+         return;
+      };
+      if len < 3 || (len != 4 && len % 3 != 0)
+      {
+         return;
+      }
+      self.builder.drawlist_mut().vertices.extend_from_slice(vertices);
+      self.builder.solid(
+         gfx_api::VertexSpan { offset, len },
+         gfx_api::IndexSpan {
+            offset: self.builder.drawlist().indices.len() as u32,
+            len: 0,
+         },
+         color,
+      );
+   }
+
+   fn draw_image(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      dst: gfx_api::RectF,
+      src: gfx_api::RectF,
+   )
+   {
+      self.builder.image(image, dst, src, 1.0);
+   }
+
+   fn draw_image_mesh(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      vertices: &[gfx_api::Vertex],
+      indices: &[u16],
+      alpha: f32,
+   )
+   {
+      self.builder.image_mesh(image, vertices, indices, alpha);
+   }
+
+   fn draw_rrect(
+      &mut self,
+      rect: gfx_api::RectF,
+      radii: [f32; 4],
+      color: gfx_api::Color,
+   )
+   {
+      self.builder.rrect(rect, radii, color);
+   }
+
+   fn draw_nine_slice(
+      &mut self,
+      image: gfx_api::ImageHandle,
+      rect: gfx_api::RectF,
+      slice: gfx_api::Insets,
+      alpha: f32,
+   )
+   {
+      self.builder.nine_slice(image, rect, slice, alpha);
+   }
+
+   fn draw_backdrop(
+      &mut self,
+      rect: gfx_api::RectF,
+      sigma: f32,
+      tint: gfx_api::Color,
+      alpha: f32,
+   )
+   {
+      self.builder.backdrop(rect, sigma, tint, alpha);
+   }
+
+   fn draw_visual_effect(&mut self, rect: gfx_api::RectF, effect: gfx_api::VisualEffect)
+   {
+      self.builder.visual_effect(rect, effect);
+   }
+
+   fn draw_camera_bg(
+      &mut self,
+      rect: gfx_api::RectF,
+      tint: gfx_api::Color,
+      alpha: f32,
+      grayscale: bool,
+      blur: bool,
+      sigma: f32,
+   )
+   {
+      self.builder.camera_bg(rect, tint, alpha, grayscale, blur, sigma);
+   }
+
+   fn draw_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32)
+   {
+      self.builder.spinner(center, atom, alpha);
+   }
+
+   fn draw_glyph_run(&mut self, run: &gfx_api::GlyphRun)
+   {
+      let vertex_end = run.vb.offset.saturating_add(run.vb.len) as usize;
+      let index_end = run.ib.offset.saturating_add(run.ib.len) as usize;
+      if vertex_end <= self.builder.drawlist().vertices.len()
+         && index_end <= self.builder.drawlist().indices.len()
+      {
+         self.builder.glyph_run(*run);
+      }
+   }
+
+   fn draw_glyph_run_resolved(
+      &mut self,
+      run: &gfx_api::GlyphRun,
+      vertices: &[gfx_api::Vertex],
+      indices: &[u16],
+   )
+   {
+      self.builder.glyph_run_resolved(*run, vertices, indices);
+   }
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 #[derive(Clone, Copy, Default)]
 struct StatsSnapshot {
     fps: f32,
@@ -1374,61 +1801,127 @@ struct StatsSnapshot {
     renderer_preview_submission_frame_age_ms: f32,
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Default)]
-struct WindowMetrics {
-    width_dp: f32,
-    height_dp: f32,
-    scale: f32,
-    safe_left: f32,
-    safe_top: f32,
-    safe_right: f32,
-    safe_bottom: f32,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InjectedFrameSource
+{
+   App,
+   Legacy,
+}
+
+struct InjectedApp
+{
+   app: Box<dyn App>,
+   update: UpdateContext,
+   legacy: LegacyDrawEncoder,
+   demand: FrameDemand,
+   frame_source: InjectedFrameSource,
+   frame_id: u64,
+   last_target_timestamp_ns: u64,
+}
+
+impl InjectedApp
+{
+   fn new(app: Box<dyn App>, update: UpdateContext) -> Self
+   {
+      Self {
+         app,
+         update,
+         legacy: LegacyDrawEncoder::new(),
+         demand: FrameDemand::Idle,
+         frame_source: InjectedFrameSource::Legacy,
+         frame_id: 0,
+         last_target_timestamp_ns: 0,
+      }
+   }
+
+   fn prepared_frame(&self) -> Option<PreparedFrame<'_>>
+   {
+      match self.frame_source
+      {
+         InjectedFrameSource::App => self.app.prepared_frame(),
+         InjectedFrameSource::Legacy => Some(PreparedFrame {
+            draw_list: self.legacy.draw_list(),
+            damage: &[],
+         }),
+      }
+   }
 }
 
 struct AppState {
     renderer: Option<Box<metal::MetalRenderer>>,
+    injected: Option<InjectedApp>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     router: Option<test_scenes::Router<MtlUploader>>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     builder: ui::DrawListBuilder,
+    #[cfg(feature = "test-scenes-entrypoint")]
     coalesce_items: Vec<gfx_api::DrawCmd>,
     pending_damage_rects: Vec<gfx_api::RectI>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     pending_frame_stats: StatsSnapshot,
+    #[cfg(feature = "test-scenes-entrypoint")]
     pending_frame_w: u32,
+    #[cfg(feature = "test-scenes-entrypoint")]
     pending_frame_h: u32,
+    #[cfg(feature = "test-scenes-entrypoint")]
     pending_frame_scale: f32,
     prepared_frame: bool,
+    prepared_surface: Option<PreparedSurface>,
+    prepared_retry_generation: Option<u64>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     benchmark_scene_index: u32,
+    #[cfg(feature = "test-scenes-entrypoint")]
     last_ms: u64,
     inited: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     benchmark_mode: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     last_stats: StatsSnapshot,
-    window: WindowMetrics,
+    #[cfg(feature = "test-scenes-entrypoint")]
     space_down: bool,
-    reduce_motion_on: bool,
-    reduce_motion_dirty: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     touch: PrimaryTouchTracker,
+    #[cfg(feature = "test-scenes-entrypoint")]
     memory_warnings: u32,
+    #[cfg(feature = "test-scenes-entrypoint")]
     overlay_visible: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     overlay_dirty: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     snapshot_status: String,
+    #[cfg(feature = "test-scenes-entrypoint")]
     camera_running: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     camera_render_mode: metal::CameraRenderMode,
+    #[cfg(feature = "test-scenes-entrypoint")]
     camera_texture_source: metal::CameraTextureSource,
+    #[cfg(feature = "test-scenes-entrypoint")]
     permissions: Option<Arc<PermissionManager>>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     permission_subs: Vec<PermissionSubscription>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     permission_states: Vec<PermissionState>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     sensors: Option<Arc<SensorBridge>>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     networking: Option<Arc<ReachabilityManager>>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     network_metrics: Option<oxide_networking::QuicSessionMetrics>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     telemetry: Option<Arc<TelemetryHub>>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     telemetry_ops: Option<Arc<TelemetryOperations>>,
-    #[cfg(target_os = "ios")]
+    #[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
     sensor_runtime: Option<SensorRuntime>,
-    #[cfg(target_os = "ios")]
+    #[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
     network_runtime: Option<NetworkRuntime>,
+    #[cfg(feature = "test-scenes-entrypoint")]
     frame_dirty: bool,
+    #[cfg(feature = "test-scenes-entrypoint")]
     settle_frames_remaining: u8,
+    #[cfg(feature = "test-scenes-entrypoint")]
     idle_skipped_frames: u64,
+    #[cfg(feature = "test-scenes-entrypoint")]
     submitted_frames: u64,
     pending_wake_generation: u64,
     presented_wake_generation: u64,
@@ -1438,47 +1931,79 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             renderer: None,
+            injected: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             router: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             builder: ui::DrawListBuilder::new(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             coalesce_items: Vec::new(),
             pending_damage_rects: Vec::new(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             pending_frame_stats: StatsSnapshot::default(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             pending_frame_w: 0,
+            #[cfg(feature = "test-scenes-entrypoint")]
             pending_frame_h: 0,
+            #[cfg(feature = "test-scenes-entrypoint")]
             pending_frame_scale: 1.0,
             prepared_frame: false,
+            prepared_surface: None,
+            prepared_retry_generation: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             benchmark_scene_index: benchmark_camera_scene_index(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             last_ms: 0,
             inited: false,
+            #[cfg(feature = "test-scenes-entrypoint")]
             benchmark_mode: false,
+            #[cfg(feature = "test-scenes-entrypoint")]
             last_stats: StatsSnapshot::default(),
-            window: WindowMetrics::default(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             space_down: false,
-            reduce_motion_on: false,
-            reduce_motion_dirty: false,
+            #[cfg(feature = "test-scenes-entrypoint")]
             touch: PrimaryTouchTracker::default(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             memory_warnings: 0,
+            #[cfg(feature = "test-scenes-entrypoint")]
             overlay_visible: true,
+            #[cfg(feature = "test-scenes-entrypoint")]
             overlay_dirty: false,
+            #[cfg(feature = "test-scenes-entrypoint")]
             snapshot_status: String::new(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             camera_running: false,
+            #[cfg(feature = "test-scenes-entrypoint")]
             camera_render_mode: metal::CameraRenderMode::Nv12Optimized,
+            #[cfg(feature = "test-scenes-entrypoint")]
             camera_texture_source: metal::CameraTextureSource::Live,
+            #[cfg(feature = "test-scenes-entrypoint")]
             permissions: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             permission_subs: Vec::new(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             permission_states: Vec::new(),
+            #[cfg(feature = "test-scenes-entrypoint")]
             sensors: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             networking: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             network_metrics: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             telemetry: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             telemetry_ops: None,
-            #[cfg(target_os = "ios")]
+            #[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
             sensor_runtime: None,
-            #[cfg(target_os = "ios")]
+            #[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
             network_runtime: None,
+            #[cfg(feature = "test-scenes-entrypoint")]
             frame_dirty: true,
+            #[cfg(feature = "test-scenes-entrypoint")]
             settle_frames_remaining: IDLE_SETTLE_FRAMES,
+            #[cfg(feature = "test-scenes-entrypoint")]
             idle_skipped_frames: 0,
+            #[cfg(feature = "test-scenes-entrypoint")]
             submitted_frames: 0,
             pending_wake_generation: 0,
             presented_wake_generation: 0,
@@ -1487,9 +2012,17 @@ impl Default for AppState {
 }
 
 static APP_STATE: std::sync::OnceLock<std::sync::Mutex<AppState>> = std::sync::OnceLock::new();
+static INJECTED_APP_SLOT: std::sync::OnceLock<std::sync::Mutex<Option<Box<dyn App>>>> =
+   std::sync::OnceLock::new();
+static POSTED_TASKS: std::sync::OnceLock<
+   std::sync::Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+> = std::sync::OnceLock::new();
+static INJECTED_APP_INSTALLED: AtomicBool = AtomicBool::new(false);
 static FRAME_WAKE_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "test-scenes-entrypoint")]
 static PERF_REPORT_JSON: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
     std::sync::OnceLock::new();
+#[cfg(feature = "test-scenes-entrypoint")]
 static PERF_REPORT_ERROR: std::sync::OnceLock<std::sync::Mutex<Option<Vec<u8>>>> =
     std::sync::OnceLock::new();
 
@@ -1497,10 +2030,52 @@ fn app_state() -> &'static std::sync::Mutex<AppState> {
     APP_STATE.get_or_init(|| std::sync::Mutex::new(AppState::default()))
 }
 
+fn injected_app_slot() -> &'static std::sync::Mutex<Option<Box<dyn App>>>
+{
+   INJECTED_APP_SLOT.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn posted_tasks() -> &'static std::sync::Mutex<VecDeque<Box<dyn FnOnce() + Send>>>
+{
+   POSTED_TASKS.get_or_init(|| std::sync::Mutex::new(VecDeque::new()))
+}
+
+fn request_frame_wake() -> u64
+{
+   let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+   #[cfg(target_os = "ios")]
+   unsafe
+   {
+      oxide_host_request_display_link_wake(generation);
+   }
+   generation
+}
+
+fn enqueue_posted_task(task: Box<dyn FnOnce() + Send>)
+{
+   lock_or_recover(posted_tasks()).push_back(task);
+   request_frame_wake();
+}
+
+fn drain_posted_tasks()
+{
+   let task_count = lock_or_recover(posted_tasks()).len();
+   for _ in 0..task_count
+   {
+      let task = lock_or_recover(posted_tasks()).pop_front();
+      let Some(task) = task else {
+         break;
+      };
+      task();
+   }
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 fn perf_report_json() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
     PERF_REPORT_JSON.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn perf_report_error() -> &'static std::sync::Mutex<Option<Vec<u8>>> {
     PERF_REPORT_ERROR.get_or_init(|| std::sync::Mutex::new(None))
 }
@@ -1509,24 +2084,72 @@ fn with_app_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     app_state().lock().ok().map(|mut guard| f(&mut guard))
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 const IDLE_SETTLE_FRAMES: u8 = 2;
 
-fn request_frame_wake() {
-    let generation = FRAME_WAKE_GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
-    #[cfg(not(target_os = "ios"))]
-    let _ = generation;
-    #[cfg(target_os = "ios")]
-    unsafe {
-        oxide_host_request_display_link_wake(generation);
-    }
-}
-
+#[cfg(feature = "test-scenes-entrypoint")]
 fn mark_frame_dirty(app: &mut AppState) {
     app.frame_dirty = true;
     app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
     request_frame_wake();
 }
 
+#[cfg(not(feature = "test-scenes-entrypoint"))]
+fn mark_frame_dirty(_app: &mut AppState)
+{
+   request_frame_wake();
+}
+
+fn injected_frame_should_render(
+   presented_wake_generation: u64,
+   demand: FrameDemand,
+) -> bool
+{
+   FRAME_WAKE_GENERATION.load(Ordering::Acquire) != presented_wake_generation
+      || demand == FrameDemand::NextVsync
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparedSurface
+{
+   width_px: u32,
+   height_px: u32,
+   scale_bits: u32,
+}
+
+impl PreparedSurface
+{
+   fn new(width_px: u32, height_px: u32, scale: f32) -> Self
+   {
+      Self { width_px, height_px, scale_bits: scale.to_bits() }
+   }
+}
+
+fn reuse_injected_prepared_frame(app: &mut AppState, surface: PreparedSurface, wake_generation: u64) -> bool
+{
+   if !app.prepared_frame
+   {
+      return false;
+   }
+   if app.prepared_surface == Some(surface)
+      && app.prepared_retry_generation == Some(wake_generation)
+   {
+      app.pending_wake_generation = wake_generation;
+      app.prepared_retry_generation = None;
+      return true;
+   }
+   app.prepared_frame = false;
+   app.prepared_surface = None;
+   app.prepared_retry_generation = None;
+   false
+}
+
+fn request_injected_frame_retry(app: &mut AppState)
+{
+   app.prepared_retry_generation = Some(request_frame_wake());
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 fn process_telemetry_commands_locked(app: &mut AppState) {
     let Some(ops) = app.telemetry_ops.as_ref() else {
         return;
@@ -1574,6 +2197,7 @@ fn process_telemetry_commands_locked(app: &mut AppState) {
                 if let Some(manager) = app.permissions.as_ref() {
                     let snapshot = manager.snapshot();
                     app.permission_states = snapshot.clone();
+                    #[cfg(feature = "test-scenes-entrypoint")]
                     if let Some(router) = app.router.as_mut() {
                         router.permissions_update(&app.permission_states);
                     }
@@ -1589,6 +2213,7 @@ fn process_telemetry_commands_locked(app: &mut AppState) {
                 }
             }
             TelemetryAction::TrimCaches => {
+                #[cfg(feature = "test-scenes-entrypoint")]
                 if let Some(router) = app.router.as_mut() {
                     router.trim_memory();
                 }
@@ -1604,6 +2229,12 @@ fn process_telemetry_commands_locked(app: &mut AppState) {
     }
 }
 
+#[cfg(not(feature = "test-scenes-entrypoint"))]
+fn process_telemetry_commands_locked(_app: &mut AppState)
+{
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 fn log_telemetry_metrics(app: &AppState, reason: TelemetryCommandReason) {
     if let Some(telemetry) = app.telemetry.as_ref() {
         let snapshot = telemetry.snapshot();
@@ -1629,6 +2260,7 @@ fn log_telemetry_metrics(app: &AppState, reason: TelemetryCommandReason) {
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn resource_read(name: &str) -> Option<Vec<u8>> {
     let c_name = std::ffi::CString::new(name).ok()?;
     let mut ptr: *mut u8 = core::ptr::null_mut();
@@ -1642,9 +2274,11 @@ fn resource_read(name: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 const FALLBACK_UI_FONT_BYTES: &[u8] =
     include_bytes!("../../../../crates/ui-core/assets/Asap-Regular.ttf");
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn load_default_assets(
     renderer: *mut metal::MetalRenderer,
     router: &mut test_scenes::Router<MtlUploader>,
@@ -1677,6 +2311,7 @@ fn load_default_assets(
     router.nine_slice_set_image(tex);
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn apply_initial_scene_from_env(router: &mut test_scenes::Router<MtlUploader>) {
     let requested_env = std::env::var("OXIDE_INITIAL_SCENE").ok();
     let requested = if let Some(requested) = requested_env.as_deref() {
@@ -1700,6 +2335,7 @@ fn apply_initial_scene_from_env(router: &mut test_scenes::Router<MtlUploader>) {
     ios_log(&format!("oxide.host-ios: unknown OXIDE_INITIAL_SCENE='{requested}'"));
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn initial_env_bool(name: &str) -> Option<bool> {
     std::env::var(name).ok().and_then(|value| {
         let normalized = value.trim();
@@ -1719,7 +2355,7 @@ fn initial_env_bool(name: &str) -> Option<bool> {
     })
 }
 
-#[cfg(target_os = "ios")]
+#[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
 fn bluetooth_runtime_enabled() -> bool {
     if initial_env_bool("OXIDE_ENABLE_BLUETOOTH").unwrap_or(false) {
         return true;
@@ -1730,15 +2366,97 @@ fn bluetooth_runtime_enabled() -> bool {
     false
 }
 
+#[cfg(target_os = "ios")]
+fn init_injected_app(app_state: &mut AppState, w: u32, h: u32, scale: f32) -> ::libc::c_int
+{
+   let renderer_cfg = metal::MetalRendererConfig {
+      wants_hdr: false,
+      sample_count: 1,
+      camera_render_mode: metal::CameraRenderMode::Nv12Optimized,
+      camera_texture_source: metal::CameraTextureSource::Live,
+      direct_preview_only: false,
+      ..metal::MetalRendererConfig::visible_host()
+   };
+   let mut renderer = match metal::MetalRenderer::new_with_config(renderer_cfg)
+   {
+      Ok(renderer) => Box::new(renderer),
+      Err(err) =>
+      {
+         eprintln!("[Oxide] injected MetalRenderer initialization failed: {err}");
+         return -1;
+      }
+   };
+   if renderer.resize(w, h, scale).is_err()
+   {
+      return -2;
+   }
+
+   let Some(mut app) = lock_or_recover(injected_app_slot()).take() else {
+      return -3;
+   };
+   let platform: Arc<dyn oxide_platform_api::Platform + Send + Sync> =
+      oxide_platform_ios::install_current_platform();
+   let mut init = oxide_platform_api::InitContext {
+      fonts: oxide_platform_api::FontLoader::default(),
+      device: platform.device_caps(),
+      platform: Box::new(oxide_platform_api::SharedPlatform::new(Arc::clone(&platform))),
+   };
+   let update = UpdateContext {
+      post_task: Box::new(enqueue_posted_task),
+      timers: oxide_platform_api::Timers::default(),
+      haptics: Box::new(oxide_platform_ios::IosHaptics),
+   };
+   app.init(&mut init);
+
+   app_state.renderer = Some(renderer);
+   app_state.injected = Some(InjectedApp::new(app, update));
+   #[cfg(feature = "test-scenes-entrypoint")]
+   {
+      app_state.router = None;
+      app_state.last_stats = StatsSnapshot::default();
+   }
+   app_state.prepared_frame = false;
+   app_state.prepared_surface = None;
+   app_state.prepared_retry_generation = None;
+   app_state.pending_wake_generation = 0;
+   app_state.presented_wake_generation = 0;
+   app_state.inited = true;
+
+   oxide_host_set_window_resized_callback(Some(window_resized_cb));
+   oxide_host_set_touch_callback(Some(touch_cb));
+   oxide_host_set_pointer_callback(Some(pointer_cb));
+   oxide_host_set_key_callback(Some(key_cb));
+   oxide_host_set_text_commit_callback(Some(text_commit_cb));
+   oxide_host_set_text_composition_callback(Some(text_composition_cb));
+   oxide_host_set_text_selection_callback(Some(text_selection_cb));
+   oxide_host_set_ime_callbacks(Some(ime_shown_cb), Some(ime_hidden_cb));
+   request_frame_wake();
+   0
+}
+
+#[cfg(not(target_os = "ios"))]
+fn init_injected_app(_app_state: &mut AppState, _w: u32, _h: u32, _scale: f32) -> ::libc::c_int
+{
+   -1
+}
+
 #[no_mangle]
 pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
-    #[cfg(target_os = "ios")]
+    #[cfg(all(target_os = "ios", feature = "test-scenes-entrypoint"))]
     let mut perm_manager_for_subs: Option<Arc<PermissionManager>> = None;
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
     if app.inited {
         return 0;
     }
+    if INJECTED_APP_INSTALLED.load(Ordering::Acquire) {
+        return init_injected_app(&mut app, w, h, scale);
+    }
+    #[cfg(not(feature = "test-scenes-entrypoint"))]
+    return -4;
+    #[cfg(feature = "test-scenes-entrypoint")]
+    {
     app.sensors = None;
+    app.injected = None;
     app.networking = None;
     app.network_metrics = None;
     app.telemetry = None;
@@ -1869,15 +2587,6 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     }
     app.last_ms = timing::now_ms();
     app.last_stats = StatsSnapshot::default();
-    app.window = WindowMetrics {
-        width_dp: (w as f32) / scale.max(1.0),
-        height_dp: (h as f32) / scale.max(1.0),
-        scale,
-        safe_left: 0.0,
-        safe_top: 0.0,
-        safe_right: 0.0,
-        safe_bottom: 0.0,
-    };
     app.touch = PrimaryTouchTracker::default();
     app.space_down = false;
     app.memory_warnings = 0;
@@ -1894,15 +2603,6 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
     }
     app.overlay_visible = desired_overlay;
     app.overlay_dirty = false;
-
-    let desired_reduce = if app.reduce_motion_dirty { app.reduce_motion_on } else { false };
-    if desired_reduce {
-        if let Some(router) = router.as_mut() {
-            router.set_reduce_motion(true);
-        }
-    }
-    app.reduce_motion_on = desired_reduce;
-    app.reduce_motion_dirty = false;
     app.snapshot_status.clear();
     app.camera_running = false;
     app.router = router;
@@ -1932,6 +2632,7 @@ pub extern "C" fn oxide_host_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_i
         install_permission_subscriptions(manager);
     }
     0
+    }
 }
 
 #[no_mangle]
@@ -1941,34 +2642,62 @@ pub extern "C" fn oxide_host_app_frame(w: u32, h: u32, scale: f32) -> ::libc::c_
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_should_render() -> u8 {
-    let mut app = app_state().lock().expect("app_state mutex");
+    #[cfg(feature = "test-scenes-entrypoint")]
+    let mut app = lock_or_recover(app_state());
+    #[cfg(not(feature = "test-scenes-entrypoint"))]
+    let app = lock_or_recover(app_state());
     if !app.inited {
         return 1;
     }
-    if app.benchmark_mode || benchmark_camera_fast_path_active(&app) || app.camera_running {
-        return 1;
+    if let Some(injected) = app.injected.as_ref() {
+        if injected_frame_should_render(app.presented_wake_generation, injected.demand) {
+            return 1;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
+        {
+            app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
+        }
+        return 0;
     }
-    let router_wants_frame =
-        app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
-    let wake_pending = FRAME_WAKE_GENERATION.load(Ordering::Acquire)
-        != app.presented_wake_generation;
-    if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame || wake_pending {
-        return 1;
+    #[cfg(feature = "test-scenes-entrypoint")]
+    {
+        if app.benchmark_mode || benchmark_camera_fast_path_active(&app) || app.camera_running {
+            return 1;
+        }
+        let router_wants_frame =
+            app.router.as_ref().map_or(false, test_scenes::Router::wants_next_frame);
+        let wake_pending = FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+            != app.presented_wake_generation;
+        if app.frame_dirty || app.settle_frames_remaining > 0 || router_wants_frame || wake_pending {
+            return 1;
+        }
+        app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
     }
-    app.idle_skipped_frames = app.idle_skipped_frames.saturating_add(1);
     0
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_app_wake_generation() -> u64 {
-    FRAME_WAKE_GENERATION.load(Ordering::Acquire)
+/// Returns the latest production frame-wake generation.
+pub extern "C" fn oxide_host_app_wake_generation() -> u64
+{
+   FRAME_WAKE_GENERATION.load(Ordering::Acquire)
 }
 
 #[no_mangle]
-pub extern "C" fn oxide_host_app_request_redraw() {
-    let _ = with_app_mut(mark_frame_dirty);
+/// Requests a production frame from a platform service or external host caller.
+pub extern "C" fn oxide_host_request_redraw()
+{
+   request_frame_wake();
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
+#[no_mangle]
+pub extern "C" fn oxide_host_app_request_redraw()
+{
+   oxide_host_request_redraw();
+}
+
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_camera_preview_plan(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     let app = app_state().lock().expect("app_state mutex");
@@ -1984,6 +2713,7 @@ pub extern "C" fn oxide_host_camera_preview_plan(w: u32, h: u32, scale: f32) -> 
     camera_preview_plan(renderer, app.camera_running, w, h, scale)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_camera_preview_plan_reason(
     w: u32,
@@ -2019,10 +2749,107 @@ pub extern "C" fn oxide_host_app_frame_with_drawable(
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app_state mutex");
+    oxide_host_app_prepare_frame_timed(w, h, scale, 0, 0)
+}
+
+#[no_mangle]
+/// Advances the installed app and prepares one frame using display-link timing.
+///
+/// The native shell calls this before acquiring a drawable. A zero timestamp
+/// asks the host to use its monotonic fallback clock.
+pub extern "C" fn oxide_host_app_prepare_frame_timed(
+    w: u32,
+    h: u32,
+    scale: f32,
+    timestamp_ns: u64,
+    target_timestamp_ns: u64,
+) -> ::libc::c_int {
+    if INJECTED_APP_INSTALLED.load(Ordering::Acquire) {
+        drain_posted_tasks();
+    }
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
     }
+    if app.injected.is_some() {
+        let wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
+        let prepared_surface = PreparedSurface::new(w, h, scale);
+        if reuse_injected_prepared_frame(&mut app, prepared_surface, wake_generation) {
+            return 0;
+        }
+        app.pending_wake_generation = wake_generation;
+        let renderer_ptr = match app.renderer.as_mut().map(|renderer| renderer.as_mut()) {
+            Some(renderer) => {
+                if renderer.resize(w, h, scale).is_err() {
+                    return -2;
+                }
+                renderer as *mut metal::MetalRenderer
+            }
+            None => return -2,
+        };
+        let Some(injected) = app.injected.as_mut() else {
+            return -3;
+        };
+        injected.frame_id = injected.frame_id.wrapping_add(1);
+        let fallback_timestamp_ns = timing::now_ms().saturating_mul(1_000_000);
+        let timestamp_ns = if timestamp_ns == 0 { fallback_timestamp_ns } else { timestamp_ns };
+        let target_timestamp_ns = if target_timestamp_ns == 0 {
+            timestamp_ns
+        } else {
+            target_timestamp_ns
+        };
+        let dt_ns = if injected.last_target_timestamp_ns == 0 {
+            0
+        } else {
+            target_timestamp_ns.saturating_sub(injected.last_target_timestamp_ns)
+        };
+        injected.last_target_timestamp_ns = target_timestamp_ns;
+        let frame_context = FrameContext {
+            frame_id: injected.frame_id,
+            timestamp_ns,
+            target_timestamp_ns,
+            dt_ns,
+            viewport: gfx_api::RectF::new(
+                0.0,
+                0.0,
+                (w as f32) / scale.max(1.0),
+                (h as f32) / scale.max(1.0),
+            ),
+            scale,
+        };
+        let mut uploader = MtlUploader { renderer: renderer_ptr };
+        injected.demand = injected.app.prepare_frame(frame_context, &mut uploader);
+        if injected.app.prepared_frame().is_some() {
+            injected.frame_source = InjectedFrameSource::App;
+        } else {
+            injected.frame_source = InjectedFrameSource::Legacy;
+            let injected_app = &mut injected.app;
+            let encoder = &mut injected.legacy;
+            encoder.begin_frame();
+            {
+                let mut render_context = gfx_api::RenderContext {
+                    frame_id: injected.frame_id,
+                    encoder,
+                };
+                injected_app.draw(&mut render_context);
+            }
+            encoder.finish_frame();
+            injected_app.upload_runtime_images(&mut uploader);
+        }
+        let mut damage_rects = core::mem::take(&mut app.pending_damage_rects);
+        damage_rects.clear();
+        if let Some(frame) = app.injected.as_ref().and_then(InjectedApp::prepared_frame) {
+            damage_rects.extend_from_slice(frame.damage);
+        }
+        app.pending_damage_rects = damage_rects;
+        app.prepared_frame = true;
+        app.prepared_surface = Some(prepared_surface);
+        return 0;
+    }
+    #[cfg(not(feature = "test-scenes-entrypoint"))]
+    return -8;
+    #[cfg(feature = "test-scenes-entrypoint")]
+    {
     app.pending_wake_generation = FRAME_WAKE_GENERATION.load(Ordering::Acquire);
     if benchmark_camera_fast_path_active(&app) {
         app.pending_frame_w = w;
@@ -2106,19 +2933,108 @@ pub extern "C" fn oxide_host_app_prepare_frame(w: u32, h: u32, scale: f32) -> ::
     app.pending_frame_scale = scale;
     app.prepared_frame = true;
     0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
     drawable_ptr: *mut ::libc::c_void,
 ) -> ::libc::c_int {
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
     if !app.inited {
         return -1;
     }
     if !app.prepared_frame {
         return -6;
     }
+    if app.injected.is_some() {
+        let damage_rects = core::mem::take(&mut app.pending_damage_rects);
+        let damage = gfx_api::Damage { rects: damage_rects };
+        let render_result = {
+            let AppState { renderer, injected, .. } = &mut *app;
+            let Some(renderer) = renderer.as_mut().map(|renderer| renderer.as_mut()) else {
+                app.prepared_frame = false;
+                app.pending_damage_rects = damage.rects;
+                return -2;
+            };
+            let Some(frame) = injected.as_ref().and_then(InjectedApp::prepared_frame) else {
+                app.prepared_frame = false;
+                app.pending_damage_rects = damage.rects;
+                return -3;
+            };
+            if !drawable_ptr.is_null() {
+                let prepared = unsafe { renderer.prepare_present_drawable(drawable_ptr.cast()) };
+                if prepared.is_err() {
+                    Err(-5)
+                } else {
+                    let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage));
+                    if renderer.last_stats().frame_backpressure_skipped != 0 {
+                        let _ = renderer.cancel_present_drawable();
+                        Err(-9)
+                    } else {
+                        renderer.encode_pass(frame.draw_list);
+                        if renderer.submit(token).is_err() {
+                            let _ = renderer.cancel_present_drawable();
+                            Err(-4)
+                        } else {
+                            Ok(renderer.last_stats())
+                        }
+                    }
+                }
+            } else {
+                let token = renderer.begin_frame(&gfx_api::FrameTarget, Some(&damage));
+                if renderer.last_stats().frame_backpressure_skipped != 0 {
+                    Err(-9)
+                } else {
+                    renderer.encode_pass(frame.draw_list);
+                    if renderer.submit(token).is_err() {
+                        Err(-4)
+                    } else {
+                        Ok(renderer.last_stats())
+                    }
+                }
+            }
+        };
+        app.pending_damage_rects = damage.rects;
+        match render_result {
+            Ok(stats) => {
+                app.prepared_frame = false;
+                app.prepared_surface = None;
+                app.prepared_retry_generation = None;
+                app.pending_damage_rects.clear();
+                let frame_id = app.injected.as_ref().map_or(0, |injected| injected.frame_id);
+                let renderer_stats = RendererStats {
+                    frame_id,
+                    encode_ms: stats.encode_ms as f32,
+                    damage_pct: stats.damage_pct,
+                    damage_rects: stats.damage_rects,
+                    draws: stats.draws,
+                    sample_count: 1,
+                    hdr: false,
+                };
+                #[cfg(feature = "test-scenes-entrypoint")]
+                {
+                    app.last_stats = StatsSnapshot {
+                        damage_pct: stats.damage_pct,
+                        damage_rects: stats.damage_rects,
+                        ..StatsSnapshot::default()
+                    };
+                    app.submitted_frames = app.submitted_frames.saturating_add(1);
+                }
+                app.presented_wake_generation = app.pending_wake_generation;
+                let _ = observe_injected_renderer_stats(&mut app, renderer_stats);
+                return 0;
+            }
+            Err(code) => {
+                request_injected_frame_retry(&mut app);
+                return code;
+            }
+        }
+    }
+    #[cfg(not(feature = "test-scenes-entrypoint"))]
+    return -8;
+    #[cfg(feature = "test-scenes-entrypoint")]
+    {
     if benchmark_camera_fast_path_active(&app) {
         let Some(mut renderer) = app.renderer.take() else {
             app.prepared_frame = false;
@@ -2281,11 +3197,16 @@ pub extern "C" fn oxide_host_app_submit_prepared_frame_with_drawable(
     app.frame_dirty = false;
     ios_log("app_frame: ok");
     0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn oxide_host_app_cancel_prepared_frame() {
-    let mut app = app_state().lock().expect("app_state mutex");
+    let mut app = lock_or_recover(app_state());
+    if app.injected.is_some() {
+        request_injected_frame_retry(&mut app);
+        return;
+    }
     app.prepared_frame = false;
     app.pending_damage_rects.clear();
 }
@@ -2306,6 +3227,16 @@ fn oxide_host_app_frame_inner(
 #[no_mangle]
 pub extern "C" fn oxide_host_app_did_enter_background() {
     with_app_mut(|app| {
+        if let Some(injected) = app.injected.as_mut() {
+            injected.last_target_timestamp_ns = 0;
+        }
+        if dispatch_injected_event_without_wake(
+            app,
+            AppEvent::Lifecycle(Lifecycle::DidEnterBackground),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_background(timing::now_ms());
         }
@@ -2316,7 +3247,15 @@ pub extern "C" fn oxide_host_app_did_enter_background() {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_will_enter_foreground() {
     with_app_mut(|app| {
+        if let Some(injected) = app.injected.as_mut() {
+            injected.last_target_timestamp_ns = 0;
+        }
+        if dispatch_injected_event(app, AppEvent::Lifecycle(Lifecycle::WillEnterForeground)) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         mark_frame_dirty(app);
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_foreground(timing::now_ms());
         }
@@ -2327,6 +3266,13 @@ pub extern "C" fn oxide_host_app_will_enter_foreground() {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_will_terminate() {
     with_app_mut(|app| {
+        if dispatch_injected_event_without_wake(
+            app,
+            AppEvent::Lifecycle(Lifecycle::WillTerminate),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_shutdown(timing::now_ms());
         }
@@ -2337,17 +3283,22 @@ pub extern "C" fn oxide_host_app_will_terminate() {
 #[no_mangle]
 pub extern "C" fn oxide_host_on_memory_warning() {
     with_app_mut(|app| {
-        app.memory_warnings = app.memory_warnings.saturating_add(1);
         if let Some(renderer) = app.renderer.as_mut() {
             renderer.purge_effect_targets();
             renderer.purge_layer_cache_for_memory_warning();
             renderer.purge_id_mask_field_cache();
             renderer.purge_prepared_chunks();
         }
+        #[cfg(feature = "test-scenes-entrypoint")]
+        {
+            app.memory_warnings = app.memory_warnings.saturating_add(1);
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.trim_memory();
         }
         mark_frame_dirty(app);
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(ops) = app.telemetry_ops.as_ref() {
             ops.handle_memory_pressure(timing::now_ms(), MemoryPressureLevel::Critical);
         }
@@ -2360,6 +3311,7 @@ pub extern "C" fn oxide_host_on_memory_warning() {
 
 // ===== Camera options control (for UITests) =====
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_camera_options(
     blur: u8,
@@ -2383,6 +3335,7 @@ pub extern "C" fn oxide_host_set_camera_options(
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_camera_render_mode(mode: i32) -> ::libc::c_int {
     let mode = match mode {
@@ -2402,6 +3355,7 @@ pub extern "C" fn oxide_host_set_camera_render_mode(mode: i32) -> ::libc::c_int 
     apply_camera_render_mode(&mut app, mode, preview_pixel_format_rc)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn apply_camera_render_mode(
     app: &mut AppState,
     mode: metal::CameraRenderMode,
@@ -2418,6 +3372,7 @@ fn apply_camera_render_mode(
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_camera_texture_source(source: i32) -> ::libc::c_int {
     let source = match source {
@@ -2433,11 +3388,13 @@ pub extern "C" fn oxide_host_set_camera_texture_source(source: i32) -> ::libc::c
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_camera_running(on: u8) -> ::libc::c_int {
     oxide_host_set_camera_running_mode(on, 0)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_reset_camera_perf_counters() -> ::libc::c_int {
     #[cfg(target_os = "ios")]
@@ -2450,6 +3407,7 @@ pub extern "C" fn oxide_host_reset_camera_perf_counters() -> ::libc::c_int {
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_camera_running_mode(on: u8, _preview_only: u8) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2490,6 +3448,7 @@ pub extern "C" fn oxide_host_set_camera_running_mode(on: u8, _preview_only: u8) 
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_anim_play(play: u8) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2502,6 +3461,7 @@ pub extern "C" fn oxide_host_set_anim_play(play: u8) -> ::libc::c_int {
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_anim_progress(progress: f32) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2514,6 +3474,7 @@ pub extern "C" fn oxide_host_set_anim_progress(progress: f32) -> ::libc::c_int {
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_damage_options(
     enabled: u8,
@@ -2534,6 +3495,7 @@ pub extern "C" fn oxide_host_set_damage_options(
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_nine_slice(slice_px: f32, alpha: f32) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2546,6 +3508,7 @@ pub extern "C" fn oxide_host_set_nine_slice(slice_px: f32, alpha: f32) -> ::libc
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_sdf_font(font_px: f32) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2558,6 +3521,7 @@ pub extern "C" fn oxide_host_set_sdf_font(font_px: f32) -> ::libc::c_int {
     0
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_take_snapshot() -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2621,6 +3585,7 @@ pub extern "C" fn oxide_host_take_snapshot() -> ::libc::c_int {
     rc
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_get_snapshot_status(
     out_ptr: *mut ::libc::c_char,
@@ -2647,6 +3612,7 @@ pub extern "C" fn oxide_host_get_snapshot_status(
     bytes.len() as u32
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_input_log(ptr: *const u8, len: usize) {
     if ptr.is_null() || len == 0 {
@@ -2666,7 +3632,7 @@ pub extern "C" fn oxide_host_input_log(ptr: *const u8, len: usize) {
 #[no_mangle]
 pub extern "C" fn oxide_host_app_shutdown() {
     if let Some(state) = APP_STATE.get() {
-        let mut app = state.lock().expect("app_state mutex");
+        let mut app = lock_or_recover(state);
         oxide_host_set_window_resized_callback(None);
         oxide_host_set_touch_callback(None);
         oxide_host_set_pointer_callback(None);
@@ -2675,45 +3641,59 @@ pub extern "C" fn oxide_host_app_shutdown() {
         oxide_host_set_text_composition_callback(None);
         oxide_host_set_text_selection_callback(None);
         oxide_host_set_ime_callbacks(None, None);
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.camera_detach_manager();
         }
         app.renderer = None;
-        app.router = None;
-        app.benchmark_scene_index = benchmark_camera_scene_index();
-        app.snapshot_status.clear();
+        app.injected = None;
         app.inited = false;
-        app.benchmark_mode = false;
-        app.last_ms = 0;
-        app.overlay_visible = true;
-        app.overlay_dirty = false;
-        app.reduce_motion_on = false;
-        app.reduce_motion_dirty = false;
-        app.space_down = false;
-        app.camera_running = false;
-        app.sensors = None;
-        app.networking = None;
-        app.network_metrics = None;
-        app.telemetry = None;
-        app.telemetry_ops = None;
-        #[cfg(target_os = "ios")]
+        app.pending_damage_rects.clear();
+        app.prepared_frame = false;
+        app.prepared_surface = None;
+        app.prepared_retry_generation = None;
+        #[cfg(feature = "test-scenes-entrypoint")]
         {
-            app.sensor_runtime = None;
-            app.network_runtime = None;
+            app.router = None;
+            app.benchmark_scene_index = benchmark_camera_scene_index();
+            app.snapshot_status.clear();
+            app.benchmark_mode = false;
+            app.last_ms = 0;
+            app.overlay_visible = true;
+            app.overlay_dirty = false;
+            app.space_down = false;
+            app.camera_running = false;
+            app.builder.clear();
+            app.frame_dirty = true;
+            app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
+            app.idle_skipped_frames = 0;
+            app.submitted_frames = 0;
         }
-        app.permissions = None;
-        app.permission_subs.clear();
-        app.permission_states.clear();
-        app.builder.clear();
-        app.frame_dirty = true;
-        app.settle_frames_remaining = IDLE_SETTLE_FRAMES;
-        app.idle_skipped_frames = 0;
-        app.submitted_frames = 0;
+        #[cfg(feature = "test-scenes-entrypoint")]
+        {
+            app.sensors = None;
+            app.networking = None;
+            app.network_metrics = None;
+            app.telemetry = None;
+            app.telemetry_ops = None;
+            app.permissions = None;
+            app.permission_subs.clear();
+            app.permission_states.clear();
+            #[cfg(target_os = "ios")]
+            {
+                app.sensor_runtime = None;
+                app.network_runtime = None;
+            }
+        }
         app.pending_wake_generation = 0;
         app.presented_wake_generation = 0;
     }
+    if let Some(tasks) = POSTED_TASKS.get() {
+        lock_or_recover(tasks).clear();
+    }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_benchmark_mode(on: u8) -> ::libc::c_int {
     let mut app = app_state().lock().expect("app_state mutex");
@@ -2722,6 +3702,85 @@ pub extern "C" fn oxide_host_set_benchmark_mode(on: u8) -> ::libc::c_int {
     }
     app.benchmark_mode = on != 0;
     0
+}
+
+fn observe_injected_renderer_stats(app: &mut AppState, stats: RendererStats) -> bool
+{
+   let Some(injected) = app.injected.as_mut() else
+   {
+      return false;
+   };
+   injected.app.event(AppEvent::RendererStats(stats), &mut injected.update);
+   true
+}
+
+fn dispatch_injected_event_without_wake(app: &mut AppState, event: AppEvent) -> bool
+{
+   let Some(injected) = app.injected.as_mut() else
+   {
+      return false;
+   };
+   app.prepared_frame = false;
+   app.prepared_surface = None;
+   app.prepared_retry_generation = None;
+   app.pending_damage_rects.clear();
+   injected.app.event(event, &mut injected.update);
+   true
+}
+
+fn dispatch_injected_event(app: &mut AppState, event: AppEvent) -> bool
+{
+   if !dispatch_injected_event_without_wake(app, event)
+   {
+      return false;
+   }
+   request_frame_wake();
+   true
+}
+
+fn modifiers_from_raw(raw: u32) -> Modifiers
+{
+   Modifiers::from_bits_truncate(raw)
+}
+
+fn mouse_buttons_from_raw(raw: u32) -> MouseButtons
+{
+   MouseButtons {
+      left: raw & 1 != 0,
+      right: raw & 2 != 0,
+      middle: raw & 4 != 0,
+      back: raw & 8 != 0,
+      forward: raw & 16 != 0,
+   }
+}
+
+fn key_code_from_raw(code: u32, character: Option<char>) -> KeyCode
+{
+   match code
+   {
+      0x29 => KeyCode::Escape,
+      0x28 => KeyCode::Enter,
+      0x2b => KeyCode::Tab,
+      0x2a => KeyCode::Backspace,
+      0x2c => KeyCode::Space,
+      0x52 | 126 => KeyCode::ArrowUp,
+      0x51 | 125 => KeyCode::ArrowDown,
+      0x50 | 123 => KeyCode::ArrowLeft,
+      0x4f | 124 => KeyCode::ArrowRight,
+      0x4a => KeyCode::Home,
+      0x4d => KeyCode::End,
+      0x4b => KeyCode::PageUp,
+      0x4e => KeyCode::PageDown,
+      0x49 => KeyCode::Insert,
+      0x4c => KeyCode::Delete,
+      _ => match character
+      {
+         Some(character @ '0'..='9') => KeyCode::Digit(character as u8 - b'0'),
+         Some(character) if character.is_ascii_alphabetic() =>
+            KeyCode::Letter(character.to_ascii_uppercase()),
+         _ => KeyCode::Unknown,
+      },
+   }
 }
 
 extern "C" fn window_resized_cb(
@@ -2734,26 +3793,44 @@ extern "C" fn window_resized_cb(
     safe_b: f32,
 ) {
     let _ = with_app_mut(|app| {
-        app.window = WindowMetrics {
-            width_dp: w,
-            height_dp: h,
-            scale,
-            safe_left: safe_l,
-            safe_top: safe_t,
-            safe_right: safe_r,
-            safe_bottom: safe_b,
-        };
+        if dispatch_injected_event(
+            app,
+            AppEvent::Window(WindowEvent::Resized {
+                w: w.round().max(0.0) as u32,
+                h: h.round().max(0.0) as u32,
+                scale,
+                safe: gfx_api::Insets::new(safe_l, safe_t, safe_r, safe_b),
+            }),
+        ) {
+            return;
+        }
         mark_frame_dirty(app);
     });
 }
 
-extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, _mods: u32, _ts: u64) {
+extern "C" fn pointer_cb(x: f32, y: f32, dx: f32, dy: f32, buttons: u32, mods: u32, _ts: u64) {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Input(InputEvent::Pointer(PointerEvent {
+                x,
+                y,
+                dx,
+                dy,
+                buttons: mouse_buttons_from_raw(buttons),
+                modifiers: modifiers_from_raw(mods),
+            })),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
-            touch_log(&format!(
-                "rust callback pointer scene={:?} x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} buttons={buttons}",
-                router.current
-            ));
+            if touch_log_enabled() {
+                touch_log(&format!(
+                    "rust callback pointer scene={:?} x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} buttons={buttons}",
+                    router.current
+                ));
+            }
             router.input_pointer(x, y, dx, dy, buttons);
         } else {
             touch_log("rust callback pointer dropped no router");
@@ -2777,7 +3854,9 @@ extern "C" fn touch_cb(
 ) {
     let _ = with_app_mut(|app| {
         let Some(touch_phase) = touch_phase_from_raw(phase) else {
-            touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
+            if touch_log_enabled() {
+                touch_log(&format!("rust callback touch dropped invalid phase={phase} id={id}"));
+            }
             return;
         };
         let pressure =
@@ -2797,15 +3876,25 @@ extern "C" fn touch_cb(
             tilt,
             device: pointer_device_from_raw(device),
         };
-        touch_log(&format!(
-            "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
-        ));
+        if dispatch_injected_event(app, AppEvent::Input(InputEvent::Touch(touch_event))) {
+            return;
+        }
+        if touch_log_enabled() {
+            touch_log(&format!(
+                "rust callback touch decoded id={id} phase={phase} x={x:.1} y={y:.1} device={device}"
+            ));
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         let result = app.touch.on_touch(&touch_event, ts_ns);
-        touch_log(&format!(
-            "rust callback touch generic result pointer={} double_tap={}",
-            result.pointer.is_some(),
-            result.double_tap
-        ));
+        #[cfg(feature = "test-scenes-entrypoint")]
+        if touch_log_enabled() {
+            touch_log(&format!(
+                "rust callback touch generic result pointer={} double_tap={}",
+                result.pointer.is_some(),
+                result.double_tap
+            ));
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_touch(&touch_event);
             if let Some(ptr) = result.pointer {
@@ -2826,19 +3915,28 @@ extern "C" fn key_cb(
     chars_ptr: *const u8,
     chars_len: usize,
     repeat: u8,
-    _mods: u32,
+    mods: u32,
     _ts: u64,
 ) {
-    let chars = unsafe {
-        if chars_ptr.is_null() || chars_len == 0 {
-            ""
-        } else {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(chars_ptr, chars_len))
-        }
+    let Some(chars) = ffi_bytes(chars_ptr, chars_len).and_then(|bytes| std::str::from_utf8(bytes).ok()) else {
+        return;
     };
     let ch = chars.chars().next();
+    #[cfg(feature = "test-scenes-entrypoint")]
     let is_up = repeat == 2;
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Input(InputEvent::Key(KeyEvent {
+                code: key_code_from_raw(code, ch),
+                chars: (!chars.is_empty()).then(|| chars.to_owned()),
+                repeat: repeat != 0,
+                modifiers: modifiers_from_raw(mods),
+            })),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             if let Some(ch) = ch {
                 match ch {
@@ -2863,13 +3961,6 @@ extern "C" fn key_cb(
                             router.toggle_overlay();
                             app.overlay_visible = !app.overlay_visible;
                             app.overlay_dirty = false;
-                        }
-                    }
-                    'm' | 'M' => {
-                        if !is_up {
-                            app.reduce_motion_on = !app.reduce_motion_on;
-                            router.set_reduce_motion(app.reduce_motion_on);
-                            app.reduce_motion_dirty = false;
                         }
                     }
                     'z' | 'Z' => {
@@ -2902,6 +3993,13 @@ extern "C" fn text_commit_cb(ptr: *const u8, len: usize) {
     let Ok(text) = std::str::from_utf8(slice) else { return };
     let owned = text.to_owned();
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::Commit { text: owned.clone() }),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_commit(&owned);
         }
@@ -2920,6 +4018,16 @@ extern "C" fn text_composition_cb(start: u32, end: u32, ptr: *const u8, len: usi
         }
     };
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::Composition {
+                range: start..end,
+                text: text.clone(),
+            }),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_set_composition(start, end, &text);
         }
@@ -2929,6 +4037,13 @@ extern "C" fn text_composition_cb(start: u32, end: u32, ptr: *const u8, len: usi
 
 extern "C" fn text_selection_cb(start: u32, end: u32) {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(
+            app,
+            AppEvent::Text(TextEvent::SelectionChanged { range: start..end }),
+        ) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_set_selection(start, end);
         }
@@ -2938,8 +4053,13 @@ extern "C" fn text_selection_cb(start: u32, end: u32) {
 
 extern "C" fn ime_shown_cb(x: f32, y: f32, w: f32, h: f32) {
     let rect = gfx_api::RectF::new(x, y, w, h);
+    #[cfg(feature = "test-scenes-entrypoint")]
     let message = format!("IME shown at ({:.0},{:.0}) {:.0}x{:.0}", rect.x, rect.y, rect.w, rect.h);
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(app, AppEvent::Text(TextEvent::IMEShown(rect))) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_set_ime_rect(rect);
             router.input_log(&message);
@@ -2950,6 +4070,10 @@ extern "C" fn ime_shown_cb(x: f32, y: f32, w: f32, h: f32) {
 
 extern "C" fn ime_hidden_cb() {
     let _ = with_app_mut(|app| {
+        if dispatch_injected_event(app, AppEvent::Text(TextEvent::IMEHidden)) {
+            return;
+        }
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_hide_ime();
             router.input_log("IME hidden");
@@ -2958,6 +4082,7 @@ extern "C" fn ime_hidden_cb() {
     });
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[repr(C)]
 pub struct OxideHostStats {
     pub fps: f32,
@@ -3064,9 +4189,12 @@ pub struct OxideHostStats {
     pub host_settle_frames_remaining: u8,
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 const _: [(); 512] = [(); core::mem::size_of::<OxideHostStats>()];
+#[cfg(feature = "test-scenes-entrypoint")]
 const _: [(); 8] = [(); core::mem::align_of::<OxideHostStats>()];
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_int {
     if out.is_null() {
@@ -3204,6 +4332,7 @@ pub extern "C" fn oxide_host_app_stats(out: *mut OxideHostStats) -> ::libc::c_in
     -1
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_run_perf_suite(smoke: u8) -> ::libc::c_int {
     if let Ok(mut slot) = perf_report_json().lock() {
@@ -3233,6 +4362,7 @@ pub extern "C" fn oxide_host_run_perf_suite(smoke: u8) -> ::libc::c_int {
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_perf_report_json_len() -> usize {
     perf_report_json()
@@ -3242,6 +4372,7 @@ pub extern "C" fn oxide_host_perf_report_json_len() -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_copy_perf_report_json(out_ptr: *mut u8, out_len: usize) -> usize {
     let Ok(slot) = perf_report_json().lock() else { return 0 };
@@ -3256,6 +4387,7 @@ pub extern "C" fn oxide_host_copy_perf_report_json(out_ptr: *mut u8, out_len: us
     needed
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_clear_perf_report_json() {
     if let Ok(mut slot) = perf_report_json().lock() {
@@ -3266,6 +4398,7 @@ pub extern "C" fn oxide_host_clear_perf_report_json() {
     }
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_perf_report_error_len() -> usize {
     perf_report_error()
@@ -3275,6 +4408,7 @@ pub extern "C" fn oxide_host_perf_report_error_len() -> usize {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_copy_perf_report_error(out_ptr: *mut u8, out_len: usize) -> usize {
     let Ok(slot) = perf_report_error().lock() else { return 0 };
@@ -3289,11 +4423,13 @@ pub extern "C" fn oxide_host_copy_perf_report_error(out_ptr: *mut u8, out_len: u
     needed
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_scene_count() -> u32 {
     test_scenes::Router::<MtlUploader>::scene_names().len() as u32
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_scene_name(index: u32, out_ptr: *mut u8, out_len: usize) -> u32 {
     let names = test_scenes::Router::<MtlUploader>::scene_names();
@@ -3309,6 +4445,7 @@ pub extern "C" fn oxide_host_scene_name(index: u32, out_ptr: *mut u8, out_len: u
     needed as u32
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_scene(index: u32) -> ::libc::c_int {
     let count = oxide_host_scene_count();
@@ -3332,6 +4469,7 @@ pub extern "C" fn oxide_host_set_scene(index: u32) -> ::libc::c_int {
     .unwrap_or(-1)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
     name_ptr: *const u8,
@@ -3361,6 +4499,7 @@ pub extern "C" fn oxide_host_prepare_onscreen_benchmark(
     .unwrap_or(-1)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_step_onscreen_benchmark(
     name_ptr: *const u8,
@@ -3383,6 +4522,7 @@ pub extern "C" fn oxide_host_step_onscreen_benchmark(
     .unwrap_or(-1)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_current_scene() -> u32 {
     APP_STATE
@@ -3398,12 +4538,15 @@ pub extern "C" fn oxide_host_current_scene() -> u32 {
         .unwrap_or(0)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_set_overlay_visible(on: u8) -> ::libc::c_int {
     let desired = on != 0;
     with_app_mut(|app| {
+        #[cfg(feature = "test-scenes-entrypoint")]
         let prev = app.overlay_visible;
         app.overlay_visible = desired;
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             if prev != desired {
                 router.toggle_overlay();
@@ -3418,42 +4561,20 @@ pub extern "C" fn oxide_host_set_overlay_visible(on: u8) -> ::libc::c_int {
     .unwrap_or(-1)
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_is_overlay_visible() -> u8 {
     app_state().lock().map(|app| if app.overlay_visible { 1 } else { 0 }).unwrap_or(0)
 }
 
-#[no_mangle]
-pub extern "C" fn oxide_host_set_reduce_motion(on: u8) -> ::libc::c_int {
-    let desired = on != 0;
-    with_app_mut(|app| {
-        let prev = app.reduce_motion_on;
-        app.reduce_motion_on = desired;
-        if let Some(router) = app.router.as_mut() {
-            if prev != desired {
-                router.set_reduce_motion(desired);
-            }
-            app.reduce_motion_dirty = false;
-        } else if prev != desired {
-            app.reduce_motion_dirty = true;
-        }
-        mark_frame_dirty(app);
-        0
-    })
-    .unwrap_or(-1)
-}
-
-#[no_mangle]
-pub extern "C" fn oxide_host_is_reduce_motion() -> u8 {
-    app_state().lock().map(|app| if app.reduce_motion_on { 1 } else { 0 }).unwrap_or(0)
-}
-
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_pinch(cx: f32, cy: f32, delta: f32) {
     touch_log(&format!(
         "rust ffi oxide_host_emit_pinch entry cx={cx:.1} cy={cy:.1} delta={delta:.4}"
     ));
     let _ = with_app_mut(|app| {
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             touch_log(&format!("rust ffi pinch scene={:?}", router.current));
             router.input_pinch(cx, cy, delta);
@@ -3464,25 +4585,31 @@ pub extern "C" fn oxide_host_emit_pinch(cx: f32, cy: f32, delta: f32) {
     });
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_pan_gesture(x: f32, y: f32, dx: f32, dy: f32, active: u8) {
     touch_log(&format!(
         "rust ffi oxide_host_emit_pan_gesture entry x={x:.1} y={y:.1} dx={dx:.1} dy={dy:.1} active={active}"
     ));
     let _ = with_app_mut(|app| {
+        #[cfg(feature = "test-scenes-entrypoint")]
+        {
         let Some(router) = app.router.as_mut() else {
             touch_log("rust ffi pan dropped no router");
             return;
         };
         touch_log(&format!("rust ffi pan scene={:?}", router.current));
         router.input_pointer(x, y, dx, dy, if active != 0 { 1 } else { 0 });
+        }
         mark_frame_dirty(app);
     });
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 #[no_mangle]
 pub extern "C" fn oxide_host_emit_double_tap() {
     let _ = with_app_mut(|app| {
+        #[cfg(feature = "test-scenes-entrypoint")]
         if let Some(router) = app.router.as_mut() {
             router.input_double_tap();
         }
@@ -3490,6 +4617,7 @@ pub extern "C" fn oxide_host_emit_double_tap() {
     });
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ()> {
     let decoder = png::Decoder::new(bytes);
     let mut reader = decoder.read_info().map_err(|_| ())?;
@@ -3506,10 +4634,12 @@ fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ()> {
     Ok((info.width, info.height, out))
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn scene_index(kind: test_scenes::SceneKind) -> u32 {
     kind as u32
 }
 
+#[cfg(feature = "test-scenes-entrypoint")]
 fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     let mut data = Vec::with_capacity((w as usize) * (h as usize) * 4);
     for y in 0..h {
@@ -3525,9 +4655,12 @@ fn gen_checker_rgba(w: u32, h: u32) -> (u32, u32, Vec<u8>) {
     (w, h, data)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-scenes-entrypoint"))]
 #[path = "../tests/unit/internal_camera_render_mode.rs"]
 mod internal_camera_render_mode_tests;
+#[cfg(test)]
+#[path = "../tests/unit/internal_injected_app.rs"]
+mod internal_injected_app_tests;
 #[cfg(target_os = "ios")]
 extern "C" {
     fn oxide_host_ios_log(ptr: *const ::libc::c_char, len: usize);
@@ -3541,6 +4674,7 @@ fn ios_env_flag(name: &str) -> bool {
 
 #[inline(always)]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn ios_log_enabled() -> bool {
     #[cfg(target_os = "ios")]
     {
@@ -3555,6 +4689,7 @@ fn ios_log_enabled() -> bool {
 
 #[inline(always)]
 #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+#[cfg(feature = "test-scenes-entrypoint")]
 fn ios_log(msg: &str) {
     #[cfg(target_os = "ios")]
     unsafe {

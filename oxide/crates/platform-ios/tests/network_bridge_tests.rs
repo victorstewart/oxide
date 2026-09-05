@@ -220,6 +220,74 @@ fn network_bridge_enables_ticket_resumption_on_public_security_options() {
 }
 
 #[test]
+fn network_bridge_hostname_suppression_preserves_server_trust()
+{
+   let source = include_str!("../src/ios/network.m");
+   let body = source_between(
+      source,
+      "static BOOL evaluate_sec_trust(",
+      "static BOOL evaluate_peer_trust(",
+   );
+   let bridge = source_between(
+      source,
+      "static BOOL evaluate_peer_trust(",
+      "static SecIdentityRef copy_identity(",
+   );
+   let policy = body.find("SecTrustSetPolicies(trust, policy)").expect("hostname-free SSL policy");
+   let evaluate = body.find("SecTrustEvaluateWithError(trust, NULL)").expect("trust evaluation");
+
+   assert!(body.contains("SecPolicyCreateSSL(true, NULL)"));
+   assert!(policy < evaluate);
+   assert!(bridge.contains("evaluate_sec_trust(trust, anchors, configured_anchor_count,"));
+   assert!(source.contains("if (!enforce_hostname || configured_anchor_count > 0)"));
+   assert!(!source.contains("sec_protocol_options_set_peer_authentication_required"));
+}
+
+#[test]
+fn network_bridge_requires_exact_atomic_custom_trust_anchors()
+{
+   let source = include_str!("../src/ios/network.m");
+   let parse_body = source_between(
+      source,
+      "static NSArray *copy_trust_anchors(",
+      "static BOOL evaluate_sec_trust(",
+   );
+   let evaluate_body = source_between(
+      source,
+      "static BOOL evaluate_sec_trust(",
+      "static BOOL evaluate_peer_trust(",
+   );
+   let canonical_copy = parse_body
+      .find("SecCertificateCopyData(certificate)")
+      .expect("canonical DER copy");
+   let exact_compare = parse_body
+      .find("memcmp(CFDataGetBytePtr(canonical), anchor.data,")
+      .expect("exact DER comparison");
+   let exact_reject = parse_body.find("if (!exact)").expect("non-exact DER rejection");
+   let anchor_add = parse_body
+      .find("[anchors addObject:(__bridge_transfer id)certificate]")
+      .expect("validated anchor insertion");
+   let count_check = evaluate_body
+      .find("configured_anchor_count != (size_t)anchors.count")
+      .expect("anchor parse count");
+   let evaluate = evaluate_body
+      .find("SecTrustEvaluateWithError(trust, NULL)")
+      .expect("trust evaluation");
+
+   assert!(parse_body.contains("anchor.data == NULL || anchor.len == 0 ||"));
+   assert!(parse_body.contains("anchor.len > (size_t)LONG_MAX"));
+   assert!(parse_body.contains("(size_t)CFDataGetLength(canonical) == anchor.len"));
+   assert!(parse_body.contains("CFRelease(certificate);\n         return nil;"));
+   assert!(!parse_body.contains("continue;"));
+   assert!(canonical_copy < exact_compare);
+   assert!(exact_compare < exact_reject);
+   assert!(exact_reject < anchor_add);
+   assert!(count_check < evaluate);
+   assert!(source.contains("const size_t configured_anchor_count ="));
+   assert!(source.contains("complete(evaluate_peer_trust(trust_ref, anchors_copy,"));
+}
+
+#[test]
 fn network_bridge_configures_tcp_tls13_fast_open_and_early_writes() {
     let source = include_str!("../src/ios/network.m");
     let tcp_body = source_between(

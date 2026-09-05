@@ -57,4 +57,5 @@ assert_eq!(platform.clipboard_get(), Some(String::new()));
 ```
 
 ## Changelog
+- 2026-08-06: removed the Reduce Motion host stub and asserted the compatibility-reserved field stays disabled.
 - 2026-05-19: added platform-macos integration tests for clipboard empty strings, clipboard text, device-cap fallback sanitization, and capability gating.

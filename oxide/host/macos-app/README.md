@@ -57,9 +57,8 @@ are not automatically found; prefer bundling for resource loading.
 - Left / Right: adjust slider (Controls); move focus left/right (Collection)
 - Up / Down: move focus up/down (Collection)
 - Z: reset zoom/pan (Zoom Image)
-- F: toggle on‑screen overlay (fps, draws, anims, reduce‑motion flag)
+- F: toggle on-screen overlay (fps, draws, anims)
 - R: toggle high refresh (display sync enabled)
-- M: toggle Reduce Motion (snaps animations where supported)
 - I: toggle idle sleep prevention
 
 ## Manual QA Checklist
@@ -69,13 +68,12 @@ are not automatically found; prefer bundling for resource loading.
   - Controls: label, progress, spinner, button, toggle, slider
   - Text Layout: multi‑language samples wrap and align correctly
   - Zoom Image: sample PNG if bundled, otherwise checkerboard; pinch/drag works; Z resets
-  - Animations: bars animate; RM toggle snaps
+  - Animations: bars animate
   - Collection: large virtualized grid scrolls smoothly; focus moves with arrows
-- Press F to hide/show overlay; overlay reports fps, draw count, active animations, RM:on/off.
+- Press F to hide/show overlay; overlay reports fps, draw count, and active animations.
 - Press Space on Controls: button animates down (80 ms) and up (120 ms); press via mouse also works.
 - Press Left/Right on Controls: slider value moves with step; dragging the thumb also works.
 - Press R to toggle high refresh; FPS should reflect device’s rate when enabled.
-- Press M to toggle Reduce Motion; Animations scene snaps; (optional) verify other animations adopt policy if extended.
 - Press I to toggle idle sleep prevention; screen should remain responsive; no OS sleep while enabled.
 
 ## Notes

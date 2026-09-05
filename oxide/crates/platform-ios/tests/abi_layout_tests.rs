@@ -54,3 +54,18 @@ fn ios_objc_bridges_keep_abi_static_asserts()
    assert!(camera.contains("_Static_assert(sizeof(struct OxideCamContractSnapshot) == 20"));
    assert!(camera.contains("_Static_assert(_Alignof(struct OxideCamContractSnapshot) == 4"));
 }
+
+#[test]
+fn camera_preview_publication_callback_is_atomic_and_context_free()
+{
+   let camera = include_str!("../src/ios/camera.m");
+   for required in [
+      "static _Atomic(OxideCameraPreviewPublishCallback)",
+      "atomic_load_explicit(&g_oxide_camera_preview_publish_callback",
+      "atomic_store_explicit(&g_oxide_camera_preview_publish_callback",
+   ]
+   {
+      assert!(camera.contains(required), "camera bridge is missing {required}");
+   }
+   assert!(!camera.contains("g_oxide_camera_preview_publish_context"));
+}

@@ -34,6 +34,8 @@ The fixed cache key stores mask dimensions, the exact `mask_scale` bits, aggrega
 
 On a hit, the entry's LRU frame is refreshed, its serial is attached to the current frame slot, and only the final compositor is encoded. On a miss, admission evicts cold unprotected entries until the actual allocated-byte budget and four-entry bound permit the new set. A dimension-compatible evicted set is rewritten only when no submitted slot still references its generation. Oversized transient requests evict every unprotected cached dimension before allocating. Snapshot builds keep one readback target; when no submission is active, a same-size transient reuses it, while a size change drops it before allocating the new dimensions. Raster writes city and neighborhood R8 targets. When each maximum coordinate is below `0xFFFF`, seed and logarithmic JFA passes ping-pong two RGBA16Uint fields: city XY occupies `.xy`, seam XY occupies `.zw`, and `0xFFFF` is invalid. The final compositor recovers city and neighborhood IDs from the authoritative R8 masks at the selected coordinates. Dimensions needing the sentinel coordinate retain two city plus two seam RGBA32Float fields and dedicated prebuilt pipeline states; compile-time assertions pin the selector boundary at 65,535 accepted and 65,536 rejected.
 
+The final compositor emits straight RGB and coverage alpha into the shared color target. Its pipeline uses straight-alpha source-over, including a source-alpha factor of one for the alpha channel, so overlaying the semantic field cannot punch alpha holes into an opaque target.
+
 The field set becomes immutable after its miss sequence. The current-frame serial list prevents a later map in the same command buffer from recycling fields already referenced by an earlier compositor. Tiny per-slot generation lists associate every cache hit or transient miss with the selected frame slot. Metal's completion handler clears the corresponding in-flight bit, and the next frame clears metadata only for completed slots. Eviction can release its CPU-side cache handle while a command buffer remains active, but it cannot return that texture set for rewriting until the generation is absent from every active slot.
 
 ## Preconditions and postconditions
@@ -82,6 +84,7 @@ renderer.submit(token)?;
 
 ## Changelog
 
+- 2026-08-07: aligned the final compositor with straight-alpha source-over and opaque-target alpha preservation.
 - 2026-07-14: bounded target ownership by cache generation and actual in-flight submission, prohibited busy-generation rewrites, reduced snapshot/offscreen transient pooling from eight target sets to one lazy same-size target, and added target-storage telemetry.
 - 2026-07-14: packed city/seam seed coordinates into two RGBA16Uint ping-pong fields, recovered semantic IDs from R8 masks in the compositor, and retained an exact wide-coordinate fallback.
 - 2026-07-14: added complete-key, byte-budgeted immutable raster/JFA field caching with compositor-only hits, compatible target reuse, stage telemetry, and purge behavior.

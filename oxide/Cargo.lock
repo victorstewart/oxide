@@ -916,6 +916,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-feed-v1-app"
+version = "0.1.0"
+dependencies = [
+ "oxide-host-ios",
+ "oxide-platform-api",
+ "oxide-renderer-api",
+ "oxide-text",
+ "oxide-ui-core",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "oxide-feed-v1-reducer"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "oxide-harness-registry"
 version = "0.1.0"
 
@@ -1043,7 +1066,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
 ]
 
 [[package]]
@@ -1083,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "oxide-platform-ios"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cc",
  "libc",
@@ -1147,7 +1169,6 @@ dependencies = [
  "js-sys",
  "oxide-image-store",
  "oxide-renderer-api",
- "oxide-renderer-wgpu",
  "oxide-wasm-alloc-counter",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1203,11 +1224,9 @@ dependencies = [
  "oxide-platform-api",
  "oxide-renderer-api",
  "oxide-telemetry",
- "oxide-text",
  "oxide-timing",
  "oxide-ui-core",
  "oxide-wasm-alloc-counter",
- "serde_json",
 ]
 
 [[package]]
@@ -1240,6 +1259,7 @@ dependencies = [
  "font8x8",
  "fontdue",
  "once_cell",
+ "oxide-input",
  "oxide-permissions",
  "oxide-platform-api",
  "oxide-renderer-api",
@@ -2472,7 +2492,6 @@ dependencies = [
  "base64",
  "oxide-perf-runner",
  "plist",
- "png",
  "roxmltree",
  "serde",
  "serde_json",

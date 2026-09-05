@@ -517,6 +517,29 @@ impl ImageUploader for PagedUploader {
     }
 }
 
+fn encode_retina_label(
+   font_id: usize,
+   scale: f32,
+   text: &mut TextCtx,
+   uploader: &mut PagedUploader,
+   builder: &mut DrawListBuilder,
+)
+{
+   encode_label_text(
+      "Retina",
+      Color::rgba(0.1, 0.2, 0.3, 1.0),
+      Align::Left,
+      false,
+      font_id,
+      16.0,
+      RectF::new(0.0, 0.0, 120.0, 24.0),
+      scale,
+      text,
+      uploader,
+      builder,
+   );
+}
+
 #[test]
 fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() {
     let mut text = TextCtx::default();
@@ -528,7 +551,7 @@ fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() 
     let mut builder = DrawListBuilder::new();
     let mut labels = Vec::new();
 
-    text.begin_frame();
+    text.begin_frame_at_scale(1.0);
     for ch in 'A'..='Z' {
         let value = ch.to_string();
         encode_label_text(
@@ -576,7 +599,7 @@ fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() 
     let first_handle = first_revisions[0].0;
 
     builder.clear();
-    text.begin_frame();
+    text.begin_frame_at_scale(1.0);
     encode_label_text(
         &pinned_label,
         Color::rgba(0.1, 0.2, 0.3, 1.0),
@@ -627,6 +650,87 @@ fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() 
 }
 
 #[test]
+fn device_scale_change_invalidates_retained_text_without_republishing_pages()
+{
+   let mut text = TextCtx::default();
+   let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   let mut uploader = PagedUploader::default();
+   let mut builder = DrawListBuilder::new();
+
+   text.begin_frame_at_scale(1.0);
+   encode_retina_label(font_id, 1.0, &mut text, &mut uploader, &mut builder);
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let scale_one = builder.drawlist().clone();
+   let scale_one_revisions = text.retained_text_atlas_revisions().expect("clean 1x atlas").to_vec();
+   let page_handle = scale_one_revisions[0].0;
+   assert_eq!(uploader.creates, 1);
+   assert!(DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      &scale_one,
+      &scale_one_revisions,
+   ));
+
+   text.begin_frame_at_scale(3.0);
+   let scale_three_revisions = text.retained_text_atlas_revisions().expect("clean 3x context").to_vec();
+   assert_eq!(scale_three_revisions[0].0, page_handle);
+   assert_ne!(scale_three_revisions[0].1, scale_one_revisions[0].1);
+   assert!(!DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      &scale_one,
+      &scale_three_revisions,
+   ));
+
+   builder.clear();
+   encode_retina_label(font_id, 3.0, &mut text, &mut uploader, &mut builder);
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let scale_three = builder.drawlist().clone();
+   let scale_three_revisions = text.retained_text_atlas_revisions().expect("uploaded 3x atlas").to_vec();
+   assert_eq!(scale_three_revisions[0].0, page_handle);
+   assert_eq!(uploader.creates, 1);
+   assert!(uploader.appends > 0);
+   assert!(uploader.releases.is_empty());
+   assert!(DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      &scale_three,
+      &scale_three_revisions,
+   ));
+
+   let appends = uploader.appends;
+   text.begin_frame_at_scale(1.0);
+   let scale_one_return_revisions = text.retained_text_atlas_revisions().expect("warm 1x context").to_vec();
+   assert_ne!(scale_one_return_revisions[0].1, scale_one_revisions[0].1);
+   assert!(!DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      &scale_one,
+      &scale_one_return_revisions,
+   ));
+   builder.clear();
+   encode_retina_label(font_id, 1.0, &mut text, &mut uploader, &mut builder);
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   assert_eq!(uploader.appends, appends, "warm 1x switchback must reuse its resident glyphs");
+   assert!(DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      builder.drawlist(),
+      text.retained_text_atlas_revisions().expect("republished 1x geometry"),
+   ));
+
+   let explicit_scale_revisions =
+      text.retained_text_atlas_revisions().expect("explicit 1x context").to_vec();
+   text.begin_frame();
+   assert_eq!(
+      text.retained_text_atlas_revisions().expect("unbound compatibility frame"),
+      explicit_scale_revisions,
+   );
+   builder.clear();
+   encode_retina_label(font_id, 3.0, &mut text, &mut uploader, &mut builder);
+   let _ = text.finish_frame(&mut uploader, &mut builder);
+   let legacy_bound_revisions =
+      text.retained_text_atlas_revisions().expect("legacy frame bound on encode");
+   assert_ne!(legacy_bound_revisions, explicit_scale_revisions);
+   assert!(DrawListBuilder::new().append_retained_drawlist_with_text_atlas_revisions(
+      builder.drawlist(),
+      legacy_bound_revisions,
+   ));
+}
+
+#[test]
 fn paged_text_recreates_gpu_pages_after_device_loss() {
    let mut text = TextCtx::default();
    text.atlas = oxide_text::PagedAtlas::new(64, 64, 2);
@@ -636,7 +740,7 @@ fn paged_text_recreates_gpu_pages_after_device_loss() {
    let mut uploader = PagedUploader::default();
    let mut builder = DrawListBuilder::new();
 
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    encode_label_text(
       "device loss",
       Color::rgba(1.0, 1.0, 1.0, 1.0),
@@ -662,7 +766,7 @@ fn paged_text_recreates_gpu_pages_after_device_loss() {
    assert!(uploader.releases.is_empty());
 
    builder.clear();
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    encode_label_text(
       "device loss",
       Color::rgba(1.0, 1.0, 1.0, 1.0),
@@ -885,7 +989,7 @@ fn text_frame_preflights_visible_labels_and_publishes_once() {
     let mut builder = DrawListBuilder::new();
     let mut uploader = CountingUploader::default();
 
-    text.begin_frame();
+    text.begin_frame_at_scale(2.0);
     for (index, label) in labels.iter().enumerate() {
         encode_label_text_profiled(
             label,
@@ -922,7 +1026,7 @@ fn text_frame_preflights_visible_labels_and_publishes_once() {
     );
 
     builder.clear();
-    text.begin_frame();
+    text.begin_frame_at_scale(2.0);
     for (index, label) in labels.iter().enumerate() {
         encode_label_text_profiled(
             label,
@@ -953,7 +1057,7 @@ fn text_frame_preflights_visible_labels_and_publishes_once() {
     assert_eq!(uploader.updates, 0);
 
     builder.clear();
-    text.begin_frame();
+    text.begin_frame_at_scale(2.0);
     encode_label_text_profiled(
         "Z",
         Color::rgba(0.1, 0.1, 0.1, 1.0),
@@ -987,7 +1091,7 @@ fn text_frame_patches_provisional_runs_without_changing_draw_order() {
     let mut uploader = CountingUploader::default();
     let color = Color::rgba(0.2, 0.3, 0.4, 1.0);
 
-    text.begin_frame();
+    text.begin_frame_at_scale(2.0);
     builder.rrect(RectF::new(0.0, 0.0, 120.0, 32.0), [4.0; 4], color);
     encode_label_text(
         "first",

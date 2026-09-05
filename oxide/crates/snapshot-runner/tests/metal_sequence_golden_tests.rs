@@ -86,7 +86,13 @@ fn assert_blur_error(name: &str, expected: &[u8], actual: &[u8], max_channel_err
 
 fn assert_blur_golden_error(name: &str, width: u32, height: u32, rgba: &[u8], max_channel_error: u8, max_mae: f64, max_changed_pixel_ratio: f64)
 {
-   let path = golden_dir().join(format!("{name}.png"));
+   let directory = golden_dir();
+   let path = directory.join(format!("{name}.png"));
+   if std::env::var_os("UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"))
+   {
+      fs::create_dir_all(&directory).expect("create sequence golden directory");
+      write_png(&path, width, height, rgba);
+   }
    let (golden_width, golden_height, golden_rgba) = read_png(&path);
    assert_eq!((golden_width, golden_height), (width, height));
    assert_blur_error(name, &golden_rgba, rgba, max_channel_error, max_mae, max_changed_pixel_ratio);

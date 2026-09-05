@@ -52,6 +52,8 @@ Set `UPDATE_GOLDENS=1` only for intentional reviewed golden updates.
 
 ## Changelog
 
+- 2026-08-09: made intentional golden updates include the bounded quarter/eighth effect-target references.
+- 2026-08-09: refreshed sequence fixtures after the source-over alpha correction.
 - 2026-07-14: added exact-versus-paired C52 sigma sweep and explicit channel/MAE/changed-pixel error policy.
 - 2026-07-12: added direct/prepass/quarter/eighth effect-target plan goldens.
 - 2026-07-12: added exact damage, recreate, resize, device-loss, and atlas-eviction sequence goldens.

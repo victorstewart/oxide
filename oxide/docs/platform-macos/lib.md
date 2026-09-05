@@ -105,6 +105,7 @@ platform.request_redraw();
 ```
 
 ## Changelog
+- 2026-08-06: removed the macOS Reduce Motion OS query and hard-disabled the compatibility-reserved device-cap field.
 - 2026-05-19: added shared Apple TCP keepalive support and installed-platform loopback verification.
 - 2026-05-19: added opt-in host-verified live CoreLocation update validation for pre-authorized macOS hosts.
 - 2026-05-19: expanded host-verified WebView lifecycle/script validation through concurrent hidden `WKWebView` instances.

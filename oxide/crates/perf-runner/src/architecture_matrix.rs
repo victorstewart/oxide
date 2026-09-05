@@ -38,19 +38,8 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   push_if_allowed(cases, "cpu.architecture.animation.surface_300", || animation_surface_case(smoke));
-   push_if_allowed(cases, "cpu.architecture.spatial_metadata.glyph_mesh_10000", || {
-      retained_spatial_query_case("cpu.architecture.spatial_metadata.glyph_mesh_10000", smoke)
-   });
    push_if_allowed(cases, "cpu.architecture.damage.retained_surface_idle_10000", || {
       retained_surface_idle_case(smoke)
-   });
-   push_if_allowed(cases, "cpu.architecture.damage.retained_surface_dirty_leaf_10000", || {
-      retained_surface_dirty_case(
-         "cpu.architecture.damage.retained_surface_dirty_leaf_10000",
-         "architecture",
-         smoke,
-      )
    });
    if perf_case_allowed("gpu.architecture.damage.retained_surface_dirty_leaf_10000")
    {
@@ -60,9 +49,8 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.new_labels_200", || text_new_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.scale_sdf_matrix", || text_scale_sdf_matrix_case(smoke));
-   push_if_allowed(cases, "cpu.architecture.text.variable_axes_3x", || text_variable_axes_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.atlas_eviction", || text_atlas_eviction_case(smoke));
-   push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality", || {
+   push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality.single_scale", || {
       text_paged_atlas_locality_case(smoke)
    });
    push_if_allowed(cases, "cpu.architecture.text.bitmap_options", || {
@@ -107,7 +95,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   for family in ["hard_rect", "rrect", "image", "nine_slice", "spinner", "backdrop", "visual_effect"]
+   for family in ["rrect", "image", "nine_slice", "spinner", "backdrop", "visual_effect"]
    {
       for count in [1_usize, 64, 1_024, 10_000]
       {
@@ -274,7 +262,6 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       "immutable_minified_private_nomip",
       "immutable_minified_shared_mipmapped",
       "immutable_minified_mipmapped",
-      "immutable_minified_auto",
       "immutable_small_one_use_shared",
       "immutable_small_one_use_private",
       "immutable_small_one_use_auto",
@@ -374,26 +361,16 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   for dirty in [false, true]
+   let prepared_chunk_id = "gpu.architecture.prepared_chunks.one_dirty";
+   if perf_case_allowed(prepared_chunk_id)
    {
-      let name = if dirty { "one_dirty" } else { "clean_mixed" };
-      let id = format!("gpu.architecture.prepared_chunks.{name}");
-      if perf_case_allowed(&id)
-      {
-         cases.push(metal_prepared_chunk_case(&id, smoke, dirty)?);
-      }
+      cases.push(metal_prepared_chunk_case(prepared_chunk_id, smoke, true)?);
    }
 
-   for (id, dirty) in [
-      ("gpu.architecture.prepared_layers.clean_100x100", false),
-      ("gpu.architecture.prepared_layers.one_dirty_100x100", true),
-      ("gpu.authoring.retained_snapshot.prepared_layers_clean_100x100", false),
-   ]
+   let prepared_layer_id = "gpu.architecture.prepared_layers.one_dirty_100x100";
+   if perf_case_allowed(prepared_layer_id)
    {
-      if perf_case_allowed(id)
-      {
-         cases.push(metal_prepared_layer_case(id, smoke, dirty)?);
-      }
+      cases.push(metal_prepared_layer_case(prepared_layer_id, smoke, true)?);
    }
 
    let dynamic_property_id = "gpu.architecture.animation.dynamic_properties_300";
@@ -402,20 +379,10 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       cases.push(metal_dynamic_property_case(dynamic_property_id, smoke)?);
    }
 
-   for full_damage in [false, true]
+   let full_damage_id = "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000";
+   if perf_case_allowed(full_damage_id)
    {
-      let id = if full_damage
-      {
-         "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000"
-      }
-      else
-      {
-         "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000"
-      };
-      if perf_case_allowed(id)
-      {
-         cases.push(metal_spatial_damage_case(id, smoke, full_damage)?);
-      }
+      cases.push(metal_spatial_damage_case(full_damage_id, smoke, true)?);
    }
 
    push_if_allowed(cases, "cpu.architecture.idle.static_foreground", || idle_case(smoke));
@@ -823,7 +790,7 @@ fn prepared_layer_matrix_snapshot(first_geometry_revision: u64, first_dirty: boo
    ).expect("prepared layer benchmark snapshot")
 }
 
-fn metal_prepared_layer_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
+pub(super) fn metal_prepared_layer_case(id: &str, smoke: bool, dirty: bool) -> Result<PerfCaseResult>
 {
    let mut renderer = Box::new(metal::MetalRenderer::new_default().context("creating prepared-layer Metal renderer")?);
    renderer.resize(1_200, 800, 1.0).context("resizing prepared-layer Metal renderer")?;
@@ -1988,14 +1955,9 @@ fn retained_mixed_sequences() -> Vec<api::RenderChunkSequence>
    mixed_sequences
 }
 
-fn animation_surface_case(smoke: bool) -> PerfCaseResult
-{
-   dynamic_property_surface_case("cpu.architecture.animation.surface_300", "architecture", smoke)
-}
-
 pub(super) fn authoring_dynamic_property_surface_case(smoke: bool) -> PerfCaseResult
 {
-   dynamic_property_surface_case("cpu.authoring.animation.dynamic_properties_300", "authoring", smoke)
+   dynamic_property_surface_case("cpu.authoring.animation.dynamic_properties_hit_test_300", "authoring", smoke)
 }
 
 fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCaseResult
@@ -2067,12 +2029,11 @@ fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCas
       0.20,
       1,
       vec![String::from(
-         "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, hit testing, and accessibility dirtiness.",
+         "Real 300-node UiSurface animation with Animator overrides, nested clips/opacity, transforms, retained encoding, and hit testing.",
       )],
       || {
          frame = frame.wrapping_add(1);
          surface.tick_at(start.saturating_add(frame * 8));
-         let _ = surface.mark_node_dirty(nodes[frame as usize % nodes.len()], ui::DirtyClass::Accessibility);
          let rendered = surface.render_snapshot_retained(
             api::RenderChunkId(10),
             &mixed_sequences,
@@ -2099,7 +2060,7 @@ fn dynamic_property_surface_case(id: &str, family: &str, smoke: bool) -> PerfCas
    case.metrics.insert(String::from("animated_nodes"), 300.0);
    case.metrics.insert(String::from("active_animations"), 600.0);
    case.metrics.insert(String::from("hit_tests_per_op"), 1.0);
-   case.metrics.insert(String::from("accessibility_geometry_nodes"), 300.0);
+   case.metrics.insert(String::from("hit_test_geometry_nodes"), 300.0);
    case.metrics.insert(String::from("label_nodes"), 200.0);
    case.metrics.insert(String::from("image_nodes"), 100.0);
    let operations = operations.max(1) as f64;
@@ -2120,7 +2081,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
    let mut uploader = CpuUploader::default();
    let mut builder = ui::DrawListBuilder::new();
    let labels = (0..1_000).map(|index| format!("Warm label {index:04}")).collect::<Vec<_>>();
-   text.begin_frame();
+   text.begin_frame_at_scale(2.0);
    for (index, label) in labels.iter().enumerate()
    {
       encode_matrix_label(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
@@ -2128,7 +2089,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
    let _ = text.finish_frame(&mut uploader, &mut builder);
    let proof_stats = {
       builder.clear();
-      text.begin_frame();
+      text.begin_frame_at_scale(2.0);
       for (index, label) in labels.iter().enumerate()
       {
          encode_matrix_label_profiled(label, index, 2.0, 18.0, &mut text, &mut uploader, &mut builder);
@@ -2146,7 +2107,7 @@ fn text_warm_labels_case(smoke: bool) -> PerfCaseResult
          builder.clear();
          if frame_scoped
          {
-            text.begin_frame();
+            text.begin_frame_at_scale(2.0);
          }
          for (index, label) in labels.iter().enumerate()
          {
@@ -2190,7 +2151,7 @@ fn text_new_labels_case(smoke: bool) -> PerfCaseResult
          let mut builder = ui::DrawListBuilder::new();
          if frame_scoped
          {
-            text.begin_frame();
+            text.begin_frame_at_scale(3.0);
          }
          for index in 0..200
          {
@@ -2349,7 +2310,7 @@ fn run_new_label_frame(phase: u64) -> ui::elements::TextFrameStats
    text.set_fallback_fonts(&[1]);
    let mut uploader = CpuUploader::default();
    let mut builder = ui::DrawListBuilder::new();
-   text.begin_frame();
+   text.begin_frame_at_scale(3.0);
    for index in 0..200
    {
       let label = format!("New {phase:08x} Latin 漢字 مرحبا 😀 {index:03}");
@@ -2505,7 +2466,7 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
       text.set_frame_stats_enabled(true);
       let mut uploader = CpuUploader::default();
       let mut builder = ui::DrawListBuilder::new();
-      text.begin_frame();
+      text.begin_frame_at_scale(1.0);
       for (index, (label, font_px)) in labels.iter().enumerate()
       {
          encode_matrix_label_profiled(label, index, 1.0, *font_px, &mut text, &mut uploader, &mut builder);
@@ -2559,7 +2520,7 @@ fn metal_text_new_labels_case(id: &str, smoke: bool, frame_scoped: bool) -> Resu
       let frame_started_at = Instant::now();
       if frame_scoped
       {
-         text.begin_frame();
+         text.begin_frame_at_scale(1.0);
       }
       for (index, (label, font_px)) in labels.iter().enumerate()
       {
@@ -2701,7 +2662,7 @@ fn metal_text_glyph_instances_case(id: &str, smoke: bool) -> Result<PerfCaseResu
       upload_bytes: 0,
    };
    let mut builder = ui::DrawListBuilder::new();
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    for (index, label) in labels.iter().enumerate()
    {
       let font_px = 16.0 + (index % 20) as f32;
@@ -2748,15 +2709,7 @@ fn metal_text_glyph_instances_case(id: &str, smoke: bool) -> Result<PerfCaseResu
       builder.drawlist().items.len(),
       proof.rasterizations,
    );
-   assert!(has_bitmap, "glyph-instance case requires bitmap text");
-   if cfg!(target_vendor = "apple")
-   {
-      assert!(!has_sdf, "Apple glyph-instance case must use the native bitmap backend");
-   }
-   else
-   {
-      assert!(has_sdf, "non-Apple glyph-instance case requires SDF text");
-   }
+   assert!(has_bitmap && has_sdf, "glyph-instance case requires bitmap and SDF text");
 
    let warmups = if smoke { 1_usize } else { 3 };
    let frames = if smoke { 3_usize } else {
@@ -3046,7 +2999,7 @@ fn text_script_matrix_case(smoke: bool) -> PerfCaseResult
          text.set_fallback_fonts(&[1]);
          let mut uploader = CpuUploader::default();
          let mut builder = ui::DrawListBuilder::new();
-         text.begin_frame();
+         text.begin_frame_at_scale(3.0);
          for (index, value) in strings.iter().enumerate()
          {
             encode_matrix_label(value, index, 3.0, 24.0, &mut text, &mut uploader, &mut builder);
@@ -3076,7 +3029,7 @@ fn text_scale_sdf_matrix_case(smoke: bool) -> PerfCaseResult
             let mut text = perf_text_ctx();
             let mut uploader = CpuUploader::default();
             let mut builder = ui::DrawListBuilder::new();
-            text.begin_frame();
+            text.begin_frame_at_scale(scale);
             encode_matrix_label("SDF Scale Matrix", index, scale, font_px, &mut text, &mut uploader, &mut builder);
             let stats = text.finish_frame(&mut uploader, &mut builder);
             checksum = checksum
@@ -3090,190 +3043,6 @@ fn text_scale_sdf_matrix_case(smoke: bool) -> PerfCaseResult
    case.metrics.insert(String::from("scale_variants"), 2.0);
    case.metrics.insert(String::from("sdf_size_variants"), 2.0);
    case.metrics.insert(String::from("max_font_px"), 96.0);
-   case
-}
-
-#[derive(Default)]
-struct VariableAxesTextStats
-{
-   checksum: u64,
-   cold_cache_hits: u64,
-   cold_cache_misses: u64,
-   cold_rasterizations: u64,
-   cold_dirty_pixels: u64,
-   cold_vertices: u64,
-   warm_cache_hits: u64,
-   warm_cache_misses: u64,
-   warm_rasterizations: u64,
-   warm_dirty_pixels: u64,
-   warm_vertices: u64,
-   resident_glyphs: u64,
-}
-
-fn comparison_variable_font_db() -> (text::FontDb, usize, usize)
-{
-   let latin = text::Font::from_bytes_with_variations(
-      COMPARISON_LATIN_VARIABLE_FONT.to_vec(),
-      &[
-         text::FontVariation {tag: *b"wght", value: 400.0},
-         text::FontVariation {tag: *b"wdth", value: 100.0},
-      ],
-   );
-   let cjk = text::Font::from_bytes_with_variations(
-      COMPARISON_CJK_VARIABLE_FONT.to_vec(),
-      &[text::FontVariation {tag: *b"wght", value: 400.0}],
-   );
-   let mut fonts = text::FontDb::default();
-   let latin_id = fonts.add_font(latin);
-   let cjk_id = fonts.add_font(cjk);
-   (fonts, latin_id, cjk_id)
-}
-
-fn run_variable_axes_text(fonts: &text::FontDb, latin_id: usize, cjk_id: usize, warm_replay: bool) -> VariableAxesTextStats
-{
-   let mut shaper = text::TextShaper::default();
-   let latin_shape = shaper.shape(
-      fonts.font(latin_id).expect("pinned Latin font"),
-      latin_id,
-      "Variable width",
-      15.0,
-   ).expect("shape pinned Latin text").to_owned_shape();
-   let cjk_shape = shaper.shape(
-      fonts.font(cjk_id).expect("pinned CJK font"),
-      cjk_id,
-      "静态视觉对比",
-      15.0,
-   ).expect("shape pinned CJK text").to_owned_shape();
-   let mut raster = text::RasterCtx::default();
-   let mut atlas = text::Atlas::new(512, 512);
-   atlas.set_counters_enabled(true);
-   let mut vertices = Vec::with_capacity(128);
-   let mut indices = Vec::with_capacity(192);
-   let color = api::Color::rgba(0.1, 0.1, 0.1, 1.0);
-   let handle = api::ImageHandle(1);
-
-   let cold_latin = latin_shape.bake_counted_into_with(
-      fonts.font(latin_id).expect("pinned Latin font"),
-      &mut raster,
-      &mut atlas,
-      &mut vertices,
-      &mut indices,
-      color,
-      handle,
-      0.0,
-      30.0,
-      3.0,
-   );
-   let cold_cjk = cjk_shape.bake_counted_into_with(
-      fonts.font(cjk_id).expect("pinned CJK font"),
-      &mut raster,
-      &mut atlas,
-      &mut vertices,
-      &mut indices,
-      color,
-      handle,
-      0.0,
-      60.0,
-      3.0,
-   );
-   let cold_cache_hits = atlas.glyph_cache_hits();
-   let cold_cache_misses = atlas.glyph_cache_misses();
-   let cold_rasterizations = atlas.rasterization_count();
-   let cold_dirty_pixels = atlas.dirty_rect()
-      .map_or(0, |rect| u64::from(rect.w).saturating_mul(u64::from(rect.h)));
-   let cold_vertices = vertices.len() as u64;
-   let mut stats = VariableAxesTextStats {
-      checksum: u64::from(cold_latin.vb.len)
-         .wrapping_add(u64::from(cold_cjk.vb.len))
-         .wrapping_add(vertices.len() as u64)
-         .wrapping_add(indices.len() as u64),
-      cold_cache_hits,
-      cold_cache_misses,
-      cold_rasterizations,
-      cold_dirty_pixels,
-      cold_vertices,
-      resident_glyphs: atlas.glyph_count() as u64,
-      ..VariableAxesTextStats::default()
-   };
-   if !warm_replay
-   {
-      return stats;
-   }
-
-   atlas.clear_dirty();
-   vertices.clear();
-   indices.clear();
-   let warm_latin = latin_shape.bake_counted_into_with(
-      fonts.font(latin_id).expect("pinned Latin font"),
-      &mut raster,
-      &mut atlas,
-      &mut vertices,
-      &mut indices,
-      color,
-      handle,
-      0.0,
-      30.0,
-      3.0,
-   );
-   let warm_cjk = cjk_shape.bake_counted_into_with(
-      fonts.font(cjk_id).expect("pinned CJK font"),
-      &mut raster,
-      &mut atlas,
-      &mut vertices,
-      &mut indices,
-      color,
-      handle,
-      0.0,
-      60.0,
-      3.0,
-   );
-   stats.warm_cache_hits = atlas.glyph_cache_hits().saturating_sub(cold_cache_hits);
-   stats.warm_cache_misses = atlas.glyph_cache_misses().saturating_sub(cold_cache_misses);
-   stats.warm_rasterizations = atlas.rasterization_count().saturating_sub(cold_rasterizations);
-   stats.warm_dirty_pixels = atlas.dirty_rect()
-      .map_or(0, |rect| u64::from(rect.w).saturating_mul(u64::from(rect.h)));
-   stats.warm_vertices = vertices.len() as u64;
-   stats.checksum = stats.checksum
-      .wrapping_add(u64::from(warm_latin.vb.len))
-      .wrapping_add(u64::from(warm_cjk.vb.len))
-      .wrapping_add(vertices.len() as u64)
-      .wrapping_add(indices.len() as u64)
-      .wrapping_add(stats.warm_cache_hits);
-   stats
-}
-
-fn text_variable_axes_case(smoke: bool) -> PerfCaseResult
-{
-   let (proof_fonts, proof_latin, proof_cjk) = comparison_variable_font_db();
-   let proof = run_variable_axes_text(&proof_fonts, proof_latin, proof_cjk, true);
-   let (fonts, latin_id, cjk_id) = comparison_variable_font_db();
-   let mut case = measured_architecture_case(
-      "cpu.architecture.text.variable_axes_3x",
-      smoke,
-      "Cold shaping and 3x rasterization for manifest-equivalent Latin normal-width and CJK regular-weight variable instances; explanatory counters prove an immediate unmeasured replay is atlas-resident.",
-      move || run_variable_axes_text(&fonts, latin_id, cjk_id, false).checksum,
-   );
-   case.cache_state = String::from("cold");
-   case.metrics.insert(String::from("device_scale"), 3.0);
-   case.metrics.insert(String::from("logical_font_px"), 15.0);
-   case.metrics.insert(String::from("physical_raster_px"), 45.0);
-   case.metrics.insert(String::from("cold_shape_runs"), 2.0);
-   case.metrics.insert(String::from("latin_variation_axes"), 2.0);
-   case.metrics.insert(String::from("cjk_variation_axes"), 1.0);
-   case.metrics.insert(String::from("latin_weight"), 400.0);
-   case.metrics.insert(String::from("latin_width"), 100.0);
-   case.metrics.insert(String::from("cjk_weight"), 400.0);
-   case.metrics.insert(String::from("cold_glyph_cache_hits"), proof.cold_cache_hits as f64);
-   case.metrics.insert(String::from("cold_glyph_cache_misses"), proof.cold_cache_misses as f64);
-   case.metrics.insert(String::from("cold_rasterizations"), proof.cold_rasterizations as f64);
-   case.metrics.insert(String::from("cold_dirty_pixels"), proof.cold_dirty_pixels as f64);
-   case.metrics.insert(String::from("cold_vertices"), proof.cold_vertices as f64);
-   case.metrics.insert(String::from("warm_glyph_cache_hits"), proof.warm_cache_hits as f64);
-   case.metrics.insert(String::from("warm_glyph_cache_misses"), proof.warm_cache_misses as f64);
-   case.metrics.insert(String::from("warm_rasterizations"), proof.warm_rasterizations as f64);
-   case.metrics.insert(String::from("warm_dirty_pixels"), proof.warm_dirty_pixels as f64);
-   case.metrics.insert(String::from("warm_vertices"), proof.warm_vertices as f64);
-   case.metrics.insert(String::from("resident_glyphs"), proof.resident_glyphs as f64);
    case
 }
 
@@ -3372,11 +3141,11 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    let mut builder = ui::DrawListBuilder::new();
    let mut labels = Vec::new();
 
-   text.begin_frame();
+   text.begin_frame_at_scale(1.0);
    for ch in 'A'..='Z'
    {
       let label = ch.to_string();
-      encode_matrix_label(&label, labels.len(), 1.0, 18.0, &mut text, &mut uploader, &mut builder);
+      encode_matrix_label(&label, labels.len(), 1.0, 16.0, &mut text, &mut uploader, &mut builder);
       labels.push(label);
    }
    let _ = text.finish_frame(&mut uploader, &mut builder);
@@ -3392,14 +3161,19 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    let pinned_label = labels.get(pinned_index).cloned().unwrap_or_else(|| String::from("A"));
 
    builder.clear();
-   text.begin_frame();
-   encode_matrix_label(&pinned_label, 0, 1.0, 18.0, &mut text, &mut uploader, &mut builder);
-   'pressure: for label in ["@", "%", "&", "W", "M", "Q"]
+   text.begin_frame_at_scale(1.0);
+   encode_matrix_label(&pinned_label, 0, 1.0, 16.0, &mut text, &mut uploader, &mut builder);
+   'pressure: for font_px in (17..=23).rev()
    {
-      encode_matrix_label(label, 0, 1.0, 15.0, &mut text, &mut uploader, &mut builder);
-      if text.atlas.eviction_count() > 0
+      for label in &labels
       {
-         break 'pressure;
+         encode_matrix_label(
+            label, 0, 1.0, font_px as f32, &mut text, &mut uploader, &mut builder,
+         );
+         if text.atlas.eviction_count() > 0
+         {
+            break 'pressure;
+         }
       }
    }
    let _ = text.finish_frame(&mut uploader, &mut builder);
@@ -3427,7 +3201,7 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
 fn text_paged_atlas_locality_case(smoke: bool) -> PerfCaseResult
 {
    let mut case = measured_architecture_case(
-      "cpu.architecture.text.paged_atlas_locality",
+      "cpu.architecture.text.paged_atlas_locality.single_scale",
       smoke,
       "Two bounded glyph pages under deterministic pressure while one visible page remains pinned and retains its resource identity.",
       move || run_paged_atlas_locality().checksum,
@@ -4613,11 +4387,6 @@ fn analytic_instance_drawlist(
       let rect = api::RectF::new(x, y, 16.0, 16.0);
       match family
       {
-         "hard_rect" => builder.rrect(
-            rect,
-            [0.0; 4],
-            api::Color::rgba(0.2, 0.55, 0.95, 0.9),
-         ),
          "rrect" => builder.rrect(
             rect,
             [3.0; 4],
@@ -6618,16 +6387,5 @@ mod tests
       {
          assert!(source.contains(required), "missing architecture proof scaling point {required}");
       }
-   }
-
-   #[test]
-   fn hard_rectangle_matrix_preserves_zero_radius_payload()
-   {
-      let list = analytic_instance_drawlist("hard_rect", 64, api::ImageHandle(7));
-      assert_eq!(list.items.len(), 64);
-      assert!(list.items.iter().all(|command| matches!(
-         command,
-         api::DrawCmd::RRect { radii, .. } if *radii == [0.0; 4]
-      )));
    }
 }

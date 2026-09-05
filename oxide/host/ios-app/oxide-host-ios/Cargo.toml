@@ -14,23 +14,33 @@ cc = "1.0"
 
 [dependencies]
 oxide-input = { path = "../../../crates/input" }
-oxide-platform-ios = { path = "../../../crates/platform-ios", features = ["tokio-runtime", "native-camera-bridge"] }
-oxide-perf-runner = { path = "../../../crates/perf-runner" }
+oxide-platform-ios = { path = "../../../crates/platform-ios", default-features = false, features = ["native-camera-bridge", "nametag-host-bridge"] }
+oxide-perf-runner = { path = "../../../crates/perf-runner", optional = true }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
 oxide-ui-core = { path = "../../../crates/ui-core" }
-oxide-test-scenes = { path = "../../../crates/test-scenes" }
+oxide-test-scenes = { path = "../../../crates/test-scenes", optional = true }
 oxide-timing = { path = "../../../crates/timing" }
-oxide-text = { path = "../../../crates/text" }
-oxide-permissions = { path = "../../../crates/permissions" }
+oxide-text = { path = "../../../crates/text", optional = true }
+oxide-permissions = { path = "../../../crates/permissions", optional = true }
 oxide-platform-api = { path = "../../../crates/platform-api" }
-oxide-networking = { path = "../../../crates/networking" }
-oxide-telemetry = { path = "../../../crates/telemetry" }
-png = "0.17"
+oxide-networking = { path = "../../../crates/networking", optional = true }
+oxide-telemetry = { path = "../../../crates/telemetry", optional = true }
+png = { version = "0.17", optional = true }
 libc = "0.2"
 mach2 = "0.4"
 
 [features]
+default = []
 ios-edr = []
-tokio-runtime = []
+tokio-runtime = ["oxide-platform-ios/tokio-runtime"]
 perf-host-stubs = []
+test-scenes-entrypoint = [
+   "dep:oxide-networking",
+   "dep:oxide-perf-runner",
+   "dep:oxide-permissions",
+   "dep:oxide-telemetry",
+   "dep:oxide-test-scenes",
+   "dep:oxide-text",
+   "dep:png",
+]

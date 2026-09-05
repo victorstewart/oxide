@@ -389,6 +389,45 @@ fn touch_surface_cancel_removes_active_touch() {
 }
 
 #[test]
+fn touch_surface_invalid_cancel_removes_active_touch() {
+    let mut surface = TouchSurfaceRecognizer::new();
+    let _ = surface.on_touch(&start(1, 40.0, 80.0));
+
+    let cancel = touch(api::TouchId(1), api::TouchPhase::Cancel, f32::NAN, f32::INFINITY);
+    let out = surface.on_touch(&cancel);
+
+    assert_eq!(surface.active_count(), 0);
+    assert_eq!(
+        out,
+        vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 0, x: 0.0, y: 0.0 }]
+    );
+}
+
+#[test]
+fn touch_surface_invalid_end_preserves_remaining_pan_anchor() {
+    let mut surface = TouchSurfaceRecognizer::new();
+    let _ = surface.on_touch(&start(1, 40.0, 80.0));
+    let _ = surface.on_touch(&start(2, 80.0, 80.0));
+
+    let end = touch(api::TouchId(2), api::TouchPhase::End, f32::NAN, f32::INFINITY);
+    assert_eq!(
+        surface.on_touch(&end),
+        vec![TouchSurfaceEvent::ActiveTouchesChanged { touch_count: 1, x: 40.0, y: 80.0 }]
+    );
+
+    assert_eq!(
+        surface.on_touch(&touch(api::TouchId(1), api::TouchPhase::Move, 40.0, 70.0)),
+        vec![TouchSurfaceEvent::Pan {
+            touch_count: 1,
+            x: 40.0,
+            y: 70.0,
+            dx: 0.0,
+            dy: -10.0,
+        }]
+    );
+}
+
+#[test]
 fn primary_touch_tracks_pointer_motion() {
     let mut tracker = PrimaryTouchTracker::default();
     let start = tracker.on_touch(&start(42, 10.0, 20.0), 10);

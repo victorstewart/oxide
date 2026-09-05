@@ -134,12 +134,131 @@ fn snapshot_rrect_basic() {
         if r > 200 && g < 80 && b < 80 {
             red_pixels += 1;
         }
-        if a > 0 && a < 255 {
+        if r > 0 && r < 255 && g < 8 && b < 8 {
             soft_edge_found = true;
         }
+        assert_eq!(a, 255, "opaque target gained an alpha hole");
     }
     assert!(soft_edge_found, "expected antialiased edge pixels");
     assert!(red_pixels > 2800 && red_pixels < 4500, "unexpected red area: {red_pixels}");
+}
+
+#[test]
+fn snapshot_source_over_keeps_an_opaque_destination_opaque()
+{
+   let width = 120_u32;
+   let height = 120_u32;
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(width, height, 3.0).expect("resize");
+
+   let mut list = api::DrawList::default();
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 40.0, 40.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.930, 0.905, 0.855, 1.0),
+   });
+   list.items.push(api::DrawCmd::ClipPush { rect: api::RectI::new(5, 5, 30, 30) });
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(10.0, 10.0, 12.0, 12.0),
+      radii: [2.0; 4],
+      color: api::Color::rgba(0.019, 0.024, 0.032, 0.4),
+   });
+   list.items.push(api::DrawCmd::ClipPop);
+   list.items.push(api::DrawCmd::ClipPush { rect: api::RectI::new(5, 5, 30, 30) });
+   list.items.push(api::DrawCmd::RRect {
+      rect: api::RectF::new(5.0, 30.0, 30.0, 1.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.680, 0.638, 0.575, 1.0),
+   });
+   list.items.push(api::DrawCmd::ClipPop);
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, bgra) = renderer.readback_bgra8().expect("readback");
+   let pixel = |x: u32, y: u32| {
+      let index = ((y * width + x) * 4) as usize;
+      [bgra[index + 2], bgra[index + 1], bgra[index], bgra[index + 3]]
+   };
+   let background = pixel(6, 6);
+   let shadow = pixel(36, 36);
+   let separator = pixel(60, 91);
+
+   for (label, actual, expected) in [
+      ("background", background, [247, 244, 238, 255]),
+      ("shadow", shadow, [198, 196, 192, 255]),
+      ("separator", separator, [215, 209, 199, 255]),
+   ]
+   {
+      for channel in 0 .. 3
+      {
+         assert!(
+            actual[channel].abs_diff(expected[channel]) <= 1,
+            "{label} RGB channel {channel}: expected {} +/- 1, got {}",
+            expected[channel],
+            actual[channel],
+         );
+      }
+      assert_eq!(actual[3], expected[3], "{label} alpha");
+   }
+}
+
+#[test]
+fn snapshot_sdf_edge_width_stays_bounded_at_device_scale()
+{
+   fn partial_edge_pixels(scale: u32) -> usize
+   {
+      let width = 32 * scale;
+      let height = 32 * scale;
+      let mut renderer = MetalRenderer::new_default().expect("metal");
+      renderer.resize(width, height, scale as f32).expect("resize");
+      let atlas_row = [80_u8, 96, 112, 143, 143, 112, 96, 80];
+      let mut atlas_bytes = Vec::with_capacity(atlas_row.len() * 4);
+      for _ in 0 .. 4
+      {
+         atlas_bytes.extend_from_slice(&atlas_row);
+      }
+      let atlas = renderer.image_create_a8(8, 4, &atlas_bytes, 8);
+      let list = api::DrawList {
+         items: vec![
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(0.0, 0.0, 32.0, 32.0),
+               radii: [0.0; 4],
+               color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            },
+            api::DrawCmd::GlyphRun { run: api::GlyphRun {
+               atlas,
+               atlas_revision: 1,
+               vb: api::VertexSpan { offset: 0, len: 4 },
+               ib: api::IndexSpan { offset: 0, len: 6 },
+               sdf: true,
+               color: api::Color::rgba(0.0, 0.0, 0.0, 1.0),
+            }},
+         ],
+         vertices: vec![
+            api::Vertex { x: 8.0, y: 8.0, u: 0.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 16.0, y: 8.0, u: 1.0, v: 0.0, rgba: 0 },
+            api::Vertex { x: 8.0, y: 24.0, u: 0.0, v: 1.0, rgba: 0 },
+            api::Vertex { x: 16.0, y: 24.0, u: 1.0, v: 1.0, rgba: 0 },
+         ],
+         indices: vec![0, 1, 2, 2, 1, 3],
+      };
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(&list);
+      renderer.submit(token).expect("submit");
+      let (_, _, bgra) = renderer.readback_bgra8().expect("readback");
+      let y = 16 * scale;
+      (8 * scale..16 * scale).filter(|x| {
+         let red = bgra[((y * width + *x) * 4 + 2) as usize];
+         (4..=250).contains(&red)
+      }).count()
+   }
+
+   let scale_one = partial_edge_pixels(1);
+   let scale_three = partial_edge_pixels(3);
+   assert!(scale_one > 0);
+   assert!(scale_three > 0);
+   assert!(scale_three <= scale_one + 2, "partial SDF edge grew from {scale_one} px at 1x to {scale_three} px at 3x");
 }
 
 #[test]
@@ -234,6 +353,10 @@ fn prepared_snapshot_reuses_mixed_buffers_and_matches_flat_output()
    let second_stats = renderer.last_stats();
    let (_, _, second_pixels) = renderer.readback_bgra8().expect("read clean prepared snapshot");
    assert_ne!(first_pixels, second_pixels);
+   assert!(
+      second_pixels.chunks_exact(4).all(|pixel| pixel[3] == 255),
+      "prepared source-over introduced alpha holes in an opaque target",
+   );
    assert_eq!(second_stats.backend_cache_hits, 4);
    assert_eq!(second_stats.backend_cache_misses, 0);
    assert_eq!(second_stats.chunks_prepared, 0);
@@ -736,6 +859,10 @@ fn prepared_layer_main_format_matches_flat_translucent_rrect_pixels()
    }
    let stats = renderer.last_stats();
    let (_, _, actual) = renderer.readback_bgra8().expect("read clean RRect layer");
+   assert!(
+      actual.chunks_exact(4).all(|pixel| pixel[3] == 255),
+      "retained-layer source-over introduced alpha holes in an opaque target",
+   );
    assert_eq!(stats.layer_cache_hits, 1);
    assert_eq!(stats.layer_cache_misses, 0);
    assert_eq!(stats.layer_offscreen_draws, 0);
@@ -2182,8 +2309,15 @@ fn snapshot_camera_nv12_optimized_tracks_bgra_benchmark() {
 
 fn solid_image(renderer: &mut MetalRenderer, bgra: [u8; 4]) -> api::ImageHandle
 {
-   let pixels = [bgra, bgra, bgra, bgra].concat();
+   let rgba = [bgra[2], bgra[1], bgra[0], bgra[3]];
+   let pixels = [rgba, rgba, rgba, rgba].concat();
    renderer.image_create_rgba8(2, 2, &pixels, 8)
+}
+
+fn split_image(renderer: &mut MetalRenderer, sampling: api::ImageSampling) -> api::ImageHandle
+{
+   let pixels = [255, 0, 0, 255, 0, 0, 255, 255];
+   renderer.image_create_rgba8_sampled(2, 1, &pixels, 8, sampling)
 }
 
 fn readback_pixel(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4]
@@ -2195,6 +2329,164 @@ fn readback_pixel(bgra: &[u8], width: u32, x: u32, y: u32) -> [u8; 4]
 fn assert_pixel_eq(actual: [u8; 4], expected: [u8; 4], label: &str)
 {
    assert_eq!(actual, expected, "{label}");
+}
+
+#[test]
+fn snapshot_rgba_image_upload_preserves_red_and_blue_channels()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(8, 8, 1.0).expect("resize");
+   let pixels = [255, 0, 0, 255].repeat(4);
+   let texture = renderer.image_create_rgba8(2, 2, &pixels, 8);
+   let mut list = api::DrawList::default();
+   list.items.push(api::DrawCmd::Image {
+      tex: texture,
+      dst: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+      src: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+      alpha: 1.0,
+   });
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   assert_eq!(readback_pixel(&pixels, 8, 4, 4), [0, 0, 255, 255]);
+}
+
+#[test]
+fn snapshot_runtime_image_sampling_covers_flat_image_families()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 60;
+   renderer.resize(width, 8, 1.0).expect("resize");
+   let nearest = split_image(&mut renderer, api::ImageSampling::Nearest);
+   let linear = split_image(&mut renderer, api::ImageSampling::Linear);
+   let mut list = api::DrawList::default();
+
+   for (tex, x) in [(nearest, 0.0), (linear, 10.0)]
+   {
+      list.items.push(api::DrawCmd::Image {
+         tex,
+         dst: api::RectF::new(x, 0.0, 8.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 1.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 20.0), (linear, 30.0)]
+   {
+      list.items.push(api::DrawCmd::NineSlice {
+         tex,
+         rect: api::RectF::new(x, 0.0, 8.0, 8.0),
+         slice: api::Insets::new(0.0, 0.0, 0.0, 0.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 40.0), (linear, 50.0)]
+   {
+      let offset = list.vertices.len() as u32;
+      list.vertices.extend_from_slice(&[
+         api::Vertex { x, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+         api::Vertex { x, y: 8.0, u: 0.0, v: 1.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 8.0, u: 1.0, v: 1.0, rgba: 0 },
+      ]);
+      list.items.push(api::DrawCmd::ImageMesh {
+         tex,
+         vb: api::VertexSpan { offset, len: 4 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         alpha: 1.0,
+      });
+   }
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   for x in [0, 20, 40]
+   {
+      assert_eq!(readback_pixel(&pixels, width, x + 3, 4), [0, 0, 255, 255]);
+      assert_eq!(readback_pixel(&pixels, width, x + 4, 4), [255, 0, 0, 255]);
+   }
+   for x in [10, 30, 50]
+   {
+      let transition = readback_pixel(&pixels, width, x + 3, 4);
+      assert!(
+         transition[0] > 40 && transition[2] > 40,
+         "linear resource at x={x} did not blend across the source transition: {transition:?}",
+      );
+   }
+}
+
+#[test]
+fn snapshot_runtime_image_sampling_covers_prepared_images_and_meshes()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   let width = 40;
+   renderer.resize(width, 8, 1.0).expect("resize");
+   let nearest = split_image(&mut renderer, api::ImageSampling::Nearest);
+   let linear = split_image(&mut renderer, api::ImageSampling::Linear);
+   let mut list = api::DrawList::default();
+   for (tex, x) in [(nearest, 0.0), (linear, 10.0)]
+   {
+      list.items.push(api::DrawCmd::Image {
+         tex,
+         dst: api::RectF::new(x, 0.0, 8.0, 8.0),
+         src: api::RectF::new(0.0, 0.0, 2.0, 1.0),
+         alpha: 1.0,
+      });
+   }
+   for (tex, x) in [(nearest, 20.0), (linear, 30.0)]
+   {
+      let offset = list.vertices.len() as u32;
+      list.vertices.extend_from_slice(&[
+         api::Vertex { x, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+         api::Vertex { x, y: 8.0, u: 0.0, v: 1.0, rgba: 0 },
+         api::Vertex { x: x + 8.0, y: 8.0, u: 1.0, v: 1.0, rgba: 0 },
+      ]);
+      list.items.push(api::DrawCmd::ImageMesh {
+         tex,
+         vb: api::VertexSpan { offset, len: 4 },
+         ib: api::IndexSpan { offset: 0, len: 0 },
+         alpha: 1.0,
+      });
+   }
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(9_950),
+      api::RenderChunkRevisions { resource: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      list,
+      api::ChunkIndexMode::Local,
+      &[
+         api::RenderResourceDependency { image: nearest, generation: 1 },
+         api::RenderResourceDependency { image: linear, generation: 1 },
+      ],
+   ).expect("sampled image chunk");
+   let snapshot = api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("sampled image snapshot");
+
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode sampled prepared snapshot");
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+
+   for x in [0, 20]
+   {
+      assert_eq!(readback_pixel(&pixels, width, x + 3, 4), [0, 0, 255, 255]);
+      assert_eq!(readback_pixel(&pixels, width, x + 4, 4), [255, 0, 0, 255]);
+   }
+   for x in [10, 30]
+   {
+      let transition = readback_pixel(&pixels, width, x + 3, 4);
+      assert!(
+         transition[0] > 40 && transition[2] > 40,
+         "prepared linear resource at x={x} did not blend: {transition:?}",
+      );
+   }
 }
 
 #[test]
@@ -2397,13 +2689,13 @@ fn snapshot_neon_marker_instance_arrays_match_distinctive_colors()
    let height = 112_u32;
    renderer.resize(width, height, 1.0).expect("resize");
    let colors = [
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
-      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 255]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 255]),
    ];
 
    for count in [1_usize, 2, 51, 52, 60, 61, 128]
@@ -2474,14 +2766,14 @@ fn snapshot_neon_marker_batches_keep_nonoverlapping_ring_slices()
    let size = 260_u32;
    renderer.resize(size, size, 1.0).expect("resize");
    let colors = [
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 249]),
-      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 249]),
-      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 249]),
-      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 249]),
-      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 249]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 0.0, 1.0), [0, 252, 0, 255]),
+      (api::Color::rgba(0.0, 0.0, 1.0, 1.0), [252, 0, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 0.0, 1.0), [0, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 1.0, 1.0), [252, 0, 252, 255]),
+      (api::Color::rgba(0.0, 1.0, 1.0, 1.0), [252, 252, 0, 255]),
+      (api::Color::rgba(1.0, 1.0, 1.0, 1.0), [252, 252, 252, 255]),
+      (api::Color::rgba(1.0, 0.0, 0.0, 1.0), [0, 0, 252, 255]),
    ];
    let markers = (0..1_024_usize)
       .map(|index| {

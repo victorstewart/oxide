@@ -91,7 +91,7 @@ fn encode_labels(
    builder: &mut DrawListBuilder,
 )
 {
-   text.begin_frame();
+   text.begin_frame_at_scale(2.0);
    for (index, label) in labels.iter().enumerate()
    {
       encode_label_text_profiled(

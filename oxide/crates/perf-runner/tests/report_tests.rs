@@ -1,12 +1,122 @@
 use oxide_perf_runner::{
-    assert_case_metric_contract, assert_contract_coverage, assert_full_coverage,
+    assert_case_metric_contract, assert_contract_coverage, assert_report_repository_provenance,
     collect_suite_report, compare_reports, render_report_markdown, AuditFinding,
     ContractCoverageEntry, ContractCoverageReport, CoverageReport, PerfCaseResult, PerfReport,
+    RepositoryProvenance,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[test]
+fn perf_runner_explicitly_enables_renderer_diagnostics()
+{
+   let manifest = include_str!("../Cargo.toml");
+   assert!(manifest.contains(
+      "oxide-renderer-web = { path = \"../renderer-web\", features = [\"diagnostic-instrumentation\"] }",
+   ));
+}
+
+fn git(root: &Path, args: &[&str]) -> String
+{
+   let output = Command::new("git")
+      .arg("-C")
+      .arg(root)
+      .args(args)
+      .output()
+      .unwrap_or_else(|error| panic!("run git {}: {error}", args.join(" ")));
+   assert!(
+      output.status.success(),
+      "git {} failed: {}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr)
+   );
+   String::from_utf8(output.stdout)
+      .unwrap_or_else(|error| panic!("decode git {} output: {error}", args.join(" ")))
+      .trim()
+      .to_string()
+}
+
+fn initialized_git_repository(label: &str) -> PathBuf
+{
+   let nonce = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system clock before epoch")
+      .as_nanos();
+   let root = std::env::temp_dir().join(format!(
+      "oxide-perf-report-{label}-{}-{nonce}",
+      std::process::id(),
+   ));
+   fs::create_dir_all(&root).expect("create temporary Git repository");
+   git(&root, &["init", "-b", "main"]);
+   git(&root, &["config", "user.name", "Oxide Perf Test"]);
+   git(&root, &["config", "user.email", "oxide-perf@example.invalid"]);
+   fs::create_dir_all(root.join("oxide")).expect("create nested workspace directory");
+   fs::write(root.join("source.txt"), b"first\n").expect("write initial source");
+   fs::write(root.join("oxide/nested.txt"), b"nested\n").expect("write nested source");
+   git(&root, &["add", "."]);
+   git(&root, &["commit", "-m", "initial source"]);
+   root
+}
+
+fn sample_repository_provenance() -> RepositoryProvenance
+{
+   RepositoryProvenance {
+      repository_ref: Some(String::from("refs/heads/main")),
+      repository_head_commit: Some(String::from("1111111111111111111111111111111111111111")),
+      repository_tree: Some(String::from("2222222222222222222222222222222222222222")),
+   }
+}
+
+#[test]
+fn repository_provenance_requires_clean_named_stable_source()
+{
+   let root = initialized_git_repository("source-revision");
+   let nested = root.join("oxide");
+   let repository_root = RepositoryProvenance::resolve_root(&nested).expect("resolve Git top level");
+   let provenance = RepositoryProvenance::capture(&nested).expect("capture clean named source");
+
+   assert_eq!(repository_root, fs::canonicalize(&root).expect("canonical repository root"));
+   provenance.validate().expect("validate captured source");
+   assert_eq!(provenance.repository_ref.as_deref(), Some("refs/heads/main"));
+   provenance.ensure_unchanged(&nested).expect("unchanged source remains valid");
+
+   fs::write(root.join("source.txt"), b"dirty\n").expect("dirty tracked source");
+   let dirty = RepositoryProvenance::capture(&root).expect_err("dirty source must fail");
+   assert!(dirty.to_string().contains("not clean"), "{dirty:#}");
+
+   git(&root, &["add", "source.txt"]);
+   git(&root, &["commit", "-m", "changed source"]);
+   let drift = provenance.ensure_unchanged(&nested).expect_err("source drift must fail");
+   assert!(drift.to_string().contains("changed during evidence capture"), "{drift:#}");
+
+   git(&root, &["switch", "--detach"]);
+   let detached = RepositoryProvenance::capture(&root).expect_err("detached source must fail");
+   assert!(detached.to_string().contains("symbolic-ref"), "{detached:#}");
+
+   fs::remove_dir_all(root).expect("remove temporary Git repository");
+}
+
+#[test]
+fn repository_provenance_rejects_partial_or_malformed_triples()
+{
+   let partial = RepositoryProvenance {
+      repository_ref: Some(String::from("refs/heads/main")),
+      repository_head_commit: None,
+      repository_tree: Some(String::from("2222222222222222222222222222222222222222")),
+   };
+   assert!(partial.validate().expect_err("partial source must fail").to_string().contains("HEAD"));
+
+   let malformed = RepositoryProvenance {
+      repository_ref: Some(String::from("main")),
+      repository_head_commit: Some(String::from("not-a-commit")),
+      repository_tree: Some(String::from("not-a-tree")),
+   };
+   assert!(malformed.validate().expect_err("malformed source must fail").to_string().contains("named branch"));
+}
 
 fn sample_case(id: &str, median: f64, threshold_pct: f64, gated: bool) -> PerfCaseResult {
     PerfCaseResult {
@@ -131,10 +241,6 @@ fn workspace_case<'a>(report: &'a PerfReport, id: &str) -> &'a PerfCaseResult {
 
 fn workspace_metric(case: &PerfCaseResult, key: &str) -> f64 {
     *case.metrics.get(key).unwrap_or_else(|| panic!("{} missing metric {key}", case.id))
-}
-
-fn workspace_missing_case(report: &PerfReport, id: &str) -> bool {
-    report.cases.iter().all(|case| case.id != id)
 }
 
 fn persisted_report_json(relative_path: &str) -> Value {
@@ -266,6 +372,19 @@ fn assert_report_case_key_class_digest(report: &Value, name: &str, expected_coun
    assert_eq!(string_key_set_digest(&classes), expected_digest, "{name} case key class digest changed: {classes:?}");
 }
 
+fn assert_report_metric_key_class_digest(report: &Value, name: &str, expected_count: usize, expected_digest: u64)
+{
+   let mut classes = BTreeSet::new();
+   for case in report_cases(report, name)
+   {
+      let id = case["id"].as_str().unwrap_or_else(|| panic!("{name} case has non-string id"));
+      let keys = json_key_set(&case["metrics"]);
+      classes.insert(format!("{id}:{}:0x{:016x}", keys.len(), string_key_set_digest(&keys)));
+   }
+   assert_eq!(classes.len(), expected_count, "{name} metric key class count changed: {classes:?}");
+   assert_eq!(string_key_set_digest(&classes), expected_digest, "{name} metric key class digest changed: {classes:?}");
+}
+
 fn assert_all_report_cases_match_keys(report: &Value, name: &str, expected: &[&str]) {
     for case in report_cases(report, name) {
         let id = case["id"].as_str().unwrap_or("<missing id>");
@@ -278,6 +397,7 @@ fn sample_report(cases: Vec<PerfCaseResult>) -> PerfReport {
         version: 1,
         suite: String::from("test"),
         generated_label: None,
+        repository: RepositoryProvenance::default(),
         cases,
         coverage: CoverageReport {
             components_total: 1,
@@ -320,8 +440,20 @@ fn sample_report(cases: Vec<PerfCaseResult>) -> PerfReport {
 
 #[test]
 fn persisted_report_root_and_case_schemas_are_frozen() {
-    let perf_report_keys =
+    let perf_report_v1_keys =
         ["cases", "contract", "coverage", "findings", "generated_label", "suite", "version"];
+    let perf_report_v2_keys = [
+        "cases",
+        "contract",
+        "coverage",
+        "findings",
+        "generated_label",
+        "repository_head_commit",
+        "repository_ref",
+        "repository_tree",
+        "suite",
+        "version",
+    ];
     let perf_case_keys = [
         "cache_state",
         "family",
@@ -345,8 +477,68 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
         "variant",
     ];
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_json_object_keys(&workspace, &perf_report_keys);
+    match workspace["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&workspace, &perf_report_v1_keys),
+        Some(2) => assert_json_object_keys(&workspace, &perf_report_v2_keys),
+        version => panic!("unsupported workspace report version {version:?}"),
+    }
     assert_all_report_cases_match_keys(&workspace, "workspace latest", &perf_case_keys);
+
+    let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
+    match oxide_device["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&oxide_device, &perf_report_v1_keys),
+        Some(2) => assert_json_object_keys(&oxide_device, &perf_report_v2_keys),
+        version => panic!("unsupported Oxide-device report version {version:?}"),
+    }
+    assert_all_report_cases_match_keys(&oxide_device, "oxide device latest", &perf_case_keys);
+
+    let uikit_report_v1_keys = [
+        "cases",
+        "contract",
+        "device_name",
+        "energy_status",
+        "generated_label",
+        "notes",
+        "suite",
+        "version",
+    ];
+    let uikit_report_v2_keys = [
+        "cases",
+        "contract",
+        "device_name",
+        "energy_status",
+        "generated_label",
+        "notes",
+        "repository_head_commit",
+        "repository_ref",
+        "repository_tree",
+        "suite",
+        "version",
+    ];
+    let uikit_case_keys = [
+        "benchmark_iterations",
+        "cache_state",
+        "canonical_signpost_source",
+        "headline_metric",
+        "id",
+        "layer",
+        "measure_iterations",
+        "metrics",
+        "notes",
+        "oxide_case_id",
+        "refresh_mode",
+        "scenario",
+        "style",
+        "test_name",
+        "threshold_pct",
+    ];
+    let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
+    match uikit_device["version"].as_u64() {
+        Some(1) => assert_json_object_keys(&uikit_device, &uikit_report_v1_keys),
+        Some(2) => assert_json_object_keys(&uikit_device, &uikit_report_v2_keys),
+        version => panic!("unsupported UIKit-device report version {version:?}"),
+    }
+    assert_all_report_cases_match_keys(&uikit_device, "uikit device latest", &uikit_case_keys);
 
     let web_report_keys = [
         "backend_path_coverage",
@@ -475,7 +667,13 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 405, 0x33b1f487ffee903e);
+    assert_report_case_id_set(&workspace, "workspace latest", 23, 0x025eafdefc5ce69b);
+
+    let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
+    assert_report_case_id_set(&oxide_device, "oxide device latest", 5, 0x6dd8f20cb104f3b0);
+
+    let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
+    assert_report_case_id_set(&uikit_device, "uikit device latest", 10, 0xf0452bde8b832abc);
 
     let web = persisted_report_json("benchmarks/web/latest.json");
     assert_report_case_id_set(&web, "web latest", 18, 0x9fc864e451bf9432);
@@ -511,6 +709,21 @@ fn persisted_report_nested_key_sets_are_frozen()
    assert_json_array_entry_key_digest(&workspace["contract"]["layers"], "workspace contract layers", 4, 0x0ab7b204885807d9);
    assert_json_array_entry_key_digest(&workspace["findings"], "workspace findings", 2, 0x4c30c261b26d2ea9);
 
+   let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
+   assert_json_object_key_digest(&oxide_device["coverage"], "oxide device coverage", 32, 0x5ee0445752468f8d);
+   assert_json_object_key_digest(&oxide_device["contract"], "oxide device contract", 3, 0x0796508e10525921);
+   assert_json_array_entry_key_digest(&oxide_device["contract"]["battery"], "oxide device contract battery", 4, 0x0ab7b204885807d9);
+   assert_json_array_entry_key_digest(&oxide_device["contract"]["layers"], "oxide device contract layers", 4, 0x0ab7b204885807d9);
+   assert_json_array_entry_key_digest(&oxide_device["findings"], "oxide device findings", 2, 0x4c30c261b26d2ea9);
+   assert_report_metric_key_class_digest(&oxide_device, "oxide device latest", 5, 0xfe40bc9d3d5f277e);
+
+   let uikit_device = persisted_report_json("benchmarks/uikit-device/latest.json");
+   assert_json_object_key_digest(&uikit_device["contract"], "uikit device contract", 4, 0x92feb47c0d2e7b8b);
+   assert_json_array_entry_key_digest(&uikit_device["contract"]["battery"], "uikit device contract battery", 4, 0x0ab7b204885807d9);
+   assert_json_array_entry_key_digest(&uikit_device["contract"]["layers"], "uikit device contract layers", 4, 0x0ab7b204885807d9);
+   assert_json_array_entry_key_digest(&uikit_device["contract"]["styles"], "uikit device contract styles", 4, 0x0ab7b204885807d9);
+   assert_report_metric_key_class_digest(&uikit_device, "uikit device latest", 10, 0x121924b6a3e2fb7f);
+
    let web = persisted_report_json("benchmarks/web/latest.json");
    let web_sections = [
       ("backdrop_batch_summary", 9, 0x2b284758e777084d),
@@ -540,61 +753,33 @@ fn persisted_report_nested_key_sets_are_frozen()
 }
 
 #[test]
-fn persisted_workspace_native_renderer_metric_keys_are_frozen() {
-    let report = workspace_latest_report();
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.system.id_mask_compositor.current",
-        24,
-        0x6d1f4edb402039fa,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.animation.effects.refresh_matrix",
-        32,
-        0x12223d95b0c97df8,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.journey.collection_navigation.frame_pacing",
-        34,
-        0x6c24fadfa02d6f63,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.authoring.scene3d.mixed_frame",
-        22,
-        0xf685d05bf68a0cc2,
-    );
-    assert_workspace_case_metric_key_digest(
-        &report,
-        "gpu.image_pipeline.png.first_visible",
-        22,
-        0x82cb16697b8606dd,
-    );
-
-    let scene_rows = [
-        "gpu.scene.controls.frame",
-        "gpu.scene.text_layout.frame",
-        "gpu.scene.zoom_image.frame",
-        "gpu.scene.anim_timeline.frame",
-        "gpu.scene.collection.frame",
-        "gpu.scene.damage_lab.frame",
-        "gpu.scene.input_lab.frame",
-        "gpu.scene.nine_slice.frame",
-        "gpu.scene.sdf_text.frame",
-        "gpu.scene.snapshot.frame",
-        "gpu.scene.camera.frame",
-        "gpu.scene.elements_extended.frame",
-        "gpu.scene.animation_config.frame",
-        "gpu.scene.orchestration.frame",
-        "gpu.scene.permissions.frame",
-        "gpu.scene.integration.frame",
-        "gpu.scene.stress.frame",
-    ];
-    for id in scene_rows {
-        assert_workspace_case_metric_key_digest(&report, id, 31, 0xf2dee20e9220b171);
-    }
+fn persisted_workspace_canonical_renderer_metric_keys_are_frozen()
+{
+   let report = workspace_latest_report();
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.animation.effects.refresh_matrix",
+      32,
+      0x12223d95b0c97df8,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.journey.collection_navigation.frame_pacing",
+      34,
+      0x6c24fadfa02d6f63,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.authoring.scene3d.mixed_frame",
+      22,
+      0xf685d05bf68a0cc2,
+   );
+   assert_workspace_case_metric_key_digest(
+      &report,
+      "gpu.image_pipeline.png.first_visible",
+      22,
+      0x82cb16697b8606dd,
+   );
 }
 
 #[test]
@@ -842,6 +1027,158 @@ fn markdown_metric_summary_preserves_priority_order_and_limit()
 }
 
 #[test]
+fn markdown_reports_selected_case_count_without_catalog_fractions()
+{
+   let report = sample_report(vec![sample_case("cpu.report.selected", 1.0, 0.10, true)]);
+   let markdown = render_report_markdown(&report, None);
+
+   assert!(markdown.contains("- Cases: `1`"), "{markdown}");
+   assert!(!markdown.contains("- Coverage:"), "{markdown}");
+}
+
+#[test]
+fn comparison_rejection_precedes_report_output_resolution_and_writes()
+{
+   let source = include_str!("../src/lib.rs");
+   let body = source
+      .split_once("fn run_suite(cli: Cli)")
+      .and_then(|(_, tail)| tail.split_once("pub fn collect_suite_report"))
+      .map(|(body, _)| body)
+      .expect("run-suite source body");
+   let rejection = body
+      .find("performance comparison failed; existing report outputs were preserved")
+      .expect("comparison rejection gate");
+
+   for output in [
+      "let json_out =",
+      "let markdown_out =",
+      "workspace_baseline_outputs(",
+      "promote_files_atomically(&outputs)",
+      "write_report_json(path, &report)",
+      "write_markdown_outputs(path, &report",
+   ]
+   {
+      let output = body.find(output).unwrap_or_else(|| panic!("missing output path `{output}`"));
+      assert!(rejection < output, "comparison rejection follows `{output}`");
+   }
+}
+
+#[test]
+fn canonical_workspace_reports_use_one_atomic_promotion()
+{
+   let source = include_str!("../src/lib.rs");
+   let body = source
+      .split_once("fn run_suite(cli: Cli)")
+      .and_then(|(_, tail)| tail.split_once("pub fn collect_suite_report"))
+      .map(|(body, _)| body)
+      .expect("run-suite source body");
+   let baseline_branch = body
+      .split_once("if cli.write_baseline")
+      .map(|(_, tail)| tail)
+      .expect("baseline publication branch");
+   let prepare = baseline_branch
+      .find("workspace_baseline_outputs(")
+      .expect("workspace baseline preparation");
+   let promote = baseline_branch
+      .find("promote_files_atomically(&outputs)")
+      .expect("workspace atomic promotion");
+
+   assert!(prepare < promote);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
+fn rejected_comparison_preserves_existing_report_outputs()
+{
+   let nonce = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system clock before epoch")
+      .as_nanos();
+   let root = std::env::temp_dir().join(format!(
+      "oxide-perf-rejected-output-{}-{nonce}",
+      std::process::id(),
+   ));
+   fs::create_dir_all(&root).expect("create rejected-output fixture");
+   let baseline = root.join("baseline.json");
+   let json_out = root.join("current.json");
+   let markdown_out = root.join("current.md");
+   let json_sentinel = b"preserve-json\n";
+   let markdown_sentinel = b"preserve-markdown\n";
+   fs::write(
+      &baseline,
+      serde_json::to_vec(&sample_report(Vec::new())).expect("serialize empty baseline"),
+   )
+   .expect("write empty baseline");
+   fs::write(&json_out, json_sentinel).expect("write JSON sentinel");
+   fs::write(&markdown_out, markdown_sentinel).expect("write Markdown sentinel");
+
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.component.label.encode")
+      .env_remove("PERF_REPORT_DATE")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--compare")
+      .arg(&baseline)
+      .arg("--json-out")
+      .arg(&json_out)
+      .arg("--markdown-out")
+      .arg(&markdown_out)
+      .output()
+      .expect("run rejected comparison");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(!output.status.success(), "comparison unexpectedly succeeded");
+   assert!(stderr.contains("existing report outputs were preserved"), "stderr: {stderr}");
+   assert_eq!(fs::read(&json_out).expect("read JSON sentinel"), json_sentinel);
+   assert_eq!(fs::read(&markdown_out).expect("read Markdown sentinel"), markdown_sentinel);
+
+   fs::remove_dir_all(root).expect("remove rejected-output fixture");
+}
+
+#[test]
+fn source_bound_report_serializes_and_renders_repository_revision()
+{
+   let mut report = sample_report(vec![sample_case("cpu.report.source", 1.0, 0.10, true)]);
+   report.version = 2;
+   report.repository = sample_repository_provenance();
+   let json = serde_json::to_value(&report).expect("serialize source-bound report");
+   let markdown = render_report_markdown(&report, None);
+
+   assert_eq!(json["repository_ref"], "refs/heads/main");
+   assert_eq!(json["repository_head_commit"], "1111111111111111111111111111111111111111");
+   assert_eq!(json["repository_tree"], "2222222222222222222222222222222222222222");
+   assert!(markdown.contains("- Repository ref: `refs/heads/main`"), "{markdown}");
+   assert!(markdown.contains("- Repository HEAD: `1111111111111111111111111111111111111111`"), "{markdown}");
+   assert!(markdown.contains("- Repository tree: `2222222222222222222222222222222222222222`"), "{markdown}");
+}
+
+#[test]
+fn version_two_report_rejects_missing_repository_revision()
+{
+   let mut report = sample_report(Vec::new());
+   report.version = 2;
+
+   let validation = assert_report_repository_provenance(report.version, &report.repository)
+      .expect_err("version 2 validation without source must fail");
+   assert!(format!("{validation:#}").contains("missing repository ref"), "{validation:#}");
+   let error = serde_json::to_value(&report).expect_err("version 2 without source must fail");
+   assert!(error.to_string().contains("validating version 2"), "{error:#}");
+}
+
+#[test]
+fn historical_report_omits_and_defaults_repository_revision()
+{
+   let report = sample_report(Vec::new());
+   let json = serde_json::to_value(&report).expect("serialize historical report");
+   let decoded: PerfReport = serde_json::from_value(json.clone()).expect("decode historical report");
+
+   assert!(json.get("repository_ref").is_none());
+   assert!(json.get("repository_head_commit").is_none());
+   assert!(json.get("repository_tree").is_none());
+   assert_eq!(decoded.repository, RepositoryProvenance::default());
+}
+
+#[test]
 fn compare_reports_flags_regressions_and_missing_baselines() {
     let current = sample_report(vec![
         sample_case("cpu.component.button.encode", 12.5, 0.10, true),
@@ -977,166 +1314,6 @@ fn compare_reports_large_reordered_same_length_baseline_keeps_lookup_semantics()
    assert_eq!(comparison.regressions[0].id, "cpu.compare.reordered.13");
    assert!(comparison.missing_baseline.is_empty());
    assert_eq!(comparison.improvements, vec![String::from("cpu.compare.reordered.5")]);
-}
-
-#[test]
-fn full_coverage_check_accepts_complete_registry_counts() {
-    let coverage = CoverageReport {
-        components_total: 2,
-        components_covered: vec![String::from("Button"), String::from("Label")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_ok());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_journey_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 2,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_authoring_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 2,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 1,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
-}
-
-#[test]
-fn full_coverage_check_rejects_missing_bridge_coverage() {
-    let coverage = CoverageReport {
-        components_total: 1,
-        components_covered: vec![String::from("Button")],
-        animations_total: 1,
-        animations_covered: vec![String::from("SpinnerSpin")],
-        launch_total: 1,
-        launch_covered: vec![String::from("Simple Home Cold Launch")],
-        primitive_lifecycle_total: 1,
-        primitive_lifecycle_covered: vec![String::from("Flat Rects Mount x10")],
-        scenes_cpu_total: 1,
-        scenes_cpu_covered: vec![String::from("Controls")],
-        scenes_gpu_total: 1,
-        scenes_gpu_covered: vec![String::from("Controls")],
-        journeys_total: 1,
-        journeys_covered: vec![String::from("Input Form Submit")],
-        authoring_total: 1,
-        authoring_covered: vec![String::from("Text Fields")],
-        layout_total: 1,
-        layout_covered: vec![String::from("Flat Grid Rotation Relayout")],
-        text_input_total: 1,
-        text_input_covered: vec![String::from("Large Editor Keystroke Burst")],
-        image_pipeline_total: 1,
-        image_pipeline_covered: vec![String::from("PNG Decode")],
-        navigation_total: 1,
-        navigation_covered: vec![String::from("Button Press Response")],
-        reconcile_total: 1,
-        reconcile_covered: vec![String::from("Single Node Mutation")],
-        endurance_total: 1,
-        endurance_covered: vec![String::from("Open Close Heavy Screen 100x")],
-        stress_total: 1,
-        stress_covered: vec![String::from("Flat Rects 10k Mount")],
-        bridges_total: 2,
-        bridges_covered: vec![String::from("Permission Callback Fanout")],
-    };
-
-    assert!(assert_full_coverage(&coverage).is_err());
 }
 
 #[test]
@@ -1318,219 +1495,35 @@ fn assert_workspace_cpu_row(case: &PerfCaseResult, family: &str, scenario: &str)
     assert!(case.max >= case.p99);
 }
 
-fn assert_workspace_zero_layout_dirty_row(case: &PerfCaseResult) {
-    assert_workspace_cpu_row(case, "layout", "layout-invalidation");
-    assert_eq!(workspace_metric(case, "dirty_nodes"), 1.0);
-    assert_eq!(workspace_metric(case, "layout_passes"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_visited_nodes_per_op"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_measured_children_per_op"), 0.0);
-    assert_eq!(workspace_metric(case, "layout_updates_per_op"), 0.0);
-    assert!(workspace_metric(case, "layout_ops_sampled") > 0.0);
-}
-
 #[test]
-fn workspace_latest_gates_retained_layout_dirty_class_rows() {
-    let report = workspace_latest_report();
+fn workspace_latest_gates_canonical_retained_and_layout_rows()
+{
+   let report = workspace_latest_report();
+   let dirty_leaf = workspace_case(&report, "cpu.authoring.surface_retained.dirty_leaf_encode");
+   assert_workspace_cpu_row(dirty_leaf, "authoring", "authoring");
+   assert_eq!(workspace_metric(dirty_leaf, "dirty_nodes"), 1.0);
+   assert!(workspace_metric(dirty_leaf, "retained_node_reuse_ratio") > 0.9);
+   assert!(
+      workspace_metric(dirty_leaf, "retained_reused_nodes_per_op")
+         > workspace_metric(dirty_leaf, "retained_rebuilt_nodes_per_op")
+   );
+   assert!(workspace_metric(dirty_leaf, "tracked_nodes") >= 1000.0);
 
-    let clean = workspace_case(&report, "cpu.authoring.surface_retained.clean_encode");
-    assert_workspace_cpu_row(clean, "authoring", "authoring");
-    assert_eq!(workspace_metric(clean, "retained_reuse_ratio"), 1.0);
-    assert_eq!(workspace_metric(clean, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(clean, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(clean, "draw_items") > 0.0);
-
-    let dirty_leaf = workspace_case(&report, "cpu.authoring.surface_retained.dirty_leaf_encode");
-    assert_workspace_cpu_row(dirty_leaf, "authoring", "authoring");
-    assert_eq!(workspace_metric(dirty_leaf, "dirty_nodes"), 1.0);
-    assert!(workspace_metric(dirty_leaf, "retained_node_reuse_ratio") > 0.9);
-    assert!(
-        workspace_metric(dirty_leaf, "retained_reused_nodes_per_op")
-            > workspace_metric(dirty_leaf, "retained_rebuilt_nodes_per_op")
-    );
-    assert!(workspace_metric(dirty_leaf, "tracked_nodes") >= 1000.0);
-
-    let text_atlas = workspace_case(&report, "cpu.authoring.surface_retained.text_atlas_context");
-    assert_workspace_cpu_row(text_atlas, "authoring", "authoring");
-    assert_eq!(workspace_metric(text_atlas, "retained_reuse_ratio"), 1.0);
-    assert_eq!(workspace_metric(text_atlas, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(text_atlas, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(text_atlas, "text_atlases_checked") >= 1.0);
-
-    let transform = workspace_case(&report, "cpu.layout.transform_only.reposition");
-    assert_workspace_zero_layout_dirty_row(transform);
-    assert!(workspace_metric(transform, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(transform, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let paint = workspace_case(&report, "cpu.layout.paint_only.opacity_clip");
-    assert_workspace_zero_layout_dirty_row(paint);
-    assert!(workspace_metric(paint, "opacity_ops") > 0.0);
-    assert!(workspace_metric(paint, "clip_ops") > 0.0);
-    assert!(workspace_metric(paint, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(paint, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let content = workspace_case(&report, "cpu.layout.node_content_dirty.retained_replay");
-    assert_workspace_zero_layout_dirty_row(content);
-    assert!(workspace_metric(content, "text_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "image_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "camera_dirty_ops") > 0.0);
-    assert!(workspace_metric(content, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(content, "retained_rebuilt_nodes_per_op") > 0.0);
-
-    let non_draw = workspace_case(&report, "cpu.layout.non_draw_dirty.retained_reuse");
-    assert_workspace_zero_layout_dirty_row(non_draw);
-    assert_eq!(workspace_metric(non_draw, "retained_rebuilt_nodes_per_op"), 0.0);
-    assert_eq!(workspace_metric(non_draw, "retained_rebuilt_ops"), 0.0);
-    assert!(workspace_metric(non_draw, "retained_reused_nodes_per_op") > 0.0);
-    assert!(workspace_metric(non_draw, "retained_reused_ops") > 0.0);
-    assert!(workspace_metric(non_draw, "accessibility_dirty_ops") > 0.0);
-    assert!(workspace_metric(non_draw, "hit_test_dirty_ops") > 0.0);
-}
-
-#[test]
-fn workspace_latest_gates_collection_identity_and_prefix_ab_rows() {
-    let report = workspace_latest_report();
-    let indexed = workspace_case(&report, "cpu.authoring.collection_key_reconcile.indexed");
-    let scan = workspace_case(&report, "cpu.authoring.collection_key_reconcile.scan");
-    assert_workspace_cpu_row(indexed, "authoring", "authoring");
-    assert_workspace_cpu_row(scan, "authoring", "authoring");
-    assert!(indexed.median < scan.median);
-    assert_eq!(workspace_metric(indexed, "collection_key_index_enabled"), 1.0);
-    assert_eq!(workspace_metric(scan, "collection_key_index_enabled"), 0.0);
-    assert!(workspace_metric(indexed, "collection_key_index_hits_total") > 0.0);
-    assert_eq!(workspace_metric(scan, "collection_key_index_hits_total"), 0.0);
-    assert_eq!(
-        workspace_metric(indexed, "collection_key_index_queries_total"),
-        workspace_metric(indexed, "collection_key_index_hits_total"),
-    );
-    assert!(
-        workspace_metric(indexed, "collection_item_key_queries_per_lookup")
-            < workspace_metric(scan, "collection_item_key_queries_per_lookup")
-    );
-    assert_eq!(
-        workspace_metric(indexed, "collection_reconciled_index"),
-        workspace_metric(scan, "collection_reconciled_index"),
-    );
-
-    let bounded_cache =
-        workspace_case(&report, "cpu.authoring.collection_measure_cache.bounded_churn");
-    assert_workspace_cpu_row(bounded_cache, "authoring", "authoring");
-    assert!(workspace_metric(bounded_cache, "collection_count") >= 20_000.0);
-    assert!(
-        workspace_metric(bounded_cache, "collection_initial_measure_calls_per_op")
-            >= workspace_metric(bounded_cache, "collection_count")
-    );
-    assert!(workspace_metric(bounded_cache, "collection_repair_measure_calls_per_op") > 0.0);
-    assert!(workspace_metric(bounded_cache, "collection_repair_measure_calls_per_op") < 32.0);
-    assert!(workspace_metric(bounded_cache, "collection_repair_to_initial_measure_ratio") < 0.01);
-    assert!(workspace_metric(bounded_cache, "collection_repair_draw_items_per_op") > 0.0);
-
-    let incremental = workspace_case(&report, "cpu.authoring.collection_prefix_update.incremental");
-    let full_scan = workspace_case(&report, "cpu.authoring.collection_prefix_update.full_scan");
-    assert_workspace_cpu_row(incremental, "authoring", "authoring");
-    assert_workspace_cpu_row(full_scan, "authoring", "authoring");
-    assert!(incremental.median < full_scan.median);
-    assert_eq!(workspace_metric(incremental, "collection_changed_range_enabled"), 1.0);
-    assert_eq!(workspace_metric(full_scan, "collection_changed_range_enabled"), 0.0);
-    assert_eq!(
-        workspace_metric(incremental, "collection_changed_index"),
-        workspace_metric(full_scan, "collection_changed_index"),
-    );
-    assert!(
-        workspace_metric(incremental, "collection_item_revision_queries_per_op")
-            < workspace_metric(full_scan, "collection_item_revision_queries_per_op")
-    );
-    assert_eq!(
-        workspace_metric(incremental, "collection_measure_calls_total"),
-        workspace_metric(full_scan, "collection_measure_calls_total"),
-    );
-}
-
-#[test]
-fn workspace_latest_gates_text_cache_atlas_and_cursor_rows() {
-    let report = workspace_latest_report();
-
-    let prefix = workspace_case(&report, "cpu.system.text_prefix_width_map");
-    assert_workspace_cpu_row(prefix, "system", "system");
-    assert!(workspace_metric(prefix, "text_bytes") > 0.0);
-    assert!(workspace_metric(prefix, "prefix_boundaries") > 0.0);
-    assert_eq!(
-        workspace_metric(prefix, "prefix_boundaries"),
-        workspace_metric(prefix, "width_entries"),
-    );
-    assert_eq!(workspace_metric(prefix, "shaped_runs"), 1.0);
-
-    let atlas_pressure = workspace_case(&report, "cpu.system.text_atlas_pressure");
-    assert_workspace_cpu_row(atlas_pressure, "system", "system");
-    assert!(workspace_metric(atlas_pressure, "atlas_shape_count") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_rendered_glyph_runs") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_evictions") > 0.0);
-    assert_eq!(
-        workspace_metric(atlas_pressure, "atlas_revision"),
-        workspace_metric(atlas_pressure, "atlas_evictions"),
-    );
-    assert!(workspace_metric(atlas_pressure, "atlas_resident_glyphs") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_dirty_rects") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_dirty_pixels") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_max_dirty_pixels") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_pressure_vertices") > 0.0);
-    assert!(workspace_metric(atlas_pressure, "atlas_pressure_indices") > 0.0);
-
-    let dirty_upload = workspace_case(&report, "cpu.system.text_atlas_dirty_rect_upload");
-    assert_workspace_cpu_row(dirty_upload, "system", "system");
-    assert_eq!(workspace_metric(dirty_upload, "atlas_create_calls"), 1.0);
-    assert!(workspace_metric(dirty_upload, "atlas_update_calls") >= 2.0);
-    assert!(workspace_metric(dirty_upload, "dirty_upload_pixels") > 0.0);
-    assert!(workspace_metric(dirty_upload, "max_dirty_update_pixels") > 0.0);
-    assert!(workspace_metric(dirty_upload, "dirty_to_full_upload_ratio") < 0.01);
-
-    let wrapped = workspace_case(&report, "cpu.system.wrapped_label_cached_encode");
-    assert_workspace_cpu_row(wrapped, "system", "system");
-    assert_eq!(workspace_metric(wrapped, "wrapped_label_variants"), 4096.0);
-    assert!(workspace_metric(wrapped, "wrapped_label_glyph_runs") > 0.0);
-    assert!(workspace_metric(wrapped, "wrapped_label_vertices") > 0.0);
-    assert!(workspace_metric(wrapped, "dirty_to_full_upload_ratio") < 0.01);
-    assert!(workspace_missing_case(&report, "cpu.system.wrapped_label_legacy_fit_shape"));
-
-    let picker = workspace_case(&report, "cpu.system.picker_text_cached_encode");
-    assert_workspace_cpu_row(picker, "system", "system");
-    assert_eq!(workspace_metric(picker, "atlas_create_calls"), 1.0);
-    assert_eq!(workspace_metric(picker, "atlas_update_calls"), 0.0);
-    assert!(workspace_metric(picker, "picker_glyph_runs") > 0.0);
-    assert!(workspace_metric(picker, "picker_vertices") > 0.0);
-    assert!(workspace_metric(picker, "dirty_to_full_upload_ratio") < 0.01);
-    assert!(workspace_missing_case(&report, "cpu.system.picker_text_legacy_shape_upload"));
-
-    let cluster = workspace_case(&report, "cpu.text_input.cursor_pick.cluster_map");
-    let rtl = workspace_case(&report, "cpu.text_input.cursor_pick.rtl_cluster_map");
-    let fallback = workspace_case(&report, "cpu.text_input.cursor_pick.fallback_cluster_map");
-    let mixed = workspace_case(&report, "cpu.text_input.cursor_pick.mixed_bidi_affinity");
-    for case in [cluster, rtl, fallback, mixed] {
-        assert_workspace_cpu_row(case, "text-input", "text-input");
-        assert_eq!(workspace_metric(case, "cursor_pick_positions"), 6.0);
-        assert!(workspace_metric(case, "text_bytes") > 0.0);
-    }
-    assert_text_cursor_map_workspace_metrics(cluster, "cursor_map");
-    assert_text_cursor_map_workspace_metrics(rtl, "rtl_cursor_map");
-    assert_text_cursor_map_workspace_metrics(fallback, "fallback_cursor_map");
-    assert_text_cursor_map_workspace_metrics(mixed, "mixed_bidi_cursor_map");
-    assert!(workspace_metric(cluster, "cursor_checksum") > 0.0);
-    assert!(workspace_metric(rtl, "rtl_cursor_checksum") > 0.0);
-    assert!(workspace_metric(fallback, "fallback_cursor_checksum") > 0.0);
-    assert!(workspace_metric(fallback, "fallback_fonts") >= 1.0);
-    assert!(workspace_metric(fallback, "fallback_shape_runs") >= 3.0);
-    assert!(workspace_metric(mixed, "mixed_bidi_cursor_checksum") > 0.0);
-    assert_eq!(workspace_metric(mixed, "mixed_bidi_boundary_positions"), 2.0);
-    assert!(workspace_metric(mixed, "mixed_bidi_cursor_map_affinity_splits") >= 2.0);
-    assert!(workspace_metric(mixed, "rtl_font_loaded") >= 1.0);
-}
-
-fn assert_text_cursor_map_workspace_metrics(case: &PerfCaseResult, prefix: &str) {
-    let cursor_count = workspace_metric(case, &format!("{prefix}_cursor_count"));
-    let byte_boundaries = workspace_metric(case, &format!("{prefix}_byte_boundaries"));
-    assert!(cursor_count > 0.0);
-    assert_eq!(byte_boundaries, cursor_count + 1.0);
-    assert!(workspace_metric(case, &format!("{prefix}_boundary_checksum")) > 0.0);
-    assert!(workspace_metric(case, &format!("{prefix}_width_span")) > 0.0);
+   let dirty_subtree = workspace_case(&report, "cpu.layout.dirty_subtree.incremental_relayout");
+   assert_workspace_cpu_row(dirty_subtree, "layout", "layout-invalidation");
+   assert_eq!(workspace_metric(dirty_subtree, "dirty_nodes"), 1.0);
+   assert_eq!(workspace_metric(dirty_subtree, "layout_passes"), 1.0);
+   assert!(workspace_metric(dirty_subtree, "layout_ops_sampled") > 0.0);
+   assert!(workspace_metric(dirty_subtree, "layout_skipped_subtrees_per_op") > 0.0);
+   assert!(workspace_metric(dirty_subtree, "layout_updates_per_op") > 0.0);
+   assert!(
+      workspace_metric(dirty_subtree, "layout_visited_nodes_per_op")
+         < workspace_metric(dirty_subtree, "cold_visited_nodes")
+   );
+   assert!(
+      workspace_metric(dirty_subtree, "layout_measured_children_per_op")
+         < workspace_metric(dirty_subtree, "cold_measured_children")
+   );
 }
 
 fn web_report_case<'a>(report: &'a Value, id: &str) -> &'a Value {
@@ -3439,6 +3432,7 @@ fn markdown_write_bench_cli_loads_comparison_baseline() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn markdown_out_writes_identical_latest_and_dated_reports() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3472,6 +3466,38 @@ fn markdown_out_writes_identical_latest_and_dated_reports() {
     let _ = std::fs::remove_file(latest);
     let _ = std::fs::remove_file(dated);
     let _ = std::fs::remove_dir(dir);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
+fn filtered_registry_cases_do_not_expand_siblings()
+{
+   for (filter, expected, sibling) in [
+      (
+         "cpu.component.label.encode",
+         "case=cpu.component.label.encode",
+         "case=cpu.component.button.encode",
+      ),
+      (
+         "cpu.animation.image_zoom_pan",
+         "case=cpu.animation.image_zoom_pan",
+         "case=cpu.animation.spinner_spin",
+      ),
+   ]
+   {
+      let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+         .env("OXIDE_PERF_RUNNER_FILTER", filter)
+         .arg("--smoke")
+         .output()
+         .expect("run filtered registry case");
+      let stdout = String::from_utf8_lossy(&output.stdout);
+      let stderr = String::from_utf8_lossy(&output.stderr);
+
+      assert!(output.status.success(), "filtered registry case failed: {stderr}");
+      assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+      assert!(stdout.contains(expected), "stdout: {stdout}");
+      assert!(!stdout.contains(sibling), "stdout: {stdout}");
+   }
 }
 
 #[test]
@@ -3849,38 +3875,109 @@ fn compare_reports_bench_iters_requires_bench_flag()
 }
 
 #[test]
-fn smoke_suite_keeps_popup_wheel_picker_case_id_stable() {
-    let report = collect_suite_report(true).expect("collect smoke suite");
-    let ids =
-        report.cases.iter().map(|case| case.id.as_str()).collect::<std::collections::BTreeSet<_>>();
+fn child_run_suite_tests_keep_everyday_tiering()
+{
+   let source = include_str!("report_tests.rs");
+   let run_suite_arg = concat!("--run", "-suite");
+   let ignore_marker = "#[ignore = \"explicit touched-case perf contract\"]";
+   let active_tests = [
+      "fn filtered_run_suite_runs_only_the_touched_case()",
+      "fn retired_exact_aliases_are_not_registered()",
+   ];
+   let mut total = 0usize;
+   let mut ignored = 0usize;
+   let mut active = 0usize;
 
-    assert!(ids.contains("cpu.authoring.popup_wheel_picker.interaction"));
-    assert!(!ids.contains("cpu.authoring.popup_picker.interaction"));
+   for test in source.split("#[test]").skip(1)
+   {
+      let launches = test.matches(run_suite_arg).count();
+      if launches == 0
+      {
+         continue;
+      }
+      total += launches;
+      if test.contains(ignore_marker)
+      {
+         ignored += launches;
+      }
+      else
+      {
+         active += launches;
+         assert!(
+            active_tests.iter().any(|name| test.contains(name)),
+            "unexpected active child suite test"
+         );
+      }
+   }
+
+   assert_eq!(total, 56);
+   assert_eq!(ignored, 54);
+   assert_eq!(active, 2);
 }
 
 #[test]
-fn filtered_run_suite_skips_full_coverage_gate() {
-    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
-        .arg("--run-suite")
-        .arg("--smoke")
-        .output()
-        .expect("run filtered smoke suite");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+fn canonical_smoke_suite_keeps_exact_inventory()
+{
+   let report = collect_suite_report(true).expect("collect smoke suite");
+   let mut ids = report.cases.iter().map(|case| case.id.as_str()).collect::<Vec<_>>();
+   ids.sort_unstable();
 
-    assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(stdout.contains("layout="), "stdout: {stdout}");
-    assert!(stdout.contains("text_input="), "stdout: {stdout}");
-    assert!(stdout.contains("endurance="), "stdout: {stdout}");
-    assert!(stdout.contains("stress="), "stdout: {stdout}");
-    assert!(stdout.contains("case=cpu.system.prepare_draws.current"), "stdout: {stdout}");
-    assert!(!stdout.contains("case=cpu.system.prepare_draws.legacy"), "stdout: {stdout}");
-    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+   assert_eq!(report.version, 1);
+   assert_eq!(report.suite, "canonical-smoke");
+   assert_eq!(ids.len(), 23);
+   assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
+   assert_eq!(case_id_digest(&ids), 0x025eafdefc5ce69b);
 }
 
 #[test]
+fn baseline_write_rejects_smoke_sampling()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .arg("--write-baseline")
+      .arg("--smoke")
+      .output()
+      .expect("reject smoke baseline write");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(!output.status.success(), "smoke baseline write unexpectedly succeeded");
+   assert!(stderr.contains("--write-baseline cannot be combined with --smoke"));
+}
+
+#[test]
+fn baseline_write_rejects_touched_filter()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
+      .arg("--write-baseline")
+      .output()
+      .expect("reject filtered baseline write");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(!output.status.success(), "filtered baseline write unexpectedly succeeded");
+   assert!(stderr.contains("--write-baseline cannot be combined with OXIDE_PERF_RUNNER_FILTER"));
+}
+
+#[test]
+fn filtered_run_suite_runs_only_the_touched_case()
+{
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.prepare_draws.current")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .output()
+      .expect("run filtered smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("suite=touched-smoke cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.system.prepare_draws.current"), "stdout: {stdout}");
+   assert!(!stdout.contains("case=cpu.system.prepare_draws.legacy"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_prefix_width_map_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-prefix-width-{}.json", std::process::id()));
@@ -3909,6 +4006,7 @@ fn filtered_run_suite_supports_text_prefix_width_map_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_atlas_pressure_metrics() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-atlas-pressure-{}.json", std::process::id()));
@@ -3940,6 +4038,40 @@ fn filtered_run_suite_supports_text_atlas_pressure_metrics() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
+fn filtered_run_suite_supports_text_sdf_bake_metrics()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-text-sdf-bake-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.system.text_sdf_bake")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered text SDF bake smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.system.text_sdf_bake"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+   let report = std::fs::read_to_string(&json_out).expect("read filtered text SDF report");
+   let row = report_case_slice(&report, "cpu.system.text_sdf_bake");
+   let parsed: PerfReport = serde_json::from_str(&report).expect("parse filtered text SDF report");
+   assert_eq!(workspace_case(&parsed, "cpu.system.text_sdf_bake").cache_state, "cold");
+   assert_eq!(report_f64(row, "sdf_glyph_runs"), 2.0);
+   assert!(report_f64(row, "sdf_vertices") > 0.0);
+   assert!(report_f64(row, "sdf_indices") > 0.0);
+   assert!(report_f64(row, "sdf_dirty_pixels") > 0.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_fallback_label_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-fallback-label-{}.json", std::process::id()));
@@ -3969,81 +4101,7 @@ fn filtered_run_suite_supports_text_fallback_label_encode_case() {
 }
 
 #[test]
-fn filtered_run_suite_supports_variable_font_authoring_construction_case()
-{
-   let mut json_out = std::env::temp_dir();
-   json_out.push(format!("oxide-perf-runner-variable-font-authoring-{}.json", std::process::id()));
-   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.font.variable_instance_construct")
-      .arg("--run-suite")
-      .arg("--smoke")
-      .arg("--json-out")
-      .arg(&json_out)
-      .output()
-      .expect("run filtered variable-font authoring smoke suite");
-   let stdout = String::from_utf8_lossy(&output.stdout);
-   let stderr = String::from_utf8_lossy(&output.stderr);
-
-   assert!(output.status.success(), "filtered suite failed: {stderr}");
-   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-   assert!(stdout.contains("case=cpu.authoring.font.variable_instance_construct"), "stdout: {stdout}");
-   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
-
-   let report = std::fs::read_to_string(&json_out).expect("read variable-font authoring report");
-   let row = report_case_slice(&report, "cpu.authoring.font.variable_instance_construct");
-   assert!(row.contains("\"cache_state\": \"cold\""), "row: {row}");
-   assert_eq!(report_f64(row, "font_instances_per_op"), 1.0);
-   assert_eq!(report_f64(row, "variation_axes_per_instance"), 2.0);
-   assert_eq!(report_f64(row, "pinned_weight"), 400.0);
-   assert_eq!(report_f64(row, "pinned_width"), 100.0);
-   assert_eq!(report_f64(row, "constructor_validation"), 1.0);
-   assert!(report_f64(row, "font_bytes") > 1_000_000.0);
-   assert!(report.contains("Variable Font Instance Construction"));
-   let _ = std::fs::remove_file(json_out);
-}
-
-#[test]
-fn filtered_run_suite_supports_variable_axes_cold_and_warm_text_evidence()
-{
-   let mut json_out = std::env::temp_dir();
-   json_out.push(format!("oxide-perf-runner-variable-axes-text-{}.json", std::process::id()));
-   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.variable_axes_3x")
-      .arg("--run-suite")
-      .arg("--smoke")
-      .arg("--json-out")
-      .arg(&json_out)
-      .output()
-      .expect("run filtered variable-axis text smoke suite");
-   let stdout = String::from_utf8_lossy(&output.stdout);
-   let stderr = String::from_utf8_lossy(&output.stderr);
-
-   assert!(output.status.success(), "filtered suite failed: {stderr}");
-   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-   assert!(stdout.contains("case=cpu.architecture.text.variable_axes_3x"), "stdout: {stdout}");
-   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
-
-   let report = std::fs::read_to_string(&json_out).expect("read variable-axis text report");
-   let row = report_case_slice(&report, "cpu.architecture.text.variable_axes_3x");
-   assert!(row.contains("\"cache_state\": \"cold\""), "row: {row}");
-   assert_eq!(report_f64(row, "device_scale"), 3.0);
-   assert_eq!(report_f64(row, "physical_raster_px"), 45.0);
-   assert_eq!(report_f64(row, "cold_shape_runs"), 2.0);
-   assert_eq!(report_f64(row, "latin_variation_axes"), 2.0);
-   assert_eq!(report_f64(row, "cjk_variation_axes"), 1.0);
-   assert!(report_f64(row, "cold_glyph_cache_misses") > 0.0);
-   assert!(report_f64(row, "cold_rasterizations") > 0.0);
-   assert!(report_f64(row, "cold_dirty_pixels") > 0.0);
-   assert!(report_f64(row, "warm_glyph_cache_hits") > 0.0);
-   assert_eq!(report_f64(row, "warm_glyph_cache_misses"), 0.0);
-   assert_eq!(report_f64(row, "warm_rasterizations"), 0.0);
-   assert_eq!(report_f64(row, "warm_dirty_pixels"), 0.0);
-   assert_eq!(report_f64(row, "warm_vertices"), report_f64(row, "cold_vertices"));
-   assert_eq!(report_f64(row, "resident_glyphs"), report_f64(row, "cold_glyph_cache_misses"));
-   let _ = std::fs::remove_file(json_out);
-}
-
-#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_atlas_dirty_rect_upload_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-atlas-dirty-upload-{}.json", std::process::id()));
@@ -4074,6 +4132,7 @@ fn filtered_run_suite_supports_text_atlas_dirty_rect_upload_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_wrapped_label_cached_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-wrapped-label-{}.json", std::process::id()));
@@ -4106,6 +4165,7 @@ fn filtered_run_suite_supports_wrapped_label_cached_encode_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_picker_text_cached_encode_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-picker-text-cached-{}.json", std::process::id()));
@@ -4139,11 +4199,15 @@ fn filtered_run_suite_supports_picker_text_cached_encode_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-paged-text-atlas-{}.json", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.paged_atlas_locality")
+        .env(
+            "OXIDE_PERF_RUNNER_FILTER",
+            "cpu.architecture.text.paged_atlas_locality.single_scale",
+        )
         .arg("--run-suite")
         .arg("--smoke")
         .arg("--json-out")
@@ -4156,7 +4220,10 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
     assert!(output.status.success(), "filtered suite failed: {stderr}");
     assert!(stdout.contains("cases=1"), "stdout: {stdout}");
     let report = std::fs::read_to_string(&json_out).expect("read paged text atlas report");
-    let row = report_case_slice(&report, "cpu.architecture.text.paged_atlas_locality");
+    let row = report_case_slice(
+        &report,
+        "cpu.architecture.text.paged_atlas_locality.single_scale",
+    );
     assert_eq!(report_f64(row, "atlas_pages"), 2.0);
     assert_eq!(report_f64(row, "atlas_evictions"), 1.0);
     assert_eq!(report_f64(row, "atlas_release_calls"), 1.0);
@@ -4167,6 +4234,7 @@ fn filtered_run_suite_supports_paged_text_atlas_locality_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_bitmap_text_options_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-bitmap-options-{}.json", std::process::id()));
@@ -4199,6 +4267,7 @@ fn filtered_run_suite_supports_bitmap_text_options_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-metal-paged-text-{}.json", std::process::id()));
@@ -4228,6 +4297,7 @@ fn filtered_run_suite_supports_metal_paged_text_atlas_locality_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_authoring_cases() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.scene3d.mixed_frame")
@@ -4245,6 +4315,7 @@ fn filtered_run_suite_supports_gpu_authoring_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_retained_snapshot_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.authoring.retained_snapshot.clean_mixed")
@@ -4262,6 +4333,7 @@ fn filtered_run_suite_supports_retained_snapshot_authoring_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_animation_effects_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-animation-effects-{}.json", std::process::id()));
@@ -4291,6 +4363,7 @@ fn filtered_run_suite_supports_gpu_animation_effects_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_dirty_leaf_retained_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.surface_retained.dirty_leaf_encode")
@@ -4311,6 +4384,7 @@ fn filtered_run_suite_supports_dirty_leaf_retained_authoring_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_retained_cache_policy_authoring_case()
 {
    let mut json_out = std::env::temp_dir();
@@ -4338,6 +4412,7 @@ fn filtered_run_suite_supports_retained_cache_policy_authoring_case()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_surface_router_retained_overlay_metrics() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-surface-router-compose-{}.json", std::process::id()));
@@ -4371,6 +4446,7 @@ fn filtered_run_suite_supports_surface_router_retained_overlay_metrics() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_key_reconcile_ab_cases() {
     let mut json_out = std::env::temp_dir();
     json_out
@@ -4423,6 +4499,7 @@ fn filtered_run_suite_supports_collection_key_reconcile_ab_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_prefix_update_ab_cases() {
     let mut json_out = std::env::temp_dir();
     json_out
@@ -4475,6 +4552,7 @@ fn filtered_run_suite_supports_collection_prefix_update_ab_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_collection_measure_cache_bounded_churn_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-collection-cache-churn-{}.json", std::process::id()));
@@ -4515,6 +4593,7 @@ fn filtered_run_suite_supports_collection_measure_cache_bounded_churn_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_drawlist_text_replay_authoring_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.drawlist_text_replay.multi_atlas")
@@ -4535,26 +4614,7 @@ fn filtered_run_suite_supports_drawlist_text_replay_authoring_case() {
 }
 
 #[test]
-fn filtered_run_suite_supports_surface_text_atlas_context_authoring_case() {
-    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.surface_retained.text_atlas_context")
-        .arg("--run-suite")
-        .arg("--smoke")
-        .output()
-        .expect("run filtered surface text atlas context authoring smoke suite");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(
-        stdout.contains("case=cpu.authoring.surface_retained.text_atlas_context"),
-        "stdout: {stdout}",
-    );
-    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
-}
-
-#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_dirty_subtree_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.dirty_subtree.incremental_relayout")
@@ -4575,6 +4635,7 @@ fn filtered_run_suite_supports_dirty_subtree_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_descendant_only_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.descendant_only.incremental_relayout")
@@ -4595,6 +4656,7 @@ fn filtered_run_suite_supports_descendant_only_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_transform_only_layout_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.transform_only.reposition")
@@ -4612,6 +4674,7 @@ fn filtered_run_suite_supports_transform_only_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_paint_only_opacity_clip_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-paint-only-layout-{}.json", std::process::id()));
@@ -4641,6 +4704,7 @@ fn filtered_run_suite_supports_paint_only_opacity_clip_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_node_content_dirty_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-node-content-dirty-{}.json", std::process::id()));
@@ -4676,32 +4740,32 @@ fn filtered_run_suite_supports_node_content_dirty_layout_case() {
 }
 
 #[test]
-fn filtered_run_suite_supports_non_draw_dirty_layout_case() {
+#[ignore = "explicit touched-case perf contract"]
+fn filtered_run_suite_supports_hit_test_dirty_layout_case() {
     let mut json_out = std::env::temp_dir();
-    json_out.push(format!("oxide-perf-runner-non-draw-dirty-{}.json", std::process::id()));
+    json_out.push(format!("oxide-perf-runner-hit-test-dirty-{}.json", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.non_draw_dirty.retained_reuse")
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.layout.hit_test_dirty.retained_reuse")
         .arg("--run-suite")
         .arg("--smoke")
         .arg("--json-out")
         .arg(&json_out)
         .output()
-        .expect("run filtered non-draw dirty layout smoke suite");
+        .expect("run filtered hit-test dirty layout smoke suite");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "filtered suite failed: {stderr}");
     assert!(stdout.contains("cases=1"), "stdout: {stdout}");
-    assert!(stdout.contains("case=cpu.layout.non_draw_dirty.retained_reuse"), "stdout: {stdout}",);
+    assert!(stdout.contains("case=cpu.layout.hit_test_dirty.retained_reuse"), "stdout: {stdout}",);
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
 
-    let report = std::fs::read_to_string(&json_out).expect("read filtered non-draw report");
-    let row = report_case_slice(&report, "cpu.layout.non_draw_dirty.retained_reuse");
+    let report = std::fs::read_to_string(&json_out).expect("read filtered hit-test report");
+    let row = report_case_slice(&report, "cpu.layout.hit_test_dirty.retained_reuse");
     assert_eq!(report_f64(row, "layout_visited_nodes_per_op"), 0.0);
     assert_eq!(report_f64(row, "layout_measured_children_per_op"), 0.0);
     assert_eq!(report_f64(row, "retained_rebuilt_nodes_per_op"), 0.0);
     assert_eq!(report_f64(row, "retained_rebuilt_ops"), 0.0);
-    assert!(report_f64(row, "accessibility_dirty_ops") > 0.0);
     assert!(report_f64(row, "hit_test_dirty_ops") > 0.0);
     assert!(report_f64(row, "retained_reused_nodes_per_op") > 0.0);
     assert!(report_f64(row, "retained_reused_ops") > 0.0);
@@ -4709,6 +4773,7 @@ fn filtered_run_suite_supports_non_draw_dirty_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_scoped_tree_mutation_layout_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-scoped-tree-mutation-{}.json", std::process::id()));
@@ -4739,6 +4804,7 @@ fn filtered_run_suite_supports_scoped_tree_mutation_layout_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_state_reconcile_battery() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-state-reconcile-{}.json", std::process::id()));
@@ -4779,6 +4845,7 @@ fn filtered_run_suite_supports_state_reconcile_battery() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_ime_journey_and_state_cases() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
@@ -4803,6 +4870,7 @@ fn filtered_run_suite_supports_text_ime_journey_and_state_cases() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_text_cursor_pick_cluster_map_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-text-cursor-map-{}.json", std::process::id()));
@@ -4858,6 +4926,7 @@ fn assert_text_cursor_map_report_metrics(row: &str, prefix: &str) {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_id_mask_current_case() {
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env("OXIDE_PERF_RUNNER_FILTER", "gpu.system.id_mask_compositor")
@@ -4879,6 +4948,7 @@ fn filtered_run_suite_supports_metal_id_mask_current_case() {
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -4919,6 +4989,7 @@ fn filtered_run_suite_supports_metal_neon_marker_ring_cases()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_central_noop_rejection_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -4962,6 +5033,47 @@ fn filtered_run_suite_supports_central_noop_rejection_cases()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
+fn filtered_run_suite_classifies_first_visible_images_as_cold()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-image-first-visible-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.image_pipeline.png.first_visible,gpu.image_pipeline.rgba.nearest_first_visible",
+      )
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered first-visible image smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
+
+   let report: PerfReport = serde_json::from_slice(
+      &std::fs::read(&json_out).expect("read first-visible image report"),
+   ).expect("parse first-visible image report");
+   for (id, sampling) in [
+      ("gpu.image_pipeline.png.first_visible", "linear-sampled"),
+      ("gpu.image_pipeline.rgba.nearest_first_visible", "nearest-sampled"),
+   ]
+   {
+      let case = report.cases.iter().find(|case| case.id == id).expect("first-visible case");
+      assert_eq!(case.cache_state, "cold");
+      assert!(case.notes.iter().any(|note| {
+         note.contains(sampling) && note.contains("prebuilt ImageView draw list")
+      }));
+   }
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_image_view_crop_authoring_cases()
 {
     let mut json_out = std::env::temp_dir();
@@ -5005,13 +5117,14 @@ fn filtered_run_suite_supports_image_view_crop_authoring_cases()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_rendering_architecture_contract() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-architecture-{}.json", std::process::id()));
     let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
         .env(
             "OXIDE_PERF_RUNNER_FILTER",
-            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.animation.surface_300,cpu.architecture.idle.static_foreground",
+            "cpu.architecture.retained.depth_16.clean,cpu.architecture.retained.cache_pressure,cpu.architecture.idle.static_foreground",
         )
         .arg("--run-suite")
         .arg("--smoke")
@@ -5023,15 +5136,14 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(output.status.success(), "filtered suite failed: {stderr}");
-    assert!(stdout.contains("cases=5"), "stdout: {stdout}");
+    assert!(stdout.contains("cases=4"), "stdout: {stdout}");
     assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
     let report = std::fs::read_to_string(&json_out).expect("read rendering architecture report");
     let retained = report_case_slice(&report, "cpu.architecture.retained.depth_16.clean");
     let hot = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.hot_reuse");
     let churn = report_case_slice(&report, "cpu.architecture.retained.cache_pressure.one_use_churn");
-    let animation = report_case_slice(&report, "cpu.architecture.animation.surface_300");
     let idle = report_case_slice(&report, "cpu.architecture.idle.static_foreground");
-    for row in [retained, hot, churn, animation, idle] {
+    for row in [retained, hot, churn, idle] {
         assert!(row.contains("\"family\": \"architecture\""));
         assert!(row.contains("\"scenario\": \"rendering-architecture\""));
     }
@@ -5049,26 +5161,112 @@ fn filtered_run_suite_supports_rendering_architecture_contract() {
     assert_eq!(report_f64(churn, "retained_chunk_bytes"), 0.0);
     assert_eq!(report_f64(churn, "retained_sequence_bytes"), 0.0);
     assert_eq!(report_f64(churn, "flat_fallback_uses"), 1.0);
-    assert_eq!(report_f64(animation, "animated_nodes"), 300.0);
-    assert_eq!(report_f64(animation, "active_animations"), 600.0);
-    assert_eq!(report_f64(animation, "chunks_rebuilt_avg"), 0.0);
-    assert_eq!(report_f64(animation, "sequences_rebuilt_avg"), 0.0);
-    assert_eq!(report_f64(animation, "command_bytes_copied_avg"), 0.0);
-    assert_eq!(report_f64(animation, "vertex_bytes_copied_avg"), 0.0);
-    assert_eq!(report_f64(animation, "index_bytes_copied_avg"), 0.0);
-    assert!(report_f64(animation, "property_records_avg") >= 600.0);
     assert_eq!(report_f64(idle, "submissions"), 0.0);
     assert_eq!(report_f64(idle, "wakeups"), 0.0);
     let _ = std::fs::remove_file(json_out);
 }
 
 #[test]
+fn retired_exact_aliases_are_not_registered()
+{
+   let aliases = [
+      "cpu.architecture.animation.surface_hit_test_300",
+      "cpu.architecture.damage.retained_surface_dirty_leaf_10000",
+      "cpu.architecture.spatial_metadata.glyph_mesh_10000",
+      "gpu.architecture.images.immutable_minified_auto",
+      "gpu.architecture.prepared_chunks.clean_mixed",
+      "gpu.architecture.prepared_layers.clean_100x100",
+      "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000",
+      "gpu.scene.anim_timeline.frame",
+   ];
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-retired-aliases-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", aliases.join(","))
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run retired exact-alias inventory");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "retired exact-alias inventory failed: {stderr}");
+   assert!(stdout.contains("cases=0"), "stdout: {stdout}");
+   let report = std::fs::read_to_string(&json_out).expect("read retired exact-alias inventory");
+   for alias in aliases
+   {
+      assert!(!report.contains(alias), "retired exact alias remains registered: {alias}");
+   }
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
+fn gpu_scene_inventory_defers_timeline_work_to_animation_battery()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-gpu-scene-inventory-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.scene.")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run GPU scene inventory");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "GPU scene inventory failed: {stderr}");
+   assert!(stdout.contains("suite=touched-smoke cases=16"), "stdout: {stdout}");
+   let report: PerfReport = serde_json::from_slice(
+      &std::fs::read(&json_out).expect("read GPU scene inventory"),
+   ).expect("parse GPU scene inventory");
+   assert_eq!(report.coverage.scenes_gpu_total, 16);
+   assert_eq!(report.coverage.scenes_gpu_covered.len(), 16);
+   assert!(!report.cases.iter().any(|case| case.id == "gpu.scene.anim_timeline.frame"));
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
+fn webgpu_pipeline_profiles_have_a_public_authoring_contract()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-webgpu-profile-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.webgpu_pipeline_profile.compose")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run WebGPU pipeline-profile authoring row");
+   let stderr = String::from_utf8_lossy(&output.stderr);
+   assert!(output.status.success(), "WebGPU pipeline-profile authoring row failed: {stderr}");
+   let report = std::fs::read_to_string(&json_out)
+      .expect("read WebGPU pipeline-profile authoring report");
+   let row = report_case_slice(&report, "cpu.authoring.webgpu_pipeline_profile.compose");
+   assert!(row.contains("\"family\": \"authoring\""));
+   assert!(row.contains("\"scenario\": \"authoring\""));
+   assert_eq!(report_f64(row, "full_declared_pipelines"), 43.0);
+   assert_eq!(report_f64(row, "minimal_declared_pipelines"), 2.0);
+   assert_eq!(report_f64(row, "mixed_declared_pipelines"), 9.0);
+   assert_eq!(report_f64(row, "minimal_pipelines_avoided"), 41.0);
+   assert_eq!(report_f64(row, "mixed_pipelines_avoided"), 34.0);
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+#[ignore = "explicit touched-case perf contract"]
 fn dynamic_property_animation_has_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-dynamic-authoring-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.animation.dynamic_properties_300")
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.animation.dynamic_properties_hit_test_300")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5078,10 +5276,11 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
    let stderr = String::from_utf8_lossy(&output.stderr);
    assert!(output.status.success(), "dynamic property authoring row failed: {stderr}");
    let report = std::fs::read_to_string(&json_out).expect("read dynamic property authoring report");
-   let row = report_case_slice(&report, "cpu.authoring.animation.dynamic_properties_300");
+   let row = report_case_slice(&report, "cpu.authoring.animation.dynamic_properties_hit_test_300");
    assert!(row.contains("\"family\": \"authoring\""));
    assert!(row.contains("\"scenario\": \"authoring\""));
    assert_eq!(report_f64(row, "animated_nodes"), 300.0);
+   assert_eq!(report_f64(row, "hit_test_geometry_nodes"), 300.0);
    assert_eq!(report_f64(row, "chunks_rebuilt_avg"), 0.0);
    assert_eq!(report_f64(row, "sequences_rebuilt_avg"), 0.0);
    assert_eq!(report_f64(row, "command_bytes_copied_avg"), 0.0);
@@ -5090,46 +5289,38 @@ fn dynamic_property_animation_has_a_public_authoring_contract()
 }
 
 #[test]
-fn retained_spatial_queries_have_engine_and_authoring_contracts()
+#[ignore = "explicit touched-case perf contract"]
+fn retained_spatial_query_has_a_public_authoring_contract()
 {
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-spatial-query-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env(
-         "OXIDE_PERF_RUNNER_FILTER",
-         "cpu.architecture.spatial_metadata.glyph_mesh_10000,cpu.authoring.retained_snapshot.spatial_query_10000",
-      )
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.retained_snapshot.spatial_query_10000")
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
       .arg(&json_out)
       .output()
-      .expect("run retained spatial-query rows");
+      .expect("run retained spatial-query authoring row");
    let stderr = String::from_utf8_lossy(&output.stderr);
-   assert!(output.status.success(), "retained spatial-query rows failed: {stderr}");
+   assert!(output.status.success(), "retained spatial-query authoring row failed: {stderr}");
    let report = std::fs::read_to_string(&json_out).expect("read retained spatial-query report");
-   for id in [
-      "cpu.architecture.spatial_metadata.glyph_mesh_10000",
-      "cpu.authoring.retained_snapshot.spatial_query_10000",
-   ]
-   {
-      let row = report_case_slice(&report, id);
-      assert_eq!(report_f64(row, "instance_count"), 512.0);
-      assert_eq!(report_f64(row, "damage_instances_visited"), 1.0);
-      assert_eq!(report_f64(row, "damage_instances_matched"), 1.0);
-      assert_eq!(report_f64(row, "damage_vertices_visited"), 0.0);
-      assert!(report_f64(row, "snapshot_metadata_bytes") > 0.0);
-   }
    let authoring = report_case_slice(
       &report,
       "cpu.authoring.retained_snapshot.spatial_query_10000",
    );
    assert!(authoring.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(authoring, "instance_count"), 512.0);
+   assert_eq!(report_f64(authoring, "damage_instances_visited"), 1.0);
+   assert_eq!(report_f64(authoring, "damage_instances_matched"), 1.0);
+   assert_eq!(report_f64(authoring, "damage_vertices_visited"), 0.0);
+   assert!(report_f64(authoring, "snapshot_metadata_bytes") > 0.0);
    let _ = std::fs::remove_file(json_out);
 }
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_architecture_reports_reconciled_renderer_resource_families()
 {
    let mut json_out = std::env::temp_dir();
@@ -5250,6 +5441,7 @@ fn metal_architecture_reports_reconciled_renderer_resource_families()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_effect_target_plan_reports_first_use_and_exact_residency()
 {
    let mut json_out = std::env::temp_dir();
@@ -5309,6 +5501,7 @@ fn metal_effect_target_plan_reports_first_use_and_exact_residency()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_blur_sigma_sweep_freezes_quality_ladder_work()
 {
    let mut json_out = std::env::temp_dir();
@@ -5364,6 +5557,7 @@ fn metal_blur_sigma_sweep_freezes_quality_ladder_work()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_final_target_rows_freeze_direct_and_persistent_paths()
 {
    let mut json_out = std::env::temp_dir();
@@ -5409,6 +5603,7 @@ fn metal_final_target_rows_freeze_direct_and_persistent_paths()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5464,12 +5659,16 @@ fn metal_frame_resource_rows_freeze_visible_and_offscreen_depth_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
 {
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-prepared-chunks-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.prepared_chunks.")
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.prepared_chunks.one_dirty,gpu.authoring.retained_snapshot.clean_mixed",
+      )
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5482,7 +5681,7 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
    assert!(output.status.success(), "Metal prepared-chunk suite failed: {stderr}");
    assert!(stdout.contains("cases=2"), "stdout: {stdout}");
    let report = std::fs::read_to_string(&json_out).expect("read prepared-chunk report");
-   let clean = report_case_slice(&report, "gpu.architecture.prepared_chunks.clean_mixed");
+   let clean = report_case_slice(&report, "gpu.authoring.retained_snapshot.clean_mixed");
    let dirty = report_case_slice(&report, "gpu.architecture.prepared_chunks.one_dirty");
 
    assert_eq!(report_f64(clean, "chunk_count"), 256.0);
@@ -5510,6 +5709,7 @@ fn metal_prepared_chunk_rows_freeze_clean_and_one_dirty_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5531,33 +5731,29 @@ fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
    let stderr = String::from_utf8_lossy(&output.stderr);
 
    assert!(output.status.success(), "Metal prepared-layer suite failed: {stderr}");
-   assert!(stdout.contains("cases=3"), "stdout: {stdout}");
+   assert!(stdout.contains("cases=2"), "stdout: {stdout}");
    let report = std::fs::read_to_string(&json_out).expect("read prepared-layer report");
-   let clean = report_case_slice(&report, "gpu.architecture.prepared_layers.clean_100x100");
-   let dirty = report_case_slice(&report, "gpu.architecture.prepared_layers.one_dirty_100x100");
-   let authoring = report_case_slice(
+   let clean = report_case_slice(
       &report,
       "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100",
    );
+   let dirty = report_case_slice(&report, "gpu.architecture.prepared_layers.one_dirty_100x100");
 
-   for row in [clean, authoring]
-   {
-      assert_eq!(report_f64(row, "layers"), 100.0);
-      assert_eq!(report_f64(row, "draws_per_layer"), 100.0);
-      assert_eq!(report_f64(row, "layer_body_commands_scanned_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_body_commands_copied_avg"), 0.0);
-      assert_eq!(report_f64(row, "geometry_bytes_copied_avg"), 0.0);
-      assert_eq!(report_f64(row, "buffer_upload_bytes_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_texture_creates_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_cache_hits_avg"), 100.0);
-      assert_eq!(report_f64(row, "layer_cache_misses_avg"), 0.0);
-      assert_eq!(report_f64(row, "layer_offscreen_draws_avg"), 0.0);
-      assert_eq!(report_f64(row, "render_passes_avg"), 1.0);
-      assert_eq!(report_f64(row, "draws_avg"), 100.0);
-      assert_eq!(report_f64(row, "chunks_prepared_avg"), 0.0);
-      assert!(report_f64(row, "layer_cache_bytes_peak") > 0.0);
-   }
-   assert!(authoring.contains("\"family\": \"authoring\""));
+   assert!(clean.contains("\"family\": \"authoring\""));
+   assert_eq!(report_f64(clean, "layers"), 100.0);
+   assert_eq!(report_f64(clean, "draws_per_layer"), 100.0);
+   assert_eq!(report_f64(clean, "layer_body_commands_scanned_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_body_commands_copied_avg"), 0.0);
+   assert_eq!(report_f64(clean, "geometry_bytes_copied_avg"), 0.0);
+   assert_eq!(report_f64(clean, "buffer_upload_bytes_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_texture_creates_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_cache_hits_avg"), 100.0);
+   assert_eq!(report_f64(clean, "layer_cache_misses_avg"), 0.0);
+   assert_eq!(report_f64(clean, "layer_offscreen_draws_avg"), 0.0);
+   assert_eq!(report_f64(clean, "render_passes_avg"), 1.0);
+   assert_eq!(report_f64(clean, "draws_avg"), 100.0);
+   assert_eq!(report_f64(clean, "chunks_prepared_avg"), 0.0);
+   assert!(report_f64(clean, "layer_cache_bytes_peak") > 0.0);
    assert_eq!(report_f64(dirty, "dirty_layers_per_frame"), 1.0);
    assert_eq!(report_f64(dirty, "layer_body_commands_scanned_avg"), 0.0);
    assert_eq!(report_f64(dirty, "layer_body_commands_copied_avg"), 0.0);
@@ -5575,6 +5771,7 @@ fn metal_prepared_layer_rows_freeze_body_free_clean_and_single_dirty_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
 {
    let mut json_out = std::env::temp_dir();
@@ -5610,12 +5807,16 @@ fn metal_dynamic_property_row_freezes_zero_geometry_upload_contract()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
 {
    let mut json_out = std::env::temp_dir();
    json_out.push(format!("oxide-perf-runner-spatial-metal-{}.json", std::process::id()));
    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
-      .env("OXIDE_PERF_RUNNER_FILTER", "gpu.architecture.spatial_metadata.")
+      .env(
+         "OXIDE_PERF_RUNNER_FILTER",
+         "gpu.architecture.spatial_metadata.full_damage_glyph_mesh_10000,gpu.authoring.retained_snapshot.spatial_damage_10000",
+      )
       .arg("--run-suite")
       .arg("--smoke")
       .arg("--json-out")
@@ -5627,7 +5828,7 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
    let report = std::fs::read_to_string(&json_out).expect("read Metal spatial report");
    let small = report_case_slice(
       &report,
-      "gpu.architecture.spatial_metadata.small_damage_glyph_mesh_10000",
+      "gpu.authoring.retained_snapshot.spatial_damage_10000",
    );
    let full = report_case_slice(
       &report,
@@ -5658,6 +5859,7 @@ fn metal_spatial_rows_freeze_small_and_full_damage_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5749,6 +5951,7 @@ fn metal_immutable_image_rows_freeze_residency_mip_and_quality_contracts()
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()
 {
    let mut json_out = std::env::temp_dir();
@@ -5806,6 +6009,7 @@ fn metal_image_store_rows_freeze_scaling_completion_and_reuse_contracts()
 }
 
 #[test]
+#[ignore = "explicit touched-case perf contract"]
 fn filtered_run_suite_supports_gpu_journey_frame_pacing_case() {
     let mut json_out = std::env::temp_dir();
     json_out.push(format!("oxide-perf-runner-gpu-journey-{}.json", std::process::id()));

@@ -15,7 +15,6 @@ oxide/artifacts/
 
 # Xcode
 **/DerivedData/
-oxide/host/apple-comparison/build/
 **/*.xcuserdatad/
 **/*.xcworkspace/xcuserdata/
 **/*.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings

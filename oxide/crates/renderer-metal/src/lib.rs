@@ -938,6 +938,7 @@ enum ImageStorage
 struct ImageTexture
 {
    texture: Texture,
+   sampling: api::ImageSampling,
    storage: ImageStorage,
    mipmapped: bool,
    mip_levels: u32,
@@ -967,6 +968,32 @@ pub struct ImageResidencyStats
    pub private_uploads: u64,
    pub mipmap_generations: u64,
    pub upload_command_buffers: u64,
+}
+
+#[inline]
+fn checked_rgba8_layout(w: u32, h: u32, data_len: usize, row_bytes: usize) -> Option<usize>
+{
+   let width = usize::try_from(w).ok()?;
+   let height = usize::try_from(h).ok()?;
+   if width == 0 || height == 0
+   {
+      return None;
+   }
+   let tight_row = width.checked_mul(4)?;
+   let bytes_per_row = if row_bytes == 0 { tight_row } else { row_bytes };
+   if bytes_per_row < tight_row
+   {
+      return None;
+   }
+   let required = height
+      .checked_sub(1)?
+      .checked_mul(bytes_per_row)?
+      .checked_add(tight_row)?;
+   if data_len < required
+   {
+      return None;
+   }
+   Some(bytes_per_row)
 }
 
 #[repr(C)]
@@ -1066,6 +1093,7 @@ pub struct MetalRenderer {
     #[cfg(feature = "snapshot-tests")]
     force_exact_blur_for_snapshot: bool,
     sampler: Option<SamplerState>,
+    nearest_sampler: Option<SamplerState>,
     color_format: MTLPixelFormat,
     config: MetalRendererConfig,
     sample_count: u32,
@@ -2067,7 +2095,6 @@ impl MetalRenderer {
                     &library,
                     color_format,
                     sample_count,
-                    false,
                 )
             })?)
         };
@@ -2080,7 +2107,6 @@ impl MetalRenderer {
                     &library,
                     color_format,
                     1,
-                    true,
                 )
             })?)
         };
@@ -2093,7 +2119,6 @@ impl MetalRenderer {
                     &library,
                     MTLPixelFormat::RGBA32Float,
                     1,
-                    true,
                 )
             }) {
                 Ok(pipelines) => Some(pipelines),
@@ -2131,6 +2156,7 @@ impl MetalRenderer {
             (img_arg, img_arg_bufs, img_arg_stride)
         };
         let sampler = build_sampler(&device);
+        let nearest_sampler = build_nearest_sampler(&device);
         let opts =
             MTLResourceOptions::CPUCacheModeWriteCombined | MTLResourceOptions::StorageModeShared;
         let direct_preview_ring_size = 4 * 1024;
@@ -2324,6 +2350,7 @@ impl MetalRenderer {
             #[cfg(feature = "snapshot-tests")]
             force_exact_blur_for_snapshot: false,
             sampler,
+            nearest_sampler,
             color_format,
             config: applied_config,
             sample_count,
@@ -3775,6 +3802,15 @@ impl MetalRenderer {
       self.images.get(&h.0).map(|image| &image.texture)
    }
 
+   fn sampler_for_image_sampling(&self, sampling: api::ImageSampling) -> Option<&SamplerState>
+   {
+      match sampling
+      {
+         api::ImageSampling::Linear => self.sampler.as_ref(),
+         api::ImageSampling::Nearest => self.nearest_sampler.as_ref(),
+      }
+   }
+
    fn insert_image_texture(&mut self, id: u32, image: ImageTexture)
    {
       match image.storage
@@ -3886,6 +3922,7 @@ impl MetalRenderer {
       ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Shared,
          mipmapped,
          mip_levels,
@@ -3951,6 +3988,7 @@ impl MetalRenderer {
       ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Private,
          mipmapped,
          mip_levels,
@@ -3960,7 +3998,7 @@ impl MetalRenderer {
    fn update_private_rgba8_image(&mut self, texture: &Texture, mipmapped: bool, x: u32, y: u32, w: u32, h: u32, data: &[u8], row_bytes: u64)
    {
       let staging = self.shared_image_texture(
-         MTLPixelFormat::BGRA8Unorm_sRGB,
+         MTLPixelFormat::RGBA8Unorm_sRGB,
          w,
          h,
          data,
@@ -4077,6 +4115,12 @@ impl MetalRenderer {
       self.image_create_rgba8_with_policy(w, h, data, row_bytes, false, false)
    }
 
+   /// Uploads one validated sRGB RGBA8 image with filtering fixed for the handle lifetime.
+   pub fn image_create_rgba8_sampled(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, sampling: api::ImageSampling) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8_sampled(w, h, data, row_bytes, false, sampling)
+   }
+
    /// Creates an immutable image using the measured static-asset residency policy.
    /// `repeatedly_minified` requests a complete mip chain for stable minification.
    pub fn image_create_rgba8_immutable(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, repeatedly_minified: bool) -> api::ImageHandle
@@ -4106,61 +4150,22 @@ impl MetalRenderer {
 
    fn image_create_rgba8_with_policy(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, private: bool, mipmapped: bool) -> api::ImageHandle
    {
-      let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
+      {
+         return api::ImageHandle(0);
+      };
       let image = if private
       {
          self.private_image_texture(
-            MTLPixelFormat::BGRA8Unorm_sRGB,
+            MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
             data,
-            bpr,
+            bpr as u64,
             mipmapped,
          )
       }
       else if mipmapped
-      {
-         self.shared_image_texture_with_mips(
-            MTLPixelFormat::BGRA8Unorm_sRGB,
-            w,
-            h,
-            data,
-            bpr,
-            true,
-         )
-      }
-      else
-      {
-         self.shared_image_texture(MTLPixelFormat::BGRA8Unorm_sRGB, w, h, data, bpr)
-      };
-      self.last_stats.texture_upload_bytes = self
-         .last_stats
-         .texture_upload_bytes
-         .saturating_add(data.len() as u64);
-      let id = self.next_image_id;
-      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
-      self.insert_image_texture(id, image);
-      api::ImageHandle(id)
-   }
-
-   fn image_create_store_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
-   {
-      let Some(tight_row) = (w as usize).checked_mul(4) else
-      {
-         return api::ImageHandle(0);
-      };
-      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
-      let Some(required) = (h as usize).checked_sub(1)
-         .and_then(|rows| rows.checked_mul(bpr))
-         .and_then(|bytes| bytes.checked_add(tight_row)) else
-      {
-         return api::ImageHandle(0);
-      };
-      if w == 0 || h == 0 || bpr < tight_row || data.len() < required
-      {
-         return api::ImageHandle(0);
-      }
-      let image = if mipmapped
       {
          self.shared_image_texture_with_mips(
             MTLPixelFormat::RGBA8Unorm_sRGB,
@@ -4175,6 +4180,50 @@ impl MetalRenderer {
       {
          self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
       };
+      self.last_stats.texture_upload_bytes = self
+         .last_stats
+         .texture_upload_bytes
+         .saturating_add(data.len() as u64);
+      let id = self.next_image_id;
+      self.next_image_id = self.next_image_id.wrapping_add(1).max(1);
+      self.insert_image_texture(id, image);
+      api::ImageHandle(id)
+   }
+
+   fn image_create_store_rgba8(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool) -> api::ImageHandle
+   {
+      self.image_create_store_rgba8_sampled(
+         w,
+         h,
+         data,
+         row_bytes,
+         mipmapped,
+         api::ImageSampling::Linear,
+      )
+   }
+
+   fn image_create_store_rgba8_sampled(&mut self, w: u32, h: u32, data: &[u8], row_bytes: usize, mipmapped: bool, sampling: api::ImageSampling) -> api::ImageHandle
+   {
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
+      {
+         return api::ImageHandle(0);
+      };
+      let mut image = if mipmapped
+      {
+         self.shared_image_texture_with_mips(
+            MTLPixelFormat::RGBA8Unorm_sRGB,
+            w,
+            h,
+            data,
+            bpr as u64,
+            true,
+         )
+      }
+      else
+      {
+         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
+      };
+      image.sampling = sampling;
       self.last_stats.texture_upload_bytes = self
          .last_stats
          .texture_upload_bytes
@@ -4203,6 +4252,7 @@ impl MetalRenderer {
       let image = ImageTexture {
          allocated_bytes: Self::texture_allocated_bytes(&texture),
          texture,
+         sampling: api::ImageSampling::Linear,
          storage: ImageStorage::Shared,
          mipmapped: false,
          mip_levels: 1,
@@ -4276,21 +4326,11 @@ impl MetalRenderer {
       {
          return;
       }
-      let Some(tight_row) = (w as usize).checked_mul(4) else
+      let Some(bpr) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
       {
          return;
       };
-      let bpr = if row_bytes == 0 { tight_row } else { row_bytes };
-      let Some(required) = (h as usize).checked_sub(1)
-         .and_then(|rows| rows.checked_mul(bpr))
-         .and_then(|bytes| bytes.checked_add(tight_row)) else
-      {
-         return;
-      };
-      if w == 0 || h == 0
-         || bpr < tight_row
-         || data.len() < required
-         || u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
+      if u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
          || u64::from(y).saturating_add(u64::from(h)) > image.texture.height()
       {
          return;
@@ -9690,14 +9730,16 @@ fn encode_draws_range(
                 continue;
             }
             api::DrawCmd::NineSlice { tex, rect, slice, alpha } => {
-                if let Some(img) = r.get_image_tex(*tex) {
+                if let Some((img, sampling)) =
+                    r.images.get(&tex.0).map(|image| (&image.texture, image.sampling))
+                {
                     let pipeline = if r.encoding_layer {
                         &r.pso_layer_nine_slice
                     } else {
                         &r.pso_nine_slice
                     };
                     enc.set_render_pipeline_state(pipeline);
-                    if let Some(sam) = &r.sampler {
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(img));
@@ -9753,7 +9795,9 @@ fn encode_draws_range(
                 i += 1;
             }
             api::DrawCmd::ImageMesh { tex, vb, ib, alpha } => {
-                if let Some(img) = r.get_image_tex(*tex) {
+                if let Some((img, sampling)) =
+                    r.images.get(&tex.0).map(|image| (&image.texture, image.sampling))
+                {
                     let v_count = vb.len as usize;
                     let Some(src_slice) =
                         list.vertices.get(vb.offset as usize..vb.offset as usize + v_count)
@@ -9764,7 +9808,7 @@ fn encode_draws_range(
                     let pipeline =
                         if r.encoding_layer { &r.pso_layer_image_mesh } else { &r.pso_image_mesh };
                     enc.set_render_pipeline_state(pipeline);
-                    if let Some(sam) = &r.sampler {
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
                         enc.set_fragment_sampler_state(0, Some(sam));
                     }
                     enc.set_fragment_texture(0, Some(img));
@@ -9849,9 +9893,6 @@ fn encode_draws_range(
                 i += 1;
             }
             api::DrawCmd::Image { .. } => {
-                if let Some(sam) = &r.sampler {
-                    enc.set_fragment_sampler_state(0, Some(sam));
-                }
                 // Simulator-safe image path: avoid argument-buffer texturing, which has
                 // repeatedly produced MTLSim command-buffer faults under heavy scene loads.
                 if !r.use_image_arg_buffer {
@@ -9871,12 +9912,17 @@ fn encode_draws_range(
                     {
                         unreachable!()
                     };
-                    let Some(texture) = r.get_image_tex(*first_tex).map(Texture::to_owned)
+                    let Some((texture, sampling)) = r.images.get(&first_tex.0).map(|image| {
+                        (image.texture.to_owned(), image.sampling)
+                    })
                     else
                     {
                         i += 1;
                         continue;
                     };
+                    if let Some(sam) = r.sampler_for_image_sampling(sampling) {
+                        enc.set_fragment_sampler_state(0, Some(sam));
+                    }
                     let mut j = i;
                     while j < item_end {
                         if let api::DrawCmd::Image { tex, .. } = &list.items[j] {
@@ -9937,15 +9983,21 @@ fn encode_draws_range(
                 r.image_fbuf.clear();
                 let mut next_slot: u32 = 0;
                 let mut j = i;
+                let mut group_sampling = None;
                 while j < item_end {
                     if let api::DrawCmd::Image { tex, dst, src, alpha } = &list.items[j] {
-                        let existing_slot = r.image_tex_map.get(&tex.0).copied();
-                        let Some(tref) = r.get_image_tex(*tex) else {
+                        let Some(image) = r.images.get(&tex.0) else {
                             // Skip image draws referencing unknown textures to avoid sampling
                             // unbound argument-buffer slots on simulator/device GPUs.
                             j += 1;
                             continue;
                         };
+                        if group_sampling.is_some_and(|sampling| sampling != image.sampling) {
+                            break;
+                        }
+                        group_sampling = Some(image.sampling);
+                        let existing_slot = r.image_tex_map.get(&tex.0).copied();
+                        let tref = &image.texture;
                         let texture_size = [tref.width() as f32, tref.height() as f32];
                         // Map texture handle to slot
                         let slot_idx = if let Some(slot) = existing_slot {
@@ -9982,6 +10034,11 @@ fn encode_draws_range(
                 if count == 0 {
                     i = j;
                     continue;
+                }
+                if let Some(sam) =
+                    group_sampling.and_then(|sampling| r.sampler_for_image_sampling(sampling))
+                {
+                    enc.set_fragment_sampler_state(0, Some(sam));
                 }
                 let table_key = if r.image_arg_table_count < IMAGE_ARG_SMALL_TABLE_COUNT
                 {
@@ -10999,7 +11056,7 @@ fn build_solid_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.solid.create", &desc)
 }
 
@@ -11038,31 +11095,27 @@ fn configure_blend(
 }
 
 #[inline]
-fn configure_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
-    configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::OneMinusSourceAlpha);
+fn configure_straight_alpha_source_over_blend(ca: &RenderPipelineColorAttachmentDescriptorRef)
+{
+   ca.set_blending_enabled(true);
+   ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+   ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+   ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
+   ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+   ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+   ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
 }
 
 #[inline]
-fn configure_layer_source_alpha_blend(ca: &RenderPipelineColorAttachmentDescriptorRef) {
-    ca.set_blending_enabled(true);
-    ca.set_rgb_blend_operation(MTLBlendOperation::Add);
-    ca.set_alpha_blend_operation(MTLBlendOperation::Add);
-    ca.set_source_rgb_blend_factor(MTLBlendFactor::SourceAlpha);
-    ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
-    ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-}
-
-#[inline]
-fn configure_ui_source_alpha_blend(
-    ca: &RenderPipelineColorAttachmentDescriptorRef,
-    layer: bool,
-) {
-    if layer {
-        configure_layer_source_alpha_blend(ca);
-    } else {
-        configure_source_alpha_blend(ca);
-    }
+fn configure_premultiplied_source_over_blend(ca: &RenderPipelineColorAttachmentDescriptorRef)
+{
+   ca.set_blending_enabled(true);
+   ca.set_rgb_blend_operation(MTLBlendOperation::Add);
+   ca.set_alpha_blend_operation(MTLBlendOperation::Add);
+   ca.set_source_rgb_blend_factor(MTLBlendFactor::One);
+   ca.set_source_alpha_blend_factor(MTLBlendFactor::One);
+   ca.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+   ca.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
 }
 
 #[inline]
@@ -11164,7 +11217,7 @@ fn build_backdrop_pso(
     desc.set_fragment_function(Some(&f));
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.backdrop.create", &desc)
 }
 
@@ -11199,7 +11252,7 @@ fn build_image_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_image.create" } else { "pso.image.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11219,7 +11272,7 @@ fn build_image_single_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer {
         "pso.layer_image_single.create"
     } else {
@@ -11245,7 +11298,7 @@ fn build_image_mesh_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_image_mesh.create" } else { "pso.image_mesh.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11264,7 +11317,7 @@ fn build_rrect_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_source_alpha_blend(ca);
+    configure_straight_alpha_source_over_blend(ca);
     pipeline_state(device, "pso.rrect.create", &desc)
 }
 
@@ -11282,7 +11335,7 @@ fn build_layer_rrect_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    configure_layer_source_alpha_blend(attachment);
+    configure_straight_alpha_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_rrect.create", &descriptor)
 }
 
@@ -11301,7 +11354,7 @@ fn build_nine_slice_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_nine_slice.create" } else { "pso.nine_slice.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11320,13 +11373,7 @@ fn build_layer_composite_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    attachment.set_blending_enabled(true);
-    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
-    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
-    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
-    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
-    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    configure_premultiplied_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_composite.create", &descriptor)
 }
 
@@ -11345,13 +11392,7 @@ fn build_layer_composite_aligned_pso(
     descriptor.set_sample_count(sample_count as u64);
     let attachment = descriptor.color_attachments().object_at(0).unwrap();
     attachment.set_pixel_format(fmt);
-    attachment.set_blending_enabled(true);
-    attachment.set_rgb_blend_operation(MTLBlendOperation::Add);
-    attachment.set_alpha_blend_operation(MTLBlendOperation::Add);
-    attachment.set_source_rgb_blend_factor(MTLBlendFactor::One);
-    attachment.set_source_alpha_blend_factor(MTLBlendFactor::SourceAlpha);
-    attachment.set_destination_rgb_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
-    attachment.set_destination_alpha_blend_factor(MTLBlendFactor::OneMinusSourceAlpha);
+    configure_premultiplied_source_over_blend(attachment);
     pipeline_state(device, "pso.layer_composite_aligned.create", &descriptor)
 }
 
@@ -11370,7 +11411,7 @@ fn build_spinner_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_spinner.create" } else { "pso.spinner.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11390,7 +11431,7 @@ fn build_text_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_text.create" } else { "pso.text.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11410,7 +11451,7 @@ fn build_text_sdf_pso(
     desc.set_sample_count(sample_count as u64);
     let ca = desc.color_attachments().object_at(0).unwrap();
     ca.set_pixel_format(fmt);
-    configure_ui_source_alpha_blend(ca, layer);
+    configure_straight_alpha_source_over_blend(ca);
     let stage = if layer { "pso.layer_text_sdf.create" } else { "pso.text_sdf.create" };
     pipeline_state(device, stage, &desc)
 }
@@ -11470,7 +11511,7 @@ fn build_scene3d_pso(
     ca.set_pixel_format(fmt);
     match blend {
         scene3d::BlendMode3d::Alpha => {
-            configure_source_alpha_blend(ca);
+            configure_straight_alpha_source_over_blend(ca);
         }
         scene3d::BlendMode3d::Additive => {
             configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::One);
@@ -11531,7 +11572,7 @@ fn build_scene3d_color_pso(
     ca.set_pixel_format(fmt);
     match blend {
         scene3d::BlendMode3d::Alpha => {
-            configure_source_alpha_blend(ca);
+            configure_straight_alpha_source_over_blend(ca);
         }
         scene3d::BlendMode3d::Additive => {
             configure_blend(ca, MTLBlendFactor::SourceAlpha, MTLBlendFactor::One);
@@ -11686,6 +11727,16 @@ fn build_sampler(device: &Device) -> Option<SamplerState> {
     desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
     desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
     Some(device.new_sampler(&desc))
+}
+
+fn build_nearest_sampler(device: &Device) -> Option<SamplerState>
+{
+   let desc = SamplerDescriptor::new();
+   desc.set_min_filter(MTLSamplerMinMagFilter::Nearest);
+   desc.set_mag_filter(MTLSamplerMinMagFilter::Nearest);
+   desc.set_address_mode_s(MTLSamplerAddressMode::ClampToEdge);
+   desc.set_address_mode_t(MTLSamplerAddressMode::ClampToEdge);
+   Some(device.new_sampler(&desc))
 }
 
 fn saturating_resource_bytes(dimensions: &[u64], bytes_per_element: u64) -> u64 {
@@ -12145,7 +12196,8 @@ impl MetalRenderer {
         let bytes_per_pixel = match tex.pixel_format() {
             MTLPixelFormat::R8Unorm | MTLPixelFormat::R8Uint => 1,
             MTLPixelFormat::RG8Unorm => 2,
-            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA10_XR
+            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::RGBA8Unorm_sRGB
+                | MTLPixelFormat::BGRA10_XR
                 | MTLPixelFormat::Depth32Float => 4,
             MTLPixelFormat::RGBA16Float | MTLPixelFormat::RGBA16Uint => 8,
             MTLPixelFormat::RGBA32Float => 16,

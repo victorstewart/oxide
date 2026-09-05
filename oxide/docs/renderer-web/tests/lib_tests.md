@@ -23,8 +23,10 @@ Call flow:
 - `color_conversion_clamps_channels()`: verifies CSS color conversion and packed color cache keys.
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
+- `diagnostic_instrumentation_is_explicit_and_snapshot_tests_stay_independent()`: freezes the empty default feature set, optional allocator dependency, independent snapshot feature, feature-gated timestamp machinery, and default compatibility API.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
-- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, route-local lease ownership, compatible request reuse, terminal pagehide destroy, and stable read-only counters.
+- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, unchanged Rust constructors, route-local lease ownership, compatible adapter/device request reuse, rejected-adapter retry, incompatible option rejection, terminal pagehide destroy, and stable read-only counters.
+- `wasm_webgpu_profiled_clean_layers_skip_body_preflight_before_resource_mutation()`: freezes body-free custom-profile cache hits for retained and prepared layers while keeping composite/body profile violations ahead of cache touches and target allocation.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
 - `wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()`: freezes C60's portable image-store backend hooks, direct tight uploads, formats, and chunk/layer invalidation.
@@ -41,7 +43,7 @@ Call flow:
 
 ## Logic narrative
 
-The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure Canvas classifier, while packed-geometry unit tests own exact WebGPU color bytes. Source inspection freezes wasm-only lowering and shader interpolation through grouped source-contract probes. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, typed packed streams, u16/u32 draw packets, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, prepared chunk/bundle/LRU ownership, local retained-layer target ownership, and private packet vocabulary visible to native CI.
+The tests intentionally avoid browser APIs. Solid-color tests include the crate-private pure Canvas classifier, while packed-geometry unit tests own exact WebGPU color bytes. Source inspection freezes wasm-only lowering and shader interpolation. Color tests clamp overrange and underrange values. Scale tests cover valid, zero, and NaN values. The native stub tests start frames, inspect counters, prove `CameraBg` is zero-work on web, and check that submitting on a non-wasm target returns `RenderError::Unsupported`. Source-inspection tests keep WebGPU production exports, the narrow Canvas indexed-quad diagnostic export, premultiplied-alpha surface setup, generation-checked image release/reuse, typed packed streams, u16/u32 draw packets, hot-path scratch reuse, timestamp-query readbacks, upload-scratch wiring, draw-state caching, clip-depth tracking, effect-uniform batching, prepared chunk/bundle/LRU ownership, local retained-layer target ownership, and private packet vocabulary visible to native CI.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -58,7 +60,7 @@ The tests are single-threaded and allocate only small strings/vectors.
 ## Performance notes
 
 These are correctness and contract tests, not benchmark timers. They protect the counters consumed by the browser WebGPU performance report.
-`webgpu_device_session_tests.mjs` is a categorical lifecycle-work benchmark as well as a regression test: two separately evaluated module copies plus 128 alternating route leases must issue one native Oxide device request and retain one live page device until one terminal destroy. No frame path is exercised or changed.
+`webgpu_device_session_tests.mjs` is a categorical lifecycle-work benchmark as well as a regression test: two separately evaluated module copies plus 128 alternating route leases must issue one native adapter request and one native Oxide device request, retry one rejected adapter discovery, reject a differently selected adapter, and retain one live page device until one terminal destroy. No frame path is exercised or changed.
 The packet-vocabulary freeze is measurement harness only. It changes no runtime path and does not claim a performance win.
 C30 browser proof complements these structural checks with exact parent/candidate pixels and direct residency/pass counters; source matching does not substitute for runtime evidence. C35 likewise requires real Dawn shader creation, exact decoded field comparison, presented pixels, and paired direct GPU timestamps in addition to the source contract. C37 requires real WGSL pipeline creation, count/DPR timings, and one-pixel-boundary-classified captures beyond the static 36-byte ABI and no-tessellator assertions. C38 and C39 require real indexed pipeline creation, bounded architecture timings, and exact DPR/prepared pixels beyond their static ABI assertions. C40 additionally requires phased animation pixels and displayed-frame CPU/GPU/pacing samples beyond its compact-instance and no-CPU-trigonometry assertions. C41 requires real Dawn pipeline creation, 64/1,024-marker CPU/GPU/upload evidence, DPR captures, and source-equivalent Metal/WGSL analytic semantics beyond its static ABI checks.
 
@@ -68,11 +70,11 @@ C60 source coverage is a compile-time contract, not displayed proof. C61 runs th
 
 ## Feature flags and cfgs
 
-They run on native targets against the non-wasm `WebRenderer` stub.
+They run on native targets against the non-wasm `WebRenderer` stub. WASM checks compile default, `diagnostic-instrumentation`, `snapshot-tests`, and combined feature graphs separately.
 
 ## Testing and benchmarks
 
-Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Run the cross-module page-session lifecycle contract with `node --test oxide/crates/renderer-web/tests/webgpu_device_session_tests.mjs`. Compile wasm behavior with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web`. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families. C46 uses `--glyph-run-out` for the isolated 512-glyph row and `--glyph-matrix-out` for the Metal-equivalent language/page/SDF matrix.
+Run with `cargo test --locked -p oxide-renderer-web --test lib_tests`. Run the cross-module page-session lifecycle contract with `node --test oxide/crates/renderer-web/tests/webgpu_device_session_tests.mjs`. Compile product WASM with `cargo check --locked --target wasm32-unknown-unknown -p oxide-renderer-web --no-default-features`, then compile diagnostic, snapshot-only, and combined graphs explicitly. The local-layer runtime companions are the C30 browser capture and `run_webgpu_local_layers_c30.mjs`; mode `2` exercises the C31 bounded navigation/purge path. The C33 companion is `check_webgpu_browser_golden.mjs --id-mask-cache-only`, which executes real WebGPU hits, misses, one-entry thrash, bounded LRU reuse, and purge/reentry paths. C35 uses `check_webgpu_browser_golden.mjs --id-mask-matrix-out PATH` for the seven-dimension exact raster/final-field matrix, reuses the asymmetric multi-seed readback, and runs the 512-square forced-miss workload against parent and candidate packages. C37 through C41 use the bounded architecture-only and dedicated capture modes for their respective primitive families. C46 uses `--glyph-run-out` for the isolated 512-glyph row and `--glyph-matrix-out` for the Metal-equivalent language/page/SDF matrix.
 
 C56 uses `--scene3d-out PATH --scene3d-instances COUNT --scene3d-mode MODE`, where modes 0–3 select compatible, mixed, transparent, and subviewport workloads.
 
@@ -87,6 +89,9 @@ pub fn scale() -> f32
 
 ## Changelog
 
+- 2026-08-06: froze body-free custom-profile clean-layer reuse and fail-closed miss preflight before target mutation.
+- 2026-08-05: froze explicit diagnostic feature ownership, independent snapshot compilation, and default public diagnostic compatibility.
+- 2026-08-05: froze one compatible native adapter request across two WASM modules and 128 route transitions, plus fail-closed adapter-option and device-requirement mismatches.
 - 2026-07-22: froze the JavaScript-realm shared-device protocol, observable counters, 128-transition one-request contract, incompatible requirement rejection, and terminal pagehide destruction.
 - 2026-07-15: froze C60 sRGB image-store pages, empty creation, append-only publication, complete standalone mips, unique device generation, and exact invalidation hooks.
 - 2026-07-15: froze C56 compact Scene3D instances, exact order-safe grouping, cull/viewport state, instanced draws, and generation-checked mesh recycling.

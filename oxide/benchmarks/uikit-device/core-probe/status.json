@@ -2,7 +2,7 @@
   "schema_version": 1,
   "status": "Verification Pending",
   "comparison_valid": false,
-  "reason": "Physical iPhone launch denied as Locked; Instruments timed out waiting for device. No presentation measurement acquired.",
+  "reason": "Presentation validation incomplete; device work paused for upstream-first repository reconciliation. Historical locked-launch logs are retained separately.",
   "release_build": "passed",
   "workload": "64 changing rounded tiles; measurement-feasibility diagnostic only",
   "planned_validation": [

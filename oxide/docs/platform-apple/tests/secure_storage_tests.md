@@ -57,7 +57,7 @@
 - `apple_bluetooth_emits_discovery_cache_and_notifications()`
   Verifies discovery, cache updates, connected events, notification events, and cached peripheral snapshots through the shared Bluetooth callbacks.
 - `apple_camera_manager_forwards_stream_controls_and_trampolines()`
-  Verifies stream startup, settings forwarding, frame/audio callback delivery, focus/zoom/flash/torch controls, and stream teardown through the shared camera ABI.
+  Verifies stream startup, settings forwarding, frame/audio callback delivery, focus/zoom/flash/torch controls, stream teardown, and the macOS running-state callback transition through the shared camera ABI.
 - `apple_camera_manager_uses_preview_only_without_audio_and_handles_record_photo()`
   Verifies preview-only startup without audio subscribers, photo callback delivery, recording callback delivery, and host recording controls.
 - `apple_camera_manager_maps_host_return_codes_to_platform_errors()`
@@ -107,6 +107,7 @@
 
 ## Changelog
 
+- 2026-08-06: added macOS camera running-state start/stop regression coverage.
 - 2026-07-12: added exact/over request-bound coverage and malformed response-FFI pointer/count/length rejection without constructing invalid nonnull pointers.
 - 2026-05-19: documented that secure-storage ABI tests cover the same ABI exported by the shared native Keychain bridge.
 - 2026-05-19: added shared Apple TCP keepalive socket networking coverage.

@@ -14,7 +14,11 @@ fn source_between<'a>(source: &'a str, start_marker: &str, end_marker: &str) -> 
 #[test]
 fn ios_bluetooth_runtime_is_opt_in_by_default() {
     let source = host_source();
-    let body = source_between(&source, "fn bluetooth_runtime_enabled() -> bool", "#[no_mangle]");
+    let body = source_between(
+        &source,
+        "fn bluetooth_runtime_enabled() -> bool",
+        "#[cfg(target_os = \"ios\")]\nfn init_injected_app",
+    );
 
     assert!(
         body.contains("OXIDE_ENABLE_BLUETOOTH") && body.trim_end().ends_with("false\n}"),

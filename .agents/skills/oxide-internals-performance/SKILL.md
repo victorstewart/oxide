@@ -15,7 +15,7 @@ This skill is for contributors working on the Oxide library/runtime itself. It i
 
 Oxide is a Rust-first application UI runtime and renderer. Treat it as a custom UI toolkit with a game-engine-grade renderer backend, not as a thin wrapper over UIKit, SwiftUI, or Web views.
 
-Optimize for sustained user-visible quality: event-to-visible-response latency, hitch rate, missed frames, p95/p99 frame time, idle battery use, thermal drift, text correctness, input correctness, accessibility correctness, and apples-to-apples parity against native UI baselines. Average FPS alone is not a valid success metric.
+Optimize for sustained user-visible quality: event-to-visible-response latency, hitch rate, missed frames, p95/p99 frame time, idle battery use, thermal drift, text correctness, input correctness, and apples-to-apples parity against native UI baselines. Average FPS alone is not a valid success metric.
 
 Before recommending or editing graphics code, state the performance hypothesis: bottleneck class, affected stage, workload, expected counter movement, and visual/correctness risk.
 
@@ -28,7 +28,8 @@ Use these assumptions for Oxide unless the user explicitly says otherwise:
 - Current concrete host stack: Rust workspace, macOS test host, iOS host, Web host, Metal renderer, renderer-web crate.
 - Long-term backend posture: iOS Metal now, Web backend now, Android/Vulkan anticipated by abstractions.
 - Rust owns UI state, layout, draw list generation, input semantics, animation policy, and renderer-facing data.
-- UIKit is a thin host shell for lifecycle, surface hosting, input/IME, accessibility bridge, haptics, clipboard, and OS services.
+- UIKit is a thin host shell for lifecycle, surface hosting, input/IME, haptics, clipboard, and OS services.
+- Oxide intentionally does not implement or expose platform accessibility trees. Never add accessibility bridges, semantics parity, authoring requirements, benchmark gates, or new platform accessibility/automation identifiers. Prefer app/window queries, raw coordinates, and non-accessibility lifecycle signals; existing identifier-based harness controls are cleanup candidates and must not expand.
 - Do not move product behavior into UIKit recognizers, UIKit views, SwiftUI state, or Objective-C scene-specific gesture state.
 - Do not hide backend capability behind a lowest-common-denominator abstraction.
 - Do not run `cargo fmt` or `cargo clippy` in this repo. Preserve manual formatting: 3-space indentation, Allman braces, and the existing import/style canon.
@@ -50,7 +51,7 @@ Treat these crates and folders as architecture boundaries:
 | `oxide/crates/timing` | Monotonic timers and animation curves. | Frame pacing, deterministic animation, refresh-rate adaptation. |
 | `oxide/crates/perf-runner` | Engine/UI/bridge/authoring performance cases. | Every visible or hot-path change must land with a perf case. |
 | `oxide/crates/snapshot-runner` and `goldens` | GPU/readback visual verification. | Ensure optimizations do not silently lower quality. |
-| `oxide/host/ios-app` | Thin UIKit/Objective-C iOS shell. | Lifecycle, CADisplayLink, CAMetalLayer, input/IME/a11y bridge. |
+| `oxide/host/ios-app` | Thin UIKit/Objective-C iOS shell. | Lifecycle, CADisplayLink, CAMetalLayer, input/IME, and OS services. |
 | `oxide/host/macos-app` | AppKit + CAMetalLayer host. | Development and snapshot host; not authoritative for iPhone performance. |
 | `oxide/benchmarks` | Persisted workspace/device/UI parity reports. | Device baselines and report shape are part of the performance contract. |
 
@@ -58,7 +59,7 @@ Treat these crates and folders as architecture boundaries:
 
 Use this skill when the task involves any of these:
 
-- Oxide UI elements, scenes, routers, draw builders, retained tree/data flow, layout, hit testing, text, input, gestures, animations, camera preview, visual effects, or accessibility.
+- Oxide UI elements, scenes, routers, draw builders, retained tree/data flow, layout, hit testing, text, input, gestures, animations, camera preview, or visual effects.
 - `renderer-api`, `renderer-metal`, `renderer-web`, Metal shaders, GPU timing, draw lists, rings, atlases, layers, damage, offscreen passes, snapshots, and benchmark baselines.
 - iOS Metal, CAMetalLayer, CADisplayLink, UIKit/Objective-C host glue, IME, haptics, clipboard, memory warnings, EDR/HDR, ProMotion, and device performance.
 - General renderer backend architecture: render graphs, frame graphs, resource lifetime, synchronization, pass planning, shader/pipeline caches, command buffers, descriptor/argument buffers, heaps, transient resources, CPU/GPU overlap.
@@ -82,7 +83,7 @@ Use sources in this order:
 
 1. Oxide source, `AGENTS.md`, `spec.xml`, persisted benchmark reports, snapshot goldens, device captures, CI, and current PR diff.
 2. Apple primary sources: Metal documentation, Metal Best Practices, WWDC sessions, Xcode Metal Frame Capture, Metal System Trace, Metal Performance HUD, shader profiler, GPU counters.
-3. Production UI/2D renderer projects: Skia/Graphite, Vello, Flutter Impeller, Rive Renderer, Iced, egui, Xilem/Masonry, Taffy, AccessKit, Dear ImGui, Nuklear.
+3. Production UI/2D renderer projects: Skia/Graphite, Vello, Flutter Impeller, Rive Renderer, Iced, egui, Xilem/Masonry, Taffy, Dear ImGui, Nuklear.
 4. Production renderer/game-engine codebases: Filament, bgfx, The Forge, IGL, wgpu, Godot, Unity docs, Unreal docs, Cocos2d-x, MetalPetal, GPUImage3, BBMetalImage.
 5. General GPU/API wisdom: Arm tile-based rendering guidance, NVIDIA Vulkan guidance, AMD GPUOpen, Vulkan synchronization examples, Zeux production renderer writing.
 6. Tweets/social posts: leads only. Convert them into rules only after verifying against source code, docs, or captures.
@@ -169,8 +170,8 @@ Accepted regressions require an explicit reviewed baseline update and a written 
 
 ### State, tree, diff, and invalidation
 
-- Keep stable node IDs across layout, hit testing, animation, input routing, accessibility, text cache, and retained render data.
-- Separate invalidation classes: style, layout, text, paint, transform, opacity, clip, image content, camera frame, accessibility, and hit-test data.
+- Keep stable node IDs across layout, hit testing, animation, input routing, text cache, and retained render data.
+- Separate invalidation classes that affect supported behavior: style, layout, text, paint, transform, opacity, clip, image content, camera frame, and hit-test data. Do not add accessibility-named invalidation variants.
 - Do not relayout or repaint the whole tree for pointer movement, cursor blink, timer tick, or single-node state changes.
 - Virtualize collection/list/grid/chat workloads. Do not layout or draw thousands of offscreen nodes.
 - Prefer dirty subtrees and retained draw lists, but do not let damage tracking cost more than repainting.
@@ -228,7 +229,7 @@ Text is a performance and correctness subsystem, not a primitive draw detail.
 - Cache shaped runs by font, size, features, script, text, layout width, DPI/device scale, bidi level, and fallback chain.
 - Keep glyph atlas uploads batched per frame.
 - Separate shaping, layout, rasterization, atlas upload, and draw submission.
-- Support RTL, bidi, CJK, IME marked text, grapheme clusters, emoji/color glyph strategy, fallback fonts, dynamic type/category changes, and selection/caret geometry.
+- Support RTL, bidi, CJK, IME marked text, grapheme clusters, emoji/color glyph strategy, fallback fonts, explicitly authored font-size changes, and selection/caret geometry.
 - Snap glyph origins after scale transform; do not snap filled interior vertices unnecessarily.
 - Track text cache hit/miss, shaping time, raster time, atlas upload bytes, evictions, and draw count.
 
@@ -254,15 +255,13 @@ Text is a performance and correctness subsystem, not a primitive draw detail.
 - Measure event-to-visible-response latency and hitch ratio for scroll, animation, gesture, and text input flows.
 - Verify real host path with OS-level gestures or device/manual evidence, not only unit-state tests.
 
-### Accessibility and IME
+### IME and unsupported accessibility
 
-- Platform accessibility is part of the UI contract, not a post-process.
-- Maintain stable accessibility node IDs linked to UI node IDs.
-- Update accessibility frames on layout/scale changes.
-- Activation should route into Rust callbacks.
-- Preserve focused node across layout when geometry remains compatible.
 - Model IME composition/commit/selection uniformly across languages.
-- Do not optimize away marked text, candidate-bar semantics, selection geometry, or VoiceOver traversal correctness.
+- Do not optimize away marked text, candidate-bar behavior, or selection geometry.
+- Do not add OS accessibility trees, VoiceOver elements, platform accessibility bridges, or accessibility-driven benchmark requirements.
+- Do not add UIKit/AppKit accessibility or automation identifiers. Migrate touched harnesses to app/window queries, raw coordinates, and non-accessibility lifecycle signals when that can be done atomically.
+- Oxide retains no accessibility-named product API or compatibility slot. Do not introduce or restore one.
 
 ## Metal backend rules for Oxide
 
@@ -374,7 +373,7 @@ Oxide should not blindly copy these game-engine patterns:
 - full-scene rebuilds every frame when idle;
 - shader permutation explosions;
 - always-on post-processing stacks;
-- editor/debug UI assumptions that ignore accessibility, IME, localization, or app-platform conventions;
+- editor/debug UI assumptions that ignore IME, localization, or app-platform conventions;
 - opaque renderer abstractions that hide load/store, storage modes, swapchain/drawable policy, or pass dependencies.
 
 The boundary: **use game-engine backend discipline with UI-toolkit semantics.**
@@ -492,11 +491,10 @@ Study these projects for architecture, not for copying APIs:
 | Rive Renderer | high-volume vector animation, animation/render separation, asset-driven motion. |
 | Iced | Rust GUI architecture, message/update/view separation, backend modularity. |
 | egui | immediate-mode repaint scheduling, ID model, paint output, debug tooling. |
-| Xilem/Masonry | retained/reactive Rust UI, widget tree updates, integration with Vello/text/accessibility stack. |
+| Xilem/Masonry | retained/reactive Rust UI, widget tree updates, and integration with Vello/text. |
 | Taffy | layout engine isolation, flex/grid determinism, cacheable layout inputs. |
 | Dear ImGui | draw-command lists, atlas model, renderer backend contract, tool UI performance. |
 | Nuklear | explicit memory, small renderer contract, portable immediate UI. |
-| AccessKit | custom-rendered UI accessibility tree and platform adapters. |
 
 ## Engine/backend sources to study
 
@@ -592,7 +590,7 @@ Study these projects for architecture, not for copying APIs:
 - Does `ui-core` remain independent of `platform-ios` and `renderer-metal`?
 - Does `renderer-metal` depend only on renderer abstractions and host/device bridges it actually needs?
 - Are app state, layout, draw-list, render-list, and backend commands separated?
-- Are stable IDs preserved for layout, input, accessibility, text, animation, and layers?
+- Are stable IDs preserved for layout, input, text, animation, and layers?
 - Does the change add a benchmark/snapshot/device report when user-visible or hot-path?
 
 ### Hot-path red flags
@@ -673,7 +671,7 @@ Bench/snapshot/device proof:
 - Required counters and reports.
 
 Regression risk:
-- Visual parity, input/IME/a11y, device/simulator, cache state, thermal.
+- Visual parity, input/IME, device/simulator, cache state, thermal.
 ```
 
 ## Research basis and durable links
@@ -720,7 +718,6 @@ Regression risk:
 - Taffy: https://github.com/DioxusLabs/taffy
 - Dear ImGui: https://github.com/ocornut/imgui
 - Nuklear: https://github.com/Immediate-Mode-UI/Nuklear
-- AccessKit: https://github.com/AccessKit/accesskit
 - MetalPetal: https://github.com/MetalPetal/MetalPetal
 - GPUImage3: https://github.com/BradLarson/GPUImage3
 - BBMetalImage: https://github.com/Silence-GitHub/BBMetalImage
@@ -762,7 +759,7 @@ For Oxide, prefer:
 - Measured performance contracts over intuition.
 - Device baselines over simulator baselines.
 - Visual parity over benchmark cheating.
-- Input/IME/a11y correctness over raw draw throughput.
+- Input/IME correctness over raw draw throughput.
 - Battery/thermal discipline over short benchmark wins.
 
 

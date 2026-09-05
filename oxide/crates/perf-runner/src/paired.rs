@@ -1,20 +1,27 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::process::Command;
 
-use crate::paired_statistics::{
-   median, paired_bootstrap_ci, percentile, percentile_sorted, regresses_by_ratio,
-   relative_speedup_pct,
-};
-pub use crate::paired_statistics::{balanced_pair_order, PairOrder};
+pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 3;
+pub const PAIRED_CONFIDENCE_TARGET_COVERAGE: f64 = 0.95;
 
-pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 1;
-pub const PAIRED_BOOTSTRAP_RESAMPLES: usize = 100_000;
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PairOrder
+{
+   Ab,
+   Ba,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PairInvalidationReason
+{
+   MissingWarmupSamples,
+   MissingMeasuredSamples,
+   UnequalMeasuredSampleCounts,
+   EnvironmentMismatch,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -35,6 +42,26 @@ pub enum AcceptancePolicy
 {
    Performance,
    NoMaterialRegression,
+   NoiseControl,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConfidenceIntervalMethod
+{
+   ExactBinomialMedian,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MedianConfidenceInterval
+{
+   pub method: ConfidenceIntervalMethod,
+   pub target_coverage: f64,
+   pub achieved_coverage: f64,
+   pub lower_rank: usize,
+   pub upper_rank: usize,
+   pub bounds_pct: [f64; 2],
 }
 
 impl WorkloadKind
@@ -43,10 +70,10 @@ impl WorkloadKind
    {
       match self
       {
-         Self::WorkspaceCpu | Self::BrowserThroughput | Self::GpuTimestamps | Self::InputJourney => 15,
+         Self::WorkspaceCpu | Self::PhysicalDeviceFrames => 6,
+         Self::BrowserThroughput | Self::GpuTimestamps | Self::InputJourney => 15,
          Self::BrowserDisplayedFrames => 10,
          Self::BrowserStartup => 25,
-         Self::PhysicalDeviceFrames => 5,
       }
    }
 
@@ -72,6 +99,7 @@ impl WorkloadKind
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExperimentIdentity
 {
    pub baseline_sha: String,
@@ -82,6 +110,7 @@ pub struct ExperimentIdentity
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EnvironmentFingerprint
 {
    pub hardware: String,
@@ -98,6 +127,7 @@ pub struct EnvironmentFingerprint
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SamplePair
 {
    pub index: usize,
@@ -107,7 +137,7 @@ pub struct SamplePair
    pub samples_a: Vec<f64>,
    pub samples_b: Vec<f64>,
    #[serde(default)]
-   pub invalid_reason: Option<String>,
+   pub invalid_reason: Option<PairInvalidationReason>,
    pub environment_a: EnvironmentFingerprint,
    pub environment_b: EnvironmentFingerprint,
    pub artifact_hashes_a: BTreeMap<String, String>,
@@ -115,6 +145,7 @@ pub struct SamplePair
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedExperimentInput
 {
    pub schema_version: u32,
@@ -129,37 +160,43 @@ pub struct PairedExperimentInput
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DistributionSummary
 {
    pub p50: f64,
    pub p95: f64,
    pub p99: f64,
    pub peak: f64,
+   pub p05: f64,
+   pub p01: f64,
+   pub minimum: f64,
    pub median_absolute_deviation: f64,
    pub coefficient_of_variation: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedDecision
 {
    pub accepted: bool,
    pub median_speedup_pct: f64,
-   pub confidence_interval_95_pct: [f64; 2],
+   pub confidence_interval: MedianConfidenceInterval,
    pub pair_wins: usize,
    pub valid_pairs: usize,
    pub reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PairedExperimentReport
 {
    pub schema_version: u32,
    pub experiment_id: String,
    pub workload: WorkloadKind,
    pub metric: String,
+   pub lower_is_better: bool,
    pub acceptance_policy: AcceptancePolicy,
    pub seed: u64,
-   pub bootstrap_resamples: usize,
    pub identity: ExperimentIdentity,
    pub baseline_sample_count: usize,
    pub candidate_sample_count: usize,
@@ -169,337 +206,25 @@ pub struct PairedExperimentReport
    pub pairs: Vec<SamplePair>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkflowAdapter
+pub fn balanced_pair_order(seed: u64, pair_count: usize) -> Vec<PairOrder>
 {
-   WorkspaceCpu,
-   Metal,
-   WebGpu,
-   BrowserStartup,
-   Device,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SourceIdentityKind
-{
-   BaselineCommit,
-   CandidateIndex,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct WorkflowCommand
-{
-   pub adapter: WorkflowAdapter,
-   pub program: String,
-   pub args: Vec<String>,
-   pub current_dir: PathBuf,
-   #[serde(default)]
-   pub env: BTreeMap<String, String>,
-   pub source_root: PathBuf,
-   pub source_identity_kind: SourceIdentityKind,
-   pub artifact_path: PathBuf,
-   pub samples_json_pointer: String,
-   pub warmups_json_pointer: String,
-}
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct PairedWorkflowPlan
-{
-   pub schema_version: u32,
-   pub experiment_id: String,
-   pub workload: WorkloadKind,
-   pub metric: String,
-   pub lower_is_better: bool,
-   pub acceptance_policy: AcceptancePolicy,
-   pub seed: u64,
-   pub pair_count: usize,
-   pub baseline_sha: String,
-   pub candidate_tree_sha: String,
-   pub instrumentation_patch: PathBuf,
-   pub environment: EnvironmentFingerprint,
-   pub baseline: WorkflowCommand,
-   pub candidate: WorkflowCommand,
-   pub evidence_root: PathBuf,
-}
-
-struct CollectedSide
-{
-   warmups: Vec<f64>,
-   samples: Vec<f64>,
-   hashes: BTreeMap<String, String>,
-   invalid_reason: Option<String>,
-}
-
-pub fn run_paired_workflow(plan: PairedWorkflowPlan) -> Result<PairedExperimentReport>
-{
-   ensure!(plan.schema_version == PAIRED_EXPERIMENT_SCHEMA_VERSION, "unsupported paired workflow schema {}", plan.schema_version);
-   validate_adapter(plan.workload, plan.baseline.adapter)?;
-   validate_adapter(plan.workload, plan.candidate.adapter)?;
-   ensure!(plan.baseline.adapter == plan.candidate.adapter, "A and B use different workflow adapters");
-   ensure!(plan.baseline.source_identity_kind == SourceIdentityKind::BaselineCommit, "A must use a baseline commit identity");
-   ensure!(plan.candidate.source_identity_kind == SourceIdentityKind::CandidateIndex, "B must use a candidate index identity");
-   ensure!(plan.pair_count >= plan.workload.minimum_pairs(), "workflow declares {} pairs below the {:?} minimum of {}", plan.pair_count, plan.workload, plan.workload.minimum_pairs());
-   validate_source_identity(&plan.baseline, &plan.baseline_sha)?;
-   validate_source_identity(&plan.candidate, &plan.candidate_tree_sha)?;
-
-   fs::create_dir_all(&plan.evidence_root)
-      .with_context(|| format!("create paired evidence root {}", plan.evidence_root.display()))?;
-   let instrumentation_sha256 = sha256_file(&plan.instrumentation_patch)?;
-   let baseline_binary_sha256 = sha256_file(&plan.baseline.artifact_path)?;
-   let candidate_binary_sha256 = sha256_file(&plan.candidate.artifact_path)?;
-   let identity = ExperimentIdentity {
-      baseline_sha: plan.baseline_sha.clone(),
-      candidate_tree_sha: plan.candidate_tree_sha.clone(),
-      instrumentation_sha256,
-      baseline_binary_sha256,
-      candidate_binary_sha256,
-   };
-   validate_identity(&identity)?;
-
-   let orders = balanced_pair_order(plan.seed, plan.pair_count);
-   let mut pairs = Vec::with_capacity(plan.pair_count);
-   for (index, order) in orders.into_iter().enumerate()
+   let mut state = seed.max(1);
+   let mut orders = Vec::with_capacity(pair_count);
+   while orders.len() < pair_count
    {
-      let (a, b) = match order
+      state = xorshift64(state);
+      let block = if state & 1 == 0
       {
-         PairOrder::Ab => (
-            collect_side(&plan.baseline, &identity, &plan.evidence_root, index, "a")?,
-            collect_side(&plan.candidate, &identity, &plan.evidence_root, index, "b")?,
-         ),
-         PairOrder::Ba => {
-            let b = collect_side(&plan.candidate, &identity, &plan.evidence_root, index, "b")?;
-            let a = collect_side(&plan.baseline, &identity, &plan.evidence_root, index, "a")?;
-            (a, b)
-         }
-      };
-      let invalid_reason = pair_invalid_reason(&a, &b);
-      pairs.push(SamplePair {
-         index,
-         order,
-         warmup_samples_a: a.warmups,
-         warmup_samples_b: b.warmups,
-         samples_a: a.samples,
-         samples_b: b.samples,
-         invalid_reason,
-         environment_a: plan.environment.clone(),
-         environment_b: plan.environment.clone(),
-         artifact_hashes_a: a.hashes,
-         artifact_hashes_b: b.hashes,
-      });
-   }
-
-   let input = PairedExperimentInput {
-      schema_version: PAIRED_EXPERIMENT_SCHEMA_VERSION,
-      experiment_id: plan.experiment_id,
-      workload: plan.workload,
-      metric: plan.metric,
-      lower_is_better: plan.lower_is_better,
-      acceptance_policy: plan.acceptance_policy,
-      seed: plan.seed,
-      identity,
-      pairs,
-   };
-   let input_bytes = serde_json::to_vec_pretty(&input).context("serialize paired workflow input")?;
-   fs::write(plan.evidence_root.join("input.json"), input_bytes).context("write paired workflow input")?;
-   analyze_paired_experiment(input)
-}
-
-pub fn create_instrumentation_patch(source_root: &Path, paths: &[PathBuf], output_path: &Path) -> Result<String>
-{
-   ensure!(!paths.is_empty(), "instrumentation patch requires at least one declared path");
-   let mut command = Command::new("git");
-   command
-      .arg("-C")
-      .arg(source_root)
-      .args(["diff", "--binary", "--no-ext-diff", "HEAD", "--"])
-      .args(paths);
-   let output = command.output().with_context(|| format!("create instrumentation patch from {}", source_root.display()))?;
-   ensure!(output.status.success(), "git failed to create instrumentation patch in {}", source_root.display());
-   ensure!(!output.stdout.is_empty(), "declared instrumentation paths produced an empty patch");
-   if let Some(parent) = output_path.parent()
-   {
-      fs::create_dir_all(parent).with_context(|| format!("create instrumentation patch directory {}", parent.display()))?;
-   }
-   fs::write(output_path, &output.stdout).with_context(|| format!("write instrumentation patch {}", output_path.display()))?;
-   sha256_file(output_path)
-}
-
-fn validate_adapter(workload: WorkloadKind, adapter: WorkflowAdapter) -> Result<()>
-{
-   let valid = match adapter
-   {
-      WorkflowAdapter::WorkspaceCpu => workload == WorkloadKind::WorkspaceCpu,
-      WorkflowAdapter::Metal => matches!(workload, WorkloadKind::GpuTimestamps | WorkloadKind::PhysicalDeviceFrames),
-      WorkflowAdapter::WebGpu => matches!(workload, WorkloadKind::BrowserThroughput | WorkloadKind::BrowserDisplayedFrames | WorkloadKind::GpuTimestamps | WorkloadKind::InputJourney),
-      WorkflowAdapter::BrowserStartup => workload == WorkloadKind::BrowserStartup,
-      WorkflowAdapter::Device => matches!(workload, WorkloadKind::PhysicalDeviceFrames | WorkloadKind::InputJourney),
-   };
-   ensure!(valid, "{:?} adapter does not support {:?}", adapter, workload);
-   Ok(())
-}
-
-fn validate_source_identity(command: &WorkflowCommand, expected: &str) -> Result<()>
-{
-   let args = match command.source_identity_kind
-   {
-      SourceIdentityKind::BaselineCommit => vec!["rev-parse", "HEAD"],
-      SourceIdentityKind::CandidateIndex => vec!["write-tree"],
-   };
-   let output = Command::new("git")
-      .arg("-C")
-      .arg(&command.source_root)
-      .args(args)
-      .output()
-      .with_context(|| format!("inspect source identity in {}", command.source_root.display()))?;
-   ensure!(output.status.success(), "git source identity command failed in {}", command.source_root.display());
-   let actual = String::from_utf8(output.stdout).context("source identity is not UTF-8")?;
-   ensure!(actual.trim() == expected, "source identity {} does not match expected {}", actual.trim(), expected);
-   Ok(())
-}
-
-fn collect_side(command: &WorkflowCommand, identity: &ExperimentIdentity, root: &Path, pair: usize, side: &str) -> Result<CollectedSide>
-{
-   let prefix = format!("pair-{pair:03}-{side}");
-   let result_path = root.join(format!("{prefix}-result.json"));
-   let stdout_path = root.join(format!("{prefix}-stdout.txt"));
-   let stderr_path = root.join(format!("{prefix}-stderr.txt"));
-   let expected_binary = if side == "a" { &identity.baseline_binary_sha256 } else { &identity.candidate_binary_sha256 };
-   let binary_before = sha256_file(&command.artifact_path)?;
-   ensure!(&binary_before == expected_binary, "pair {} side {} artifact changed before execution", pair, side);
-
-   let mut process = Command::new(&command.program);
-   process.current_dir(&command.current_dir);
-   for arg in &command.args
-   {
-      process.arg(expand_argument(arg, pair, side, &result_path));
-   }
-   for (key, value) in &command.env
-   {
-      process.env(key, expand_argument(value, pair, side, &result_path));
-   }
-   let output = process.output().with_context(|| format!("launch pair {} side {} with {}", pair, side, command.program))?;
-   fs::write(&stdout_path, &output.stdout).with_context(|| format!("write {}", stdout_path.display()))?;
-   fs::write(&stderr_path, &output.stderr).with_context(|| format!("write {}", stderr_path.display()))?;
-   let binary_after = sha256_file(&command.artifact_path)?;
-   ensure!(binary_after == binary_before, "pair {} side {} artifact changed during execution", pair, side);
-
-   let mut hashes = BTreeMap::from([
-      (String::from("binary"), binary_before),
-      (String::from("instrumentation"), identity.instrumentation_sha256.clone()),
-      (String::from("stdout"), sha256_file(&stdout_path)?),
-      (String::from("stderr"), sha256_file(&stderr_path)?),
-   ]);
-   if !output.status.success()
-   {
-      return Ok(CollectedSide {
-         warmups: Vec::new(),
-         samples: Vec::new(),
-         hashes,
-         invalid_reason: Some(format!("command exited with {}", output.status)),
-      });
-   }
-   if !result_path.is_file()
-   {
-      return Ok(CollectedSide {
-         warmups: Vec::new(),
-         samples: Vec::new(),
-         hashes,
-         invalid_reason: Some(String::from("command did not create {result}")),
-      });
-   }
-   hashes.insert(String::from("result"), sha256_file(&result_path)?);
-   let result_bytes = fs::read(&result_path).with_context(|| format!("read {}", result_path.display()))?;
-   let value = match serde_json::from_slice::<serde_json::Value>(&result_bytes)
-   {
-      Ok(value) => value,
-      Err(error) => return Ok(CollectedSide {
-         warmups: Vec::new(),
-         samples: Vec::new(),
-         hashes,
-         invalid_reason: Some(format!("result JSON is invalid: {error}")),
-      }),
-   };
-   let warmups = match optional_json_samples(&value, &command.warmups_json_pointer)
-   {
-      Ok(samples) => samples,
-      Err(error) => return Ok(CollectedSide {
-         warmups: Vec::new(),
-         samples: Vec::new(),
-         hashes,
-         invalid_reason: Some(format!("warmup extraction failed: {error}")),
-      }),
-   };
-   let samples = match json_samples(&value, &command.samples_json_pointer)
-   {
-      Ok(samples) => samples,
-      Err(error) => return Ok(CollectedSide {
-         warmups,
-         samples: Vec::new(),
-         hashes,
-         invalid_reason: Some(format!("sample extraction failed: {error}")),
-      }),
-   };
-   Ok(CollectedSide { warmups, samples, hashes, invalid_reason: None })
-}
-
-fn pair_invalid_reason(a: &CollectedSide, b: &CollectedSide) -> Option<String>
-{
-   match (&a.invalid_reason, &b.invalid_reason)
-   {
-      (None, None) => None,
-      (Some(a), None) => Some(format!("A: {a}")),
-      (None, Some(b)) => Some(format!("B: {b}")),
-      (Some(a), Some(b)) => Some(format!("A: {a}; B: {b}")),
-   }
-}
-
-fn expand_argument(value: &str, pair: usize, side: &str, result_path: &Path) -> String
-{
-   value
-      .replace("{pair}", &pair.to_string())
-      .replace("{side}", side)
-      .replace("{result}", &result_path.to_string_lossy())
-}
-
-fn json_samples(value: &serde_json::Value, pointer: &str) -> Result<Vec<f64>>
-{
-   let value = value.pointer(pointer).with_context(|| format!("JSON pointer {pointer} is missing"))?;
-   let values = if let Some(values) = value.as_array() { values.as_slice() } else { core::slice::from_ref(value) };
-   values
-      .iter()
-      .map(|value| value.as_f64().context("sample is not a JSON number"))
-      .collect()
-}
-
-fn optional_json_samples(value: &serde_json::Value, pointer: &str) -> Result<Vec<f64>>
-{
-   if pointer.is_empty()
-   {
-      Ok(Vec::new())
-   }
-   else
-   {
-      json_samples(value, pointer)
-   }
-}
-
-fn sha256_file(path: &Path) -> Result<String>
-{
-   let mut file = fs::File::open(path).with_context(|| format!("open artifact {}", path.display()))?;
-   let mut digest = Sha256::new();
-   let mut buffer = [0_u8; 64 * 1_024];
-   loop
-   {
-      let read = file.read(&mut buffer).with_context(|| format!("read artifact {}", path.display()))?;
-      if read == 0
-      {
-         break;
+         [PairOrder::Ab, PairOrder::Ba, PairOrder::Ba, PairOrder::Ab]
       }
-      digest.update(&buffer[..read]);
+      else
+      {
+         [PairOrder::Ba, PairOrder::Ab, PairOrder::Ab, PairOrder::Ba]
+      };
+      let remaining = pair_count - orders.len();
+      orders.extend_from_slice(&block[..remaining.min(block.len())]);
    }
-   Ok(format!("{:x}", digest.finalize()))
+   orders
 }
 
 pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedExperimentReport>
@@ -515,7 +240,9 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
    {
       let baseline = median(&pair.samples_a);
       let candidate = median(&pair.samples_b);
+      ensure!(baseline > 0.0, "pair {} baseline median is zero; relative speedup is undefined", pair.index);
       let speedup = relative_speedup_pct(baseline, candidate, input.lower_is_better);
+      ensure!(speedup.is_finite(), "pair {} relative speedup is not finite", pair.index);
       baseline_samples.extend_from_slice(&pair.samples_a);
       candidate_samples.extend_from_slice(&pair.samples_b);
       speedups.push(speedup);
@@ -527,8 +254,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
 
    let baseline = summarize(&baseline_samples);
    let candidate = summarize(&candidate_samples);
-   let median_speedup_pct = median(&speedups);
-   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed, PAIRED_BOOTSTRAP_RESAMPLES);
+   let (median_speedup_pct, confidence_interval) = exact_median_confidence_interval(&speedups)?;
    let mut reasons = Vec::new();
    if input.acceptance_policy == AcceptancePolicy::Performance
    {
@@ -536,7 +262,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
       {
          reasons.push(String::from("median speedup is below 5%"));
       }
-      if confidence_interval_95_pct[0] < 2.0
+      if confidence_interval.bounds_pct[0] < 2.0
       {
          reasons.push(String::from("paired 95% confidence lower bound is below 2%"));
       }
@@ -545,21 +271,79 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
          reasons.push(String::from("candidate wins fewer than 80% of valid pairs"));
       }
    }
-   else if median_speedup_pct < -3.0
+   else if input.acceptance_policy == AcceptancePolicy::NoMaterialRegression
    {
-      reasons.push(String::from("candidate median regresses by more than 3%"));
+      if median_speedup_pct < -3.0
+      {
+         reasons.push(String::from("candidate median regresses by more than 3%"));
+      }
    }
-   if regresses_by_ratio(percentile(&baseline_samples, 0.95), percentile(&candidate_samples, 0.95), input.lower_is_better, 1.03)
+   else if confidence_interval.bounds_pct[0] < -2.0 || confidence_interval.bounds_pct[1] > 2.0
    {
-      reasons.push(String::from("candidate p95 regresses by more than 3%"));
+      reasons.push(String::from("noise-control exact interval leaves the -2%..2% range"));
    }
-   if regresses_by_ratio(percentile(&baseline_samples, 0.99), percentile(&candidate_samples, 0.99), input.lower_is_better, 1.03)
+   if input.acceptance_policy == AcceptancePolicy::NoiseControl
    {
-      reasons.push(String::from("candidate p99 regresses by more than 3%"));
+      for (label, baseline_value, candidate_value) in [
+         ("p95", baseline.p95, candidate.p95),
+         ("p99", baseline.p99, candidate.p99),
+      ]
+      {
+         if changes_by_fraction(baseline_value, candidate_value, 0.03)
+         {
+            reasons.push(format!("noise-control {label} moves by more than 3%"));
+         }
+      }
+      if changes_by_fraction(baseline.peak, candidate.peak, 0.05)
+      {
+         reasons.push(String::from("noise-control peak moves by more than 5%"));
+      }
    }
-   if regresses_by_ratio(baseline.peak, candidate.peak, input.lower_is_better, 1.05)
+   else
    {
-      reasons.push(String::from("candidate peak regresses by more than 5%"));
+      let (baseline_adverse_tails, candidate_adverse_tails, adverse_tail_labels) = if input.lower_is_better
+      {
+         (
+            [baseline.p95, baseline.p99, baseline.peak],
+            [candidate.p95, candidate.p99, candidate.peak],
+            ["p95", "p99", "peak"],
+         )
+      }
+      else
+      {
+         (
+            [baseline.p05, baseline.p01, baseline.minimum],
+            [candidate.p05, candidate.p01, candidate.minimum],
+            ["p05", "p01", "minimum"],
+         )
+      };
+      if regresses_by_fraction(
+         baseline_adverse_tails[0],
+         candidate_adverse_tails[0],
+         input.lower_is_better,
+         0.03,
+      )
+      {
+         reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[0]));
+      }
+      if regresses_by_fraction(
+         baseline_adverse_tails[1],
+         candidate_adverse_tails[1],
+         input.lower_is_better,
+         0.03,
+      )
+      {
+         reasons.push(format!("candidate {} regresses by more than 3%", adverse_tail_labels[1]));
+      }
+      if regresses_by_fraction(
+         baseline_adverse_tails[2],
+         candidate_adverse_tails[2],
+         input.lower_is_better,
+         0.05,
+      )
+      {
+         reasons.push(format!("candidate {} regresses by more than 5%", adverse_tail_labels[2]));
+      }
    }
 
    Ok(PairedExperimentReport {
@@ -567,9 +351,9 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
       experiment_id: input.experiment_id,
       workload: input.workload,
       metric: input.metric,
+      lower_is_better: input.lower_is_better,
       acceptance_policy: input.acceptance_policy,
       seed: input.seed,
-      bootstrap_resamples: PAIRED_BOOTSTRAP_RESAMPLES,
       identity: input.identity,
       baseline_sample_count: baseline_samples.len(),
       candidate_sample_count: candidate_samples.len(),
@@ -578,7 +362,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
       decision: PairedDecision {
          accepted: reasons.is_empty(),
          median_speedup_pct,
-         confidence_interval_95_pct,
+         confidence_interval,
          pair_wins,
          valid_pairs: valid_pairs.len(),
          reasons,
@@ -601,35 +385,60 @@ fn validate_input(input: &PairedExperimentInput) -> Result<()>
    ensure!(!input.experiment_id.trim().is_empty(), "experiment id is empty");
    ensure!(!input.metric.trim().is_empty(), "primary metric is empty");
    validate_identity(&input.identity)?;
+   if input.acceptance_policy == AcceptancePolicy::NoiseControl
+   {
+      ensure!(
+         input.identity.baseline_binary_sha256 == input.identity.candidate_binary_sha256,
+         "noise-control requires identical baseline and candidate binary hashes",
+      );
+   }
 
    let expected_orders = balanced_pair_order(input.seed, input.pairs.len());
    let mut valid_pairs = 0;
+   let mut invalid_pairs = 0;
+   let mut valid_ab_pairs: usize = 0;
+   let mut valid_ba_pairs: usize = 0;
    let mut samples_a = 0;
    let mut samples_b = 0;
    let mut shared_environment: Option<&EnvironmentFingerprint> = None;
    for (expected_index, pair) in input.pairs.iter().enumerate()
    {
       ensure!(pair.index == expected_index, "pair index {} is not contiguous at position {}", pair.index, expected_index);
-      ensure!(pair.order == expected_orders[expected_index], "pair {} order does not match fixed-seed balanced order", pair.index);
-      if let Some(reason) = &pair.invalid_reason
+      ensure!(pair.order == expected_orders[expected_index], "pair {} order does not match the predeclared-seed balanced order", pair.index);
+      validate_samples(&pair.warmup_samples_a, pair.index, "A warmup")?;
+      validate_samples(&pair.warmup_samples_b, pair.index, "B warmup")?;
+      validate_samples(&pair.samples_a, pair.index, "A")?;
+      validate_samples(&pair.samples_b, pair.index, "B")?;
+      validate_environment(&pair.environment_a, pair.index)?;
+      validate_environment(&pair.environment_b, pair.index)?;
+      if input.workload.requires_production_path()
       {
-         ensure!(!reason.trim().is_empty(), "pair {} has an empty invalidation reason", pair.index);
+         ensure!(pair.environment_a.production_path && pair.environment_b.production_path, "pair {} does not exercise the production path", pair.index);
+      }
+      ensure!(!pair.artifact_hashes_a.is_empty() && !pair.artifact_hashes_b.is_empty(), "pair {} is missing artifact hashes", pair.index);
+      validate_artifact_identity(pair, &input.identity)?;
+      if let Some(reason) = pair.invalid_reason
+      {
+         ensure!(invalidation_condition_holds(reason, input.workload, pair), "pair {} invalidation reason {:?} does not match its evidence", pair.index, reason);
+         invalid_pairs += 1;
          continue;
       }
       valid_pairs += 1;
+      match pair.order
+      {
+         PairOrder::Ab => valid_ab_pairs += 1,
+         PairOrder::Ba => valid_ba_pairs += 1,
+      }
       samples_a += pair.samples_a.len();
       samples_b += pair.samples_b.len();
       if input.workload.requires_warmup()
       {
          ensure!(!pair.warmup_samples_a.is_empty() && !pair.warmup_samples_b.is_empty(), "pair {} is missing warmup samples", pair.index);
+         ensure!(pair.warmup_samples_a.len() == pair.warmup_samples_b.len(), "pair {} has unequal warmup sample counts", pair.index);
       }
       ensure!(!pair.samples_a.is_empty() && !pair.samples_b.is_empty(), "pair {} is missing raw samples", pair.index);
-      validate_samples(&pair.warmup_samples_a, pair.index, "A warmup")?;
-      validate_samples(&pair.warmup_samples_b, pair.index, "B warmup")?;
-      validate_samples(&pair.samples_a, pair.index, "A")?;
-      validate_samples(&pair.samples_b, pair.index, "B")?;
+      ensure!(pair.samples_a.len() == pair.samples_b.len(), "pair {} has unequal measured sample counts", pair.index);
       ensure!(pair.environment_a == pair.environment_b, "pair {} mixes environments or cache states", pair.index);
-      validate_environment(&pair.environment_a, pair.index)?;
       if let Some(environment) = shared_environment
       {
          ensure!(pair.environment_a == *environment, "pair {} differs from the experiment environment or cache state", pair.index);
@@ -638,17 +447,24 @@ fn validate_input(input: &PairedExperimentInput) -> Result<()>
       {
          shared_environment = Some(&pair.environment_a);
       }
-      if input.workload.requires_production_path()
-      {
-         ensure!(pair.environment_a.production_path, "pair {} does not exercise the production path", pair.index);
-      }
-      ensure!(!pair.artifact_hashes_a.is_empty() && !pair.artifact_hashes_b.is_empty(), "pair {} is missing artifact hashes", pair.index);
-      validate_artifact_identity(pair, &input.identity)?;
    }
+   ensure!(invalid_pairs <= input.pairs.len() / 10, "{} invalid pairs exceed 10% of the {} scheduled pairs", invalid_pairs, input.pairs.len());
+   ensure!(valid_ab_pairs.abs_diff(valid_ba_pairs) <= 1, "surviving AB/BA pair counts are imbalanced: {} AB and {} BA", valid_ab_pairs, valid_ba_pairs);
    ensure!(valid_pairs >= input.workload.minimum_pairs(), "{} valid pairs are below the {:?} minimum of {}", valid_pairs, input.workload, input.workload.minimum_pairs());
    ensure!(samples_a >= input.workload.minimum_samples_per_side(), "{} A samples are below the {:?} minimum of {}", samples_a, input.workload, input.workload.minimum_samples_per_side());
    ensure!(samples_b >= input.workload.minimum_samples_per_side(), "{} B samples are below the {:?} minimum of {}", samples_b, input.workload, input.workload.minimum_samples_per_side());
    Ok(())
+}
+
+fn invalidation_condition_holds(reason: PairInvalidationReason, workload: WorkloadKind, pair: &SamplePair) -> bool
+{
+   match reason
+   {
+      PairInvalidationReason::MissingWarmupSamples => workload.requires_warmup() && (pair.warmup_samples_a.is_empty() || pair.warmup_samples_b.is_empty()),
+      PairInvalidationReason::MissingMeasuredSamples => pair.samples_a.is_empty() || pair.samples_b.is_empty(),
+      PairInvalidationReason::UnequalMeasuredSampleCounts => pair.samples_a.len() != pair.samples_b.len(),
+      PairInvalidationReason::EnvironmentMismatch => pair.environment_a != pair.environment_b,
+   }
 }
 
 fn validate_identity(identity: &ExperimentIdentity) -> Result<()>
@@ -717,6 +533,96 @@ fn validate_samples(samples: &[f64], pair: usize, label: &str) -> Result<()>
    Ok(())
 }
 
+fn relative_speedup_pct(baseline: f64, candidate: f64, lower_is_better: bool) -> f64
+{
+   if lower_is_better
+   {
+      (baseline - candidate) / baseline * 100.0
+   }
+   else
+   {
+      (candidate - baseline) / baseline * 100.0
+   }
+}
+
+fn regresses_by_fraction(baseline: f64, candidate: f64, lower_is_better: bool, allowed_fraction: f64) -> bool
+{
+   let regression = if lower_is_better { candidate - baseline } else { baseline - candidate };
+   regression / baseline > allowed_fraction
+}
+
+fn changes_by_fraction(baseline: f64, candidate: f64, allowed_fraction: f64) -> bool
+{
+   if baseline == 0.0
+   {
+      candidate != 0.0
+   }
+   else
+   {
+      ((candidate - baseline) / baseline).abs() > allowed_fraction
+   }
+}
+
+fn exact_median_confidence_interval(speedups: &[f64]) -> Result<(f64, MedianConfidenceInterval)>
+{
+   ensure!(!speedups.is_empty(), "paired confidence interval requires at least one speedup");
+   let (lower_rank, upper_rank, achieved_coverage) = exact_median_rank_bounds(
+      speedups.len(),
+      PAIRED_CONFIDENCE_TARGET_COVERAGE,
+   ).context("paired population cannot form a finite exact 95% median interval")?;
+   let mut sorted = speedups.to_vec();
+   sorted.sort_unstable_by(f64::total_cmp);
+   let median_speedup_pct = percentile_sorted(&sorted, 0.50);
+   Ok((median_speedup_pct, MedianConfidenceInterval {
+      method: ConfidenceIntervalMethod::ExactBinomialMedian,
+      target_coverage: PAIRED_CONFIDENCE_TARGET_COVERAGE,
+      achieved_coverage,
+      lower_rank,
+      upper_rank,
+      bounds_pct: [sorted[lower_rank - 1], sorted[upper_rank - 1]],
+   }))
+}
+
+fn exact_median_rank_bounds(sample_count: usize, target_coverage: f64) -> Option<(usize, usize, f64)>
+{
+   if sample_count == 0
+   {
+      return None;
+   }
+   let midpoint = sample_count / 2;
+   let mut weights = vec![0.0; midpoint + 1];
+   // Scale every binomial coefficient to the modal coefficient so tail coverage cannot overflow.
+   weights[midpoint] = 1.0;
+   for successes in (1..=midpoint).rev()
+   {
+      weights[successes - 1] = weights[successes]
+         * successes as f64
+         / (sample_count - successes + 1) as f64;
+   }
+   let lower_half_weight = weights.iter().sum::<f64>();
+   let total_weight = if sample_count % 2 == 0
+   {
+      lower_half_weight * 2.0 - 1.0
+   }
+   else
+   {
+      lower_half_weight * 2.0
+   };
+   let mut omitted_tail = 0.0;
+   let mut selected = None;
+   for (index, weight) in weights.into_iter().enumerate()
+   {
+      omitted_tail += weight / total_weight;
+      let achieved_coverage = 1.0 - omitted_tail * 2.0;
+      if achieved_coverage < target_coverage
+      {
+         break;
+      }
+      selected = Some((index + 1, sample_count - index, achieved_coverage));
+   }
+   selected
+}
+
 fn summarize(samples: &[f64]) -> DistributionSummary
 {
    let mut sorted = samples.to_vec();
@@ -731,7 +637,44 @@ fn summarize(samples: &[f64]) -> DistributionSummary
       p95: percentile_sorted(&sorted, 0.95),
       p99: percentile_sorted(&sorted, 0.99),
       peak: sorted.last().copied().unwrap_or(0.0),
+      p05: percentile_sorted(&sorted, 0.05),
+      p01: percentile_sorted(&sorted, 0.01),
+      minimum: sorted.first().copied().unwrap_or(0.0),
       median_absolute_deviation: percentile_sorted(&deviations, 0.50),
       coefficient_of_variation: if mean == 0.0 { 0.0 } else { variance.sqrt() / mean },
    }
+}
+
+fn median(samples: &[f64]) -> f64
+{
+   let mut sorted = samples.to_vec();
+   sorted.sort_unstable_by(f64::total_cmp);
+   percentile_sorted(&sorted, 0.50)
+}
+
+fn percentile_sorted(sorted: &[f64], quantile: f64) -> f64
+{
+   if sorted.is_empty()
+   {
+      return 0.0;
+   }
+   let rank = quantile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+   let lower = rank.floor() as usize;
+   let upper = rank.ceil() as usize;
+   if lower == upper
+   {
+      sorted[lower]
+   }
+   else
+   {
+      sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower as f64)
+   }
+}
+
+fn xorshift64(mut value: u64) -> u64
+{
+   value ^= value << 13;
+   value ^= value >> 7;
+   value ^= value << 17;
+   value
 }

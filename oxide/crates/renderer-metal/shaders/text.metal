@@ -11,6 +11,12 @@ struct GlyphVSOut { float4 position [[position]]; float2 uv; float4 color; };
 
 inline float2 preparedPosition(float2 local, constant PreparedInstance& instance);
 
+inline float sdfCoverage(float distance)
+{
+    float width = max(fwidth(distance), 0.001);
+    return smoothstep(0.5 - width, 0.5 + width, distance);
+}
+
 constant float2 glyphCorners[4] = {
     float2(0.0, 0.0), float2(1.0, 0.0),
     float2(0.0, 1.0), float2(1.0, 1.0),
@@ -99,14 +105,14 @@ fragment float4 f_prepared_glyph(GlyphVSOut in [[stage_in]], texture2d<float> at
 fragment float4 f_glyph_sdf(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]])
 {
     float distance = atlas.sample(s, in.uv).r;
-    float alpha = smoothstep(0.38, 0.62, distance);
+    float alpha = sdfCoverage(distance);
     return float4(in.color.rgb, in.color.a * alpha);
 }
 
 fragment float4 f_prepared_glyph_sdf(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
     float distance = atlas.sample(s, in.uv).r;
-    float alpha = smoothstep(0.38, 0.62, distance);
+    float alpha = sdfCoverage(distance);
     return float4(in.color.rgb, in.color.a * alpha * instance.opacityAndPadding.x);
 }
 
@@ -140,16 +146,14 @@ fragment float4 f_prepared_image_mesh(TextVSOut in [[stage_in]], texture2d<float
 // SDF variant: treat atlas.r as signed-distance remapped to [0,1] with 0.5 as edge
 fragment float4 f_text_sdf(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]])
 {
-    float sd = atlas.sample(s, in.uv).r; // in [0,1], 0.5 at edge
-    // Fixed smoothing width; could be adapted using derivatives
-    float w = 0.12;
-    float alpha = smoothstep(0.5 - w, 0.5 + w, sd);
+    float distance = atlas.sample(s, in.uv).r;
+    float alpha = sdfCoverage(distance);
     return float4(uni.color.rgb, uni.color.a * alpha);
 }
 
 fragment float4 f_prepared_text_sdf(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
-    float sd = atlas.sample(s, in.uv).r;
-    float alpha = smoothstep(0.38, 0.62, sd);
+    float distance = atlas.sample(s, in.uv).r;
+    float alpha = sdfCoverage(distance);
     return float4(uni.color.rgb, uni.color.a * alpha * instance.opacityAndPadding.x);
 }

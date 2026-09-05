@@ -31,6 +31,7 @@ pub mod sensors;
 pub mod surface;
 pub mod telemetry;
 mod text_boundary;
+pub mod vertical_scroll;
 pub mod visual_tree;
 
 pub use camera::{
@@ -64,6 +65,7 @@ pub use surface::{
     UiSurface,
 };
 pub use telemetry::TelemetryView;
+pub use vertical_scroll::VerticalScrollSurface;
 pub use visual_tree::{
     build_visual_tree_action_graph, build_visual_tree_action_graph_manifest,
     compare_visual_tree_action_graphs, compare_visual_tree_sequences,
@@ -1827,60 +1829,6 @@ impl NodeTree {
         Some((id, local))
     }
 
-    pub fn accessibility_frame(&self, id: NodeId, over: Option<&crate::anim::AnimOverrideSlots>) -> Option<gfx::RectF>
-    {
-       let (world, layout) = self.node_world_transform(id, over)?;
-       let points = [
-          affine_point(world, [0.0, 0.0]),
-          affine_point(world, [layout.w, 0.0]),
-          affine_point(world, [0.0, layout.h]),
-          affine_point(world, [layout.w, layout.h]),
-       ];
-       let mut x0 = points[0][0];
-       let mut y0 = points[0][1];
-       let mut x1 = x0;
-       let mut y1 = y0;
-       for point in points.iter().skip(1)
-       {
-          x0 = x0.min(point[0]);
-          y0 = y0.min(point[1]);
-          x1 = x1.max(point[0]);
-          y1 = y1.max(point[1]);
-       }
-       Some(gfx::RectF::new(x0, y0, x1 - x0, y1 - y0))
-    }
-
-    fn node_world_transform(&self, id: NodeId, over: Option<&crate::anim::AnimOverrideSlots>) -> Option<([f32; 6], LayoutRect)>
-    {
-       let node = self.get(id)?;
-       let mut lineage = Vec::new();
-       let mut current = Some(id);
-       while let Some(node) = current
-       {
-          lineage.push(node);
-          current = self.get(node).and_then(|node| node.parent);
-       }
-       let mut world = affine_identity();
-       let mut parent_layout = LayoutRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
-       for node in lineage.iter().rev().copied()
-       {
-          let current = self.get(node)?;
-          let transform = over.and_then(|overrides| overrides.get(&node))
-             .and_then(|override_| override_.transform)
-             .unwrap_or(current.style.transform);
-          world = affine_mul(
-             world,
-             affine_from_transform(
-                current.layout.x - parent_layout.x,
-                current.layout.y - parent_layout.y,
-                transform,
-             ),
-          );
-          parent_layout = current.layout;
-       }
-       Some((world, node.layout))
-    }
-
     pub fn route_pointer<F: FnMut(NodeId, [f32; 2])>(&self, x: f32, y: f32, mut handler: F) {
         if let Some((id, p)) = self.hit_test(x, y) {
             handler(id, p);
@@ -2607,15 +2555,6 @@ fn affine_from_transform(layout_x: f32, layout_y: f32, transform: plat::Transfor
       cos * transform.sy,
       layout_x + transform.tx,
       layout_y + transform.ty,
-   ]
-}
-
-#[inline]
-fn affine_point(transform: [f32; 6], point: [f32; 2]) -> [f32; 2]
-{
-   [
-      transform[0] * point[0] + transform[2] * point[1] + transform[4],
-      transform[1] * point[0] + transform[3] * point[1] + transform[5],
    ]
 }
 

@@ -11,15 +11,22 @@ use crate::image_slots::GenerationSlots;
 use crate::packed_geometry::{
     PackedGeometry, PackedIndexKind, PackedIndexRange, PackedVertex, PACKED_VERTEX_BYTES,
 };
-use crate::{id_mask_compositor, neon_marker, scene3d};
+use crate::{
+   id_mask_compositor, neon_marker, scene3d, BrowserDrawPipeline,
+   BrowserRendererPipelineProfile, BrowserScene3dPipeline,
+};
 use crate::{NormalizedIndexMode, WebGpuCpuSubmitTimingSample, WebGpuTimestampSample, WebRendererStats};
 use js_sys::Reflect;
 use oxide_renderer_api as api;
-use oxide_renderer_wgpu::image::{rgba8_srgb_mip_chain, RgbaMipLevel};
+#[cfg(feature = "diagnostic-instrumentation")]
 use oxide_wasm_alloc_counter::AllocationSnapshot;
+#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet};
+#[cfg(feature = "diagnostic-instrumentation")]
+use std::collections::VecDeque;
 use std::num::NonZeroU64;
+#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -51,11 +58,6 @@ const GLYPH_INSTANCE_BYTES: usize = 36;
 const GLYPH_VERTEX_COUNT: u32 = 4;
 const EFFECT_GRAPH_CACHE_CAPACITY: usize = 8;
 static NEXT_WEBGPU_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
-
-fn rgba8_mip_chain(width: u32, height: u32, rgba: Vec<u8>) -> Vec<RgbaMipLevel>
-{
-   rgba8_srgb_mip_chain(width, height, rgba)
-}
 
 #[inline]
 fn web_effect_graph_hash_mix(hash: &mut u64, value: u64)
@@ -131,10 +133,15 @@ const ID_MASK_FIELD_CACHE_MAX_ENTRIES: usize = 4;
 const EFFECT_UNIFORM_SIZE_BYTES: usize = 16;
 const EFFECT_UNIFORM_SIZE: u64 = EFFECT_UNIFORM_SIZE_BYTES as u64;
 const MAX_BLUR_SIGMA: f32 = 96.0;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_MAX_PASSES: u32 = 128;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_QUERY_COUNT: u32 = TIMESTAMP_MAX_PASSES * 2;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_READBACK_SLOTS: usize = 48;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_READBACK_INTERVAL_FRAMES: u64 = 8;
+#[cfg(feature = "diagnostic-instrumentation")]
 const TIMESTAMP_COMPLETED_CAPACITY: usize = 4_096;
 const PREPARED_CACHE_DEFAULT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 const PREPARED_BUNDLE_DEFAULT_MIN_DRAWS: usize = 8;
@@ -153,6 +160,7 @@ const LAYER_PURGE_MEMORY_PRESSURE: u8 = 2;
 const LAYER_PURGE_DEVICE_LOSS: u8 = 3;
 const LAYER_PURGE_SCALE_CHANGE: u8 = 4;
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     enabled.then(|| {
         web_sys::window()
@@ -161,6 +169,7 @@ fn cpu_submit_timing_begin(enabled: bool) -> Option<f64> {
     })
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
     if let Some(before_ms) = before_ms {
         let after_ms = web_sys::window()
@@ -168,6 +177,36 @@ fn cpu_submit_timing_end(output: &mut f64, before_ms: Option<f64>) {
             .map_or(before_ms, |performance| performance.now());
         *output = (after_ms - before_ms).max(0.0);
     }
+}
+
+#[cfg(feature = "diagnostic-instrumentation")]
+macro_rules! diagnostic_timestamp_writes
+{
+   ($renderer:expr, $family:expr) => {{
+      let pair = $renderer.reserve_timestamp_pass($family);
+      $renderer.timestamp_writes(pair)
+   }};
+}
+
+#[cfg(not(feature = "diagnostic-instrumentation"))]
+macro_rules! diagnostic_timestamp_writes
+{
+   ($renderer:expr, $family:expr) => { None };
+}
+
+#[cfg(feature = "diagnostic-instrumentation")]
+macro_rules! diagnostic_query_timestamp_writes
+{
+   ($queries_mut:expr, $queries:expr, $family:expr) => {{
+      let pair = reserve_webgpu_timestamp_pass($queries_mut, $family);
+      webgpu_timestamp_writes($queries, pair)
+   }};
+}
+
+#[cfg(not(feature = "diagnostic-instrumentation"))]
+macro_rules! diagnostic_query_timestamp_writes
+{
+   ($queries_mut:expr, $queries:expr, $family:expr) => { None };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -200,6 +239,81 @@ struct GpuImage {
     kind: GpuImageKind,
 }
 
+struct RgbaMipLevel
+{
+   width: u32,
+   height: u32,
+   rgba: Vec<u8>,
+}
+
+fn srgb_channel_to_linear(value: u8) -> f32
+{
+   let value = f32::from(value) / 255.0;
+   if value <= 0.04045
+   {
+      value / 12.92
+   }
+   else
+   {
+      ((value + 0.055) / 1.055).powf(2.4)
+   }
+}
+
+fn linear_channel_to_srgb(value: f32) -> u8
+{
+   let value = value.clamp(0.0, 1.0);
+   let encoded = if value <= 0.0031308
+   {
+      value * 12.92
+   }
+   else
+   {
+      1.055 * value.powf(1.0 / 2.4) - 0.055
+   };
+   (encoded * 255.0).round() as u8
+}
+
+fn rgba8_mip_chain(width: u32, height: u32, rgba: Vec<u8>) -> Vec<RgbaMipLevel>
+{
+   let mut levels = vec![RgbaMipLevel { width, height, rgba }];
+   while levels.last().is_some_and(|level| level.width > 1 || level.height > 1)
+   {
+      let Some(source) = levels.last() else { break };
+      let next_width = (source.width / 2).max(1);
+      let next_height = (source.height / 2).max(1);
+      let mut next = vec![0_u8; next_width as usize * next_height as usize * 4];
+      for y in 0..next_height
+      {
+         for x in 0..next_width
+         {
+            let mut color_sums = [0.0_f32; 3];
+            let mut alpha_sum = 0_u32;
+            let mut samples = 0_u32;
+            for source_y in y * 2..(y * 2 + 2).min(source.height)
+            {
+               for source_x in x * 2..(x * 2 + 2).min(source.width)
+               {
+                  let index = (source_y as usize * source.width as usize + source_x as usize) * 4;
+                  for channel in 0..3
+                  {
+                     color_sums[channel] += srgb_channel_to_linear(source.rgba[index + channel]);
+                  }
+                  alpha_sum = alpha_sum.saturating_add(u32::from(source.rgba[index + 3]));
+                  samples += 1;
+               }
+            }
+            let index = (y as usize * next_width as usize + x as usize) * 4;
+            for channel in 0..3
+            {
+               next[index + channel] = linear_channel_to_srgb(color_sums[channel] / samples as f32);
+            }
+            next[index + 3] = ((alpha_sum + samples / 2) / samples) as u8;
+         }
+      }
+      levels.push(RgbaMipLevel { width: next_width, height: next_height, rgba: next });
+   }
+   levels
+}
 
 struct GpuLayer {
     texture: wgpu::Texture,
@@ -244,17 +358,9 @@ struct GpuMesh3d {
     opaque: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Scene3dPipelineKind {
-    AlphaDepthRead,
-    AlphaDepthWrite,
-    AlphaNoTestDepthWrite,
-    AlphaNoDepth,
-    AdditiveDepthRead,
-    AdditiveDepthWrite,
-    AdditiveNoTestDepthWrite,
-    AdditiveNoDepth,
-}
+type DrawPipelineKey = BrowserDrawPipeline;
+
+type Scene3dPipelineKind = BrowserScene3dPipeline;
 
 #[derive(Clone, Copy)]
 struct Scene3dDraw {
@@ -786,25 +892,6 @@ enum DrawKind {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum DrawPipelineKey {
-    Solid,
-    RRect,
-    ImageRgba,
-    ImageA8,
-    NineSliceRgba,
-    NineSliceA8,
-    Spinner,
-    NeonMarker,
-    GlyphRgba,
-    GlyphA8,
-    GlyphSdf,
-    Rgba,
-    A8,
-    Sdf,
-    Effect,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum DrawBindKey {
     None,
     Texture { image: u32 },
@@ -1289,7 +1376,9 @@ struct PreparedChunk
    draws: Vec<GpuDraw>,
    segments: Vec<PreparedSegment>,
    resources: Box<[api::ImageHandle]>,
+   #[cfg(feature = "diagnostic-instrumentation")]
    vertex_bytes: u64,
+   #[cfg(feature = "diagnostic-instrumentation")]
    index_bytes: u64,
    resident_bytes: u64,
    bundle_generation: u64,
@@ -1452,6 +1541,7 @@ impl PreparedChunkCache
       core::mem::take(&mut self.evictions)
    }
 
+   #[cfg(feature = "diagnostic-instrumentation")]
    fn vertex_bytes(&self) -> u64
    {
       self.entries.values().fold(0, |total, entry| {
@@ -1459,6 +1549,7 @@ impl PreparedChunkCache
       })
    }
 
+   #[cfg(feature = "diagnostic-instrumentation")]
    fn index_bytes(&self) -> u64
    {
       self.entries.values().fold(0, |total, entry| {
@@ -1548,6 +1639,7 @@ fn coalescible_draw_kind(a: DrawKind, b: DrawKind) -> bool {
     }
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 enum TimestampPassFamily {
     BackdropCopy,
@@ -1562,6 +1654,7 @@ enum TimestampPassFamily {
     Present,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 struct TimestampPassRecord {
     family: TimestampPassFamily,
@@ -1569,6 +1662,7 @@ struct TimestampPassRecord {
     end_query: u32,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, Default)]
 struct TimestampSummary {
     frame_id: u64,
@@ -1587,12 +1681,14 @@ struct TimestampSummary {
     max_pass_ns: u64,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TimestampReadbackState {
     Idle,
     Pending,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy)]
 enum SubmitAllocationStage {
     Upload,
@@ -1606,6 +1702,7 @@ enum SubmitAllocationStage {
     TimestampMap,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 struct TimestampReadbackSlot {
     buffer: wgpu::Buffer,
     mapped: Rc<Cell<bool>>,
@@ -1616,6 +1713,7 @@ struct TimestampReadbackSlot {
     records: Vec<TimestampPassRecord>,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 struct WebGpuTimestampQueries {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
@@ -1631,6 +1729,7 @@ struct WebGpuTimestampQueries {
     encoder_writes_supported: bool,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 impl TimestampSummary {
     fn add(&mut self, family: TimestampPassFamily, ns: u64) {
         self.total_ns = self.total_ns.saturating_add(ns);
@@ -1684,6 +1783,7 @@ impl TimestampSummary {
     }
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 impl WebGpuTimestampQueries {
     fn new(device: &wgpu::Device, timestamp_period_ns: f64, encoder_writes_supported: bool) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -1883,42 +1983,106 @@ impl WebGpuTimestampQueries {
     }
 }
 
+enum PipelineSlot
+{
+   Enabled(wgpu::RenderPipeline),
+   Disabled,
+}
+
+impl PipelineSlot
+{
+   fn create(enabled: bool, create: impl FnOnce() -> wgpu::RenderPipeline) -> Self
+   {
+      if enabled { Self::Enabled(create()) } else { Self::Disabled }
+   }
+
+   fn create_with<T>(
+      enabled: bool,
+      dependency: Option<T>,
+      create: impl FnOnce(T) -> wgpu::RenderPipeline,
+   ) -> Self
+   {
+      match (enabled, dependency)
+      {
+         (true, Some(dependency)) => Self::Enabled(create(dependency)),
+         _ => Self::Disabled,
+      }
+   }
+
+   fn get(&self) -> Option<&wgpu::RenderPipeline>
+   {
+      match self
+      {
+         Self::Enabled(pipeline) => Some(pipeline),
+         Self::Disabled => None,
+      }
+   }
+}
+
+enum IdMaskPrograms
+{
+   Disabled,
+   Wide(IdMaskVariantPrograms),
+   Packed(IdMaskVariantPrograms),
+}
+
+impl IdMaskPrograms
+{
+   fn get(&self) -> Option<&IdMaskVariantPrograms>
+   {
+      match self
+      {
+         Self::Wide(programs) | Self::Packed(programs) => Some(programs),
+         Self::Disabled => None,
+      }
+   }
+
+   fn packed(&self) -> bool
+   {
+      matches!(self, Self::Packed(_))
+   }
+
+   fn enabled(&self) -> bool
+   {
+      !matches!(self, Self::Disabled)
+   }
+}
+
 struct GpuPrograms {
     viewport_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     effect_layout: wgpu::BindGroupLayout,
     scene3d_layout: wgpu::BindGroupLayout,
     id_mask_raster_layout: wgpu::BindGroupLayout,
-    id_mask_wide: IdMaskVariantPrograms,
-    id_mask_packed: Option<IdMaskVariantPrograms>,
-    solid_pipeline: wgpu::RenderPipeline,
-    rrect_pipeline: wgpu::RenderPipeline,
-    image_rgba_pipeline: wgpu::RenderPipeline,
-    image_a8_pipeline: wgpu::RenderPipeline,
+    id_mask: IdMaskPrograms,
+    solid_pipeline: PipelineSlot,
+    rrect_pipeline: PipelineSlot,
+    image_rgba_pipeline: PipelineSlot,
+    image_a8_pipeline: PipelineSlot,
     image_unit_vertex_buffer: wgpu::Buffer,
     image_unit_index_buffer: wgpu::Buffer,
-    nine_slice_rgba_pipeline: wgpu::RenderPipeline,
-    nine_slice_a8_pipeline: wgpu::RenderPipeline,
+    nine_slice_rgba_pipeline: PipelineSlot,
+    nine_slice_a8_pipeline: PipelineSlot,
     nine_slice_unit_vertex_buffer: wgpu::Buffer,
     nine_slice_unit_index_buffer: wgpu::Buffer,
-    spinner_pipeline: wgpu::RenderPipeline,
-    neon_marker_pipeline: wgpu::RenderPipeline,
-    glyph_rgba_pipeline: wgpu::RenderPipeline,
-    glyph_a8_pipeline: wgpu::RenderPipeline,
-    glyph_sdf_pipeline: wgpu::RenderPipeline,
-    rgba_pipeline: wgpu::RenderPipeline,
-    a8_pipeline: wgpu::RenderPipeline,
-    sdf_pipeline: wgpu::RenderPipeline,
-    effect_pipeline: wgpu::RenderPipeline,
-    scene3d_color_tri_depth_read_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_depth_read_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_no_test_depth_write_pipelines: [wgpu::RenderPipeline; 3],
-    scene3d_color_tri_add_pipelines: [wgpu::RenderPipeline; 3],
-    id_mask_raster_pipeline: wgpu::RenderPipeline,
+    spinner_pipeline: PipelineSlot,
+    neon_marker_pipeline: PipelineSlot,
+    glyph_rgba_pipeline: PipelineSlot,
+    glyph_a8_pipeline: PipelineSlot,
+    glyph_sdf_pipeline: PipelineSlot,
+    rgba_pipeline: PipelineSlot,
+    a8_pipeline: PipelineSlot,
+    sdf_pipeline: PipelineSlot,
+    effect_pipeline: PipelineSlot,
+    scene3d_color_tri_depth_read_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_no_test_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_depth_read_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_no_test_depth_write_pipelines: [PipelineSlot; 3],
+    scene3d_color_tri_add_pipelines: [PipelineSlot; 3],
+    id_mask_raster_pipeline: PipelineSlot,
     sampler: wgpu::Sampler,
 }
 
@@ -1987,28 +2151,35 @@ pub struct BrowserRenderer {
 impl BrowserRenderer {
    pub async fn from_canvas_id_webgpu(id: &str) -> Result<Self, api::RenderError>
    {
-      let canvas = canvas_by_id(id)?;
-      Self::from_canvas_webgpu(canvas).await
+      Self::from_canvas_id_webgpu_with_profile(id, BrowserRendererPipelineProfile::full()).await
+   }
+
+   /// Creates a WebGPU renderer with only the statically declared pipeline set.
+   pub async fn from_canvas_id_webgpu_with_profile(
+      id: &str,
+      profile: BrowserRendererPipelineProfile,
+   ) -> Result<Self, api::RenderError>
+   {
+      Self::from_canvas_webgpu_with_profile(canvas_by_id(id)?, profile).await
    }
 
    pub async fn from_canvas_webgpu(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError>
+   {
+      Self::from_canvas_webgpu_with_profile(canvas, BrowserRendererPipelineProfile::full()).await
+   }
+
+   /// Creates a WebGPU renderer with only the statically declared pipeline set.
+   pub async fn from_canvas_webgpu_with_profile(
+      canvas: HtmlCanvasElement,
+      profile: BrowserRendererPipelineProfile,
+   ) -> Result<Self, api::RenderError>
    {
       if !browser_webgpu_present()
       {
          return Err(api::RenderError::Unsupported("webgpu unavailable"));
       }
-      let inner = WebGpuRenderer::from_canvas(canvas).await?;
+      let inner = WebGpuRenderer::from_canvas_with_profile(canvas, profile).await?;
       Ok(Self { inner })
-   }
-
-   /// Compatibility constructor for hosts that declare a pipeline profile. The shared WebGPU
-   /// core owns pipeline creation, so this delegates to the one canonical constructor.
-   pub async fn from_canvas_webgpu_with_profile(
-      canvas: HtmlCanvasElement,
-      _profile: crate::BrowserRendererPipelineProfile,
-   ) -> Result<Self, api::RenderError>
-   {
-      Self::from_canvas_webgpu(canvas).await
    }
 
     #[must_use]
@@ -2400,6 +2571,7 @@ struct ScratchCapacityBreakdown {
     resource_table: usize,
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 #[derive(Clone, Copy, Default)]
 struct WebGpuMemorySnapshot {
     logical_total_bytes: u64,
@@ -2439,6 +2611,8 @@ pub struct WebGpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    pipeline_profile: BrowserRendererPipelineProfile,
+    pipeline_profile_violation: Option<&'static str>,
     programs: GpuPrograms,
     scene_target: Option<GpuColorTarget>,
     scene_depth_target: Option<GpuDepthTarget>,
@@ -2548,6 +2722,7 @@ pub struct WebGpuRenderer {
     frame_scratch_capacity_bytes: usize,
     active_token: Option<api::FrameToken>,
     stats: WebRendererStats,
+    #[cfg(feature = "diagnostic-instrumentation")]
     timestamp_queries: Option<WebGpuTimestampQueries>,
     draw_state_cache_enabled: bool,
     draw_item_coalescing_enabled: bool,
@@ -2555,11 +2730,17 @@ pub struct WebGpuRenderer {
     effect_uniform_batch_enabled: bool,
     backdrop_batch_enabled: bool,
     direct_surface_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     backdrop_copy_timestamp_fences_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     cpu_submit_timing_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     cpu_submit_timing: WebGpuCpuSubmitTimingSample,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_stats_interval: u64,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_stats_enabled: bool,
+    #[cfg(feature = "diagnostic-instrumentation")]
     memory_snapshot: WebGpuMemorySnapshot,
     _device_session: BrowserWebGpuDeviceSessionLease,
 }
@@ -2677,9 +2858,17 @@ const _: () = {
 
 impl WebGpuRenderer {
     pub async fn from_canvas_id(id: &str) -> Result<Self, api::RenderError> {
-        Self::from_canvas(canvas_by_id(id)?).await
+        Self::from_canvas_id_with_profile(id, BrowserRendererPipelineProfile::full()).await
     }
 
+    pub async fn from_canvas_id_with_profile(
+        id: &str,
+        profile: BrowserRendererPipelineProfile,
+    ) -> Result<Self, api::RenderError> {
+        Self::from_canvas_with_profile(canvas_by_id(id)?, profile).await
+    }
+
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn sample_memory_stats(&mut self) {
         let color_bytes = color_texture_bytes_per_pixel(self.config.format);
         let target_bytes =
@@ -2824,6 +3013,7 @@ impl WebGpuRenderer {
         };
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn apply_memory_stats(&mut self) {
         let memory = self.memory_snapshot;
         self.stats.gpu_allocated_bytes_available = false;
@@ -2848,6 +3038,13 @@ impl WebGpuRenderer {
     }
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
+        Self::from_canvas_with_profile(canvas, BrowserRendererPipelineProfile::full()).await
+    }
+
+    pub async fn from_canvas_with_profile(
+        canvas: HtmlCanvasElement,
+        pipeline_profile: BrowserRendererPipelineProfile,
+    ) -> Result<Self, api::RenderError> {
         let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
@@ -2868,15 +3065,28 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|_| api::RenderError::Unsupported("webgpu adapter unavailable"))?;
-        // Renderers in one page realm reuse one WebGPU device. Independent wgpu instances can
-        // report different optional timestamp features for the same browser adapter, so requesting
-        // them would make Foundation and Topomap disagree on the shared-device descriptor. Keep
-        // production acquisition visual-only and deterministic; CPU phase timing remains available.
-        let timestamp_query_supported = false;
-        let timestamp_encoder_writes_supported = false;
+        #[cfg(feature = "diagnostic-instrumentation")]
+        let adapter_features = adapter.features();
+        #[cfg(feature = "diagnostic-instrumentation")]
+        let timestamp_query_supported = adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY);
+        #[cfg(feature = "diagnostic-instrumentation")]
+        let timestamp_encoder_writes_supported = timestamp_query_supported
+            && adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let packed_id_mask_fields = id_mask_packed_format_supported(
             adapter.get_texture_format_features(ID_MASK_PACKED_FIELD_FORMAT),
         );
+        #[cfg(feature = "diagnostic-instrumentation")]
+        let required_features = if timestamp_query_supported {
+            wgpu::Features::TIMESTAMP_QUERY
+                | if timestamp_encoder_writes_supported {
+                    wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+                } else {
+                    wgpu::Features::empty()
+                }
+        } else {
+            wgpu::Features::empty()
+        };
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
         let required_features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -2887,6 +3097,7 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_queries = if timestamp_query_supported {
             Some(WebGpuTimestampQueries::new(
                 &device,
@@ -2908,7 +3119,12 @@ impl WebGpuRenderer {
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         surface.configure(&device, &config);
 
-        let programs = create_programs(&device, config.format, packed_id_mask_fields);
+        let programs = create_programs(
+            &device,
+            config.format,
+            packed_id_mask_fields,
+            pipeline_profile,
+        );
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
         let prepared_property_ring = PreparedPropertyRing::new(&device, &programs);
         write_viewport_uniform(&queue, &viewport_buffer, width, height, 1.0, 0.0);
@@ -2938,6 +3154,20 @@ impl WebGpuRenderer {
         )
         .saturating_mul(8)
         .clamp(LAYER_CACHE_MIN_BUDGET_BYTES, LAYER_CACHE_MAX_BUDGET_BYTES);
+        let id_mask_cache_budget_bytes = if pipeline_profile.includes_id_mask_compositor() {
+            saturating_texture_bytes(
+                u64::from(width),
+                u64::from(height),
+                id_mask_target_bytes_per_pixel(packed_id_mask_fields),
+            )
+            .saturating_mul(8)
+            .clamp(
+                ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES,
+                ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES,
+            )
+        } else {
+            0
+        };
 
         Ok(Self {
             canvas,
@@ -2945,6 +3175,8 @@ impl WebGpuRenderer {
             device,
             queue,
             config,
+            pipeline_profile,
+            pipeline_profile_violation: None,
             programs,
             scene_target: None,
             scene_depth_target: None,
@@ -2996,16 +3228,7 @@ impl WebGpuRenderer {
             id_mask_vertex_caches: Vec::new(),
             id_mask_field_cache: Vec::new(),
             id_mask_resolved_draws: Vec::new(),
-            id_mask_cache_budget_bytes: saturating_texture_bytes(
-                u64::from(width),
-                u64::from(height),
-                id_mask_target_bytes_per_pixel(packed_id_mask_fields),
-            )
-            .saturating_mul(8)
-            .clamp(
-                ID_MASK_FIELD_CACHE_MIN_BUDGET_BYTES,
-                ID_MASK_FIELD_CACHE_MAX_BUDGET_BYTES,
-            ),
+            id_mask_cache_budget_bytes,
             id_mask_cache_resident_bytes: 0,
             id_mask_cache_evictions: 0,
             id_mask_cache_purges: 0,
@@ -3078,6 +3301,7 @@ impl WebGpuRenderer {
             frame_scratch_capacity_bytes: 0,
             active_token: None,
             stats: WebRendererStats::default(),
+            #[cfg(feature = "diagnostic-instrumentation")]
             timestamp_queries,
             draw_state_cache_enabled: true,
             draw_item_coalescing_enabled: true,
@@ -3085,11 +3309,17 @@ impl WebGpuRenderer {
             effect_uniform_batch_enabled: true,
             backdrop_batch_enabled: true,
             direct_surface_enabled: true,
+            #[cfg(feature = "diagnostic-instrumentation")]
             backdrop_copy_timestamp_fences_enabled: false,
+            #[cfg(feature = "diagnostic-instrumentation")]
             cpu_submit_timing_enabled: false,
+            #[cfg(feature = "diagnostic-instrumentation")]
             cpu_submit_timing: WebGpuCpuSubmitTimingSample::default(),
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_stats_interval: 60,
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_stats_enabled: true,
+            #[cfg(feature = "diagnostic-instrumentation")]
             memory_snapshot: WebGpuMemorySnapshot::default(),
             _device_session: device_session,
         })
@@ -3106,22 +3336,35 @@ impl WebGpuRenderer {
     }
 
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
-        if let Some(timestamps) = &mut self.timestamp_queries {
-            timestamps.harvest();
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           if let Some(timestamps) = &mut self.timestamp_queries {
+              timestamps.harvest();
+           }
+           self.apply_timestamp_stats();
         }
-        self.apply_timestamp_stats();
         self.stats
     }
 
     #[must_use]
     pub fn pending_timestamp_readbacks(&self) -> u32 {
-        self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count)
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           return self.timestamp_queries.as_ref().map_or(0, WebGpuTimestampQueries::pending_count);
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        {
+           0
+        }
     }
 
     pub fn set_timestamp_readback_interval_for_benchmark(&mut self, frames: u64) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.set_readback_interval_for_benchmark(frames);
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = frames;
     }
 
     #[must_use]
@@ -3177,19 +3420,34 @@ impl WebGpuRenderer {
     }
 
     pub fn set_backdrop_copy_timestamp_fences_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.backdrop_copy_timestamp_fences_enabled = enabled;
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.backdrop_copy_timestamp_fences_enabled = enabled;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn set_memory_stats_interval_for_benchmark(&mut self, frames: u64) {
-        self.memory_stats_interval = frames.max(1);
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.memory_stats_interval = frames.max(1);
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = frames;
     }
 
     pub fn set_memory_stats_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.memory_stats_enabled = enabled;
-        if !enabled {
-            self.memory_snapshot = WebGpuMemorySnapshot::default();
-            self.apply_memory_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.memory_stats_enabled = enabled;
+           if !enabled {
+              self.memory_snapshot = WebGpuMemorySnapshot::default();
+              self.apply_memory_stats();
+           }
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn queue_completion_flag_for_benchmark(&self) -> Arc<AtomicBool> {
@@ -3202,6 +3460,7 @@ impl WebGpuRenderer {
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.clear_completed();
         }
@@ -3211,16 +3470,24 @@ impl WebGpuRenderer {
         &mut self,
         output: &mut Vec<WebGpuTimestampSample>,
     ) {
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.drain_completed_into(output);
         } else {
             output.clear();
         }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        output.clear();
     }
 
     pub fn set_cpu_submit_timing_enabled_for_benchmark(&mut self, enabled: bool) {
-        self.cpu_submit_timing_enabled = enabled;
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           self.cpu_submit_timing_enabled = enabled;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        let _ = enabled;
     }
 
     pub fn set_animation_time_ms(&mut self, time_ms: f64)
@@ -3242,7 +3509,14 @@ impl WebGpuRenderer {
 
     #[must_use]
     pub fn last_cpu_submit_timing(&self) -> WebGpuCpuSubmitTimingSample {
-        self.cpu_submit_timing
+        #[cfg(feature = "diagnostic-instrumentation")]
+        {
+           return self.cpu_submit_timing;
+        }
+        #[cfg(not(feature = "diagnostic-instrumentation"))]
+        {
+           WebGpuCpuSubmitTimingSample::default()
+        }
     }
 
     pub fn set_draw_state_cache_enabled_for_benchmark(&mut self, enabled: bool) {
@@ -3343,11 +3617,15 @@ impl WebGpuRenderer {
     }
 
     fn id_mask_target_bytes_per_pixel(&self) -> u64 {
-        id_mask_target_bytes_per_pixel(self.programs.id_mask_packed.is_some())
+        if self.programs.id_mask.enabled() {
+            id_mask_target_bytes_per_pixel(self.programs.id_mask.packed())
+        } else {
+            0
+        }
     }
 
     fn id_mask_packed_fields_supported(&self) -> bool {
-        self.programs.id_mask_packed.is_some()
+        self.programs.id_mask.packed()
     }
 
     pub fn set_id_mask_cache_budget_bytes(&mut self, budget_bytes: u64) {
@@ -3943,6 +4221,7 @@ impl WebGpuRenderer {
         );
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn apply_timestamp_stats(&mut self) {
         let Some(timestamps) = &self.timestamp_queries else {
             self.stats.gpu_timestamp_query_supported = false;
@@ -3970,10 +4249,12 @@ impl WebGpuRenderer {
             .min(u32::MAX as u64) as u32;
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn reserve_timestamp_pass(&mut self, family: TimestampPassFamily) -> Option<(u32, u32)> {
         self.timestamp_queries.as_mut().and_then(|timestamps| timestamps.reserve(family))
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn write_encoder_timestamp(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -3995,6 +4276,7 @@ impl WebGpuRenderer {
        );
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn write_backdrop_copy_timestamp_fence(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4018,6 +4300,7 @@ impl WebGpuRenderer {
         });
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn timestamp_writes(
         &self,
         pair: Option<(u32, u32)>,
@@ -4031,6 +4314,7 @@ impl WebGpuRenderer {
         })
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn prepare_timestamp_readback(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -4040,12 +4324,14 @@ impl WebGpuRenderer {
             .and_then(|timestamps| timestamps.prepare_readback(encoder, self.frame_id))
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn map_timestamp_readback(&mut self, slot_index: usize, bytes: u64) {
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.map_readback(slot_index, bytes);
         }
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn record_submit_allocation_stage(
         &mut self,
         stage: SubmitAllocationStage,
@@ -4521,6 +4807,19 @@ impl WebGpuRenderer {
     }
 
     pub fn encode_scene3d(&mut self, pass: &scene3d::Pass3d<'_>) -> Result<(), api::RenderError> {
+        if pass.instances.iter().filter(|instance| instance.color_write).any(|instance| {
+            let pipeline = BrowserScene3dPipeline::from_state(
+                instance.blend,
+                instance.depth_test,
+                instance.depth_write,
+            );
+            !self.pipeline_profile.contains_scene3d(pipeline, instance.cull)
+                || self.scene3d_pipeline(pipeline, instance.cull).is_none()
+        }) {
+            let violation = "scene3d pipeline was not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         if !self.scene3d_active {
             self.scene3d_clear_color = pass.clear_color;
             self.scene3d_clear_depth = pass.clear_depth;
@@ -4549,6 +4848,11 @@ impl WebGpuRenderer {
             if !instance.color_write {
                 continue;
             }
+            let pipeline = BrowserScene3dPipeline::from_state(
+                instance.blend,
+                instance.depth_test,
+                instance.depth_write,
+            );
             let first_instance = u32::try_from(
                 self.scene3d_instance_bytes.len() / SCENE3D_INSTANCE_STRIDE,
             )
@@ -4563,28 +4867,6 @@ impl WebGpuRenderer {
                 .stats
                 .scene3d_instance_bytes
                 .saturating_add(SCENE3D_INSTANCE_STRIDE as u64);
-            let pipeline = match (instance.blend, instance.depth_test, instance.depth_write) {
-                (scene3d::BlendMode3d::Additive, true, true) => {
-                    Scene3dPipelineKind::AdditiveDepthWrite
-                }
-                (scene3d::BlendMode3d::Additive, false, true) => {
-                    Scene3dPipelineKind::AdditiveNoTestDepthWrite
-                }
-                (scene3d::BlendMode3d::Additive, true, false) => {
-                    Scene3dPipelineKind::AdditiveDepthRead
-                }
-                (scene3d::BlendMode3d::Additive, false, false) => {
-                    Scene3dPipelineKind::AdditiveNoDepth
-                }
-                (scene3d::BlendMode3d::Alpha, true, true) => {
-                    Scene3dPipelineKind::AlphaDepthWrite
-                }
-                (scene3d::BlendMode3d::Alpha, false, true) => {
-                    Scene3dPipelineKind::AlphaNoTestDepthWrite
-                }
-                (scene3d::BlendMode3d::Alpha, true, false) => Scene3dPipelineKind::AlphaDepthRead,
-                (scene3d::BlendMode3d::Alpha, false, _) => Scene3dPipelineKind::AlphaNoDepth,
-            };
             let draw = Scene3dDraw {
                 mesh: instance.mesh.0,
                 first_instance,
@@ -4615,6 +4897,15 @@ impl WebGpuRenderer {
         &mut self,
         pass: &id_mask_compositor::IdMaskGpuCompositorPass<'_>,
     ) -> Result<(), api::RenderError> {
+        if !self.pipeline_profile.includes_id_mask_compositor()
+            || !self.programs.id_mask.enabled()
+            || self.programs.id_mask_raster_pipeline.get().is_none()
+        {
+            let violation =
+                "ID-mask compositor pipelines were not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         if pass.raster.mask_width == 0 || pass.raster.mask_height == 0 {
             return Err(api::RenderError::InvalidOperation(
                 "id-mask GPU raster has zero dimensions",
@@ -4631,6 +4922,13 @@ impl WebGpuRenderer {
         let mask_height = u32::try_from(pass.raster.mask_height).map_err(|_| {
             api::RenderError::InvalidOperation("id-mask GPU raster height exceeds WebGPU limits")
         })?;
+        if self.programs.id_mask.packed()
+            && !id_mask_packed_coordinates_fit(mask_width, mask_height)
+        {
+            return Err(api::RenderError::InvalidOperation(
+                "ID-mask dimensions exceed the construction-selected packed backend",
+            ));
+        }
         self.stats.id_mask_draws = self.stats.id_mask_draws.saturating_add(1);
         let vertex_cache_first = self.id_mask_draw_chunk_indices.len() as u32;
         let mut vertex_count = 0usize;
@@ -4674,6 +4972,14 @@ impl WebGpuRenderer {
         &mut self,
         pass: &neon_marker::NeonMarkerPass<'_>,
     ) -> Result<(), api::RenderError> {
+        if pass.clamped_len() != 0
+            && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::NeonMarker)
+                || self.pipeline_for_draw(DrawPipelineKey::NeonMarker).is_none())
+        {
+            let violation = "neon-marker pipeline was not declared at renderer construction";
+            self.record_pipeline_profile_violation(violation);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         for marker in pass.markers.iter().take(pass.clamped_len()) {
             if let Some(instance) = NeonMarkerInstance::new(*marker, pass.viewport)
             {
@@ -5000,6 +5306,83 @@ impl WebGpuRenderer {
         }
     }
 
+    fn record_pipeline_profile_violation(&mut self, violation: &'static str)
+    {
+        if self.pipeline_profile_violation.is_none()
+        {
+            self.pipeline_profile_violation = Some(violation);
+        }
+    }
+
+    fn record_profiled_draw_kind(&mut self, kind: DrawKind)
+    {
+        if self.pipeline_profile_violation.is_none()
+        {
+            let pipeline = Self::draw_pipeline_for_kind(kind);
+            if !self.pipeline_profile.contains_draw(pipeline)
+                || self.pipeline_for_draw(pipeline).is_none()
+            {
+                self.record_pipeline_profile_violation(
+                    "draw pipeline was not declared at renderer construction",
+                );
+            }
+            else if matches!(kind, DrawKind::Backdrop { .. })
+                && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::Rgba)
+                    || self.pipeline_for_draw(DrawPipelineKey::Rgba).is_none())
+            {
+                self.record_pipeline_profile_violation(
+                    "RGBA present pipeline was not declared at renderer construction",
+                );
+            }
+        }
+    }
+
+    fn push_profiled_draw(&mut self, draw: GpuDraw)
+    {
+        self.record_profiled_draw_kind(draw.kind);
+        self.frame.push_gpu_draw(draw);
+    }
+
+    fn preflight_draw_list_profile(
+        &mut self,
+        list: &api::DrawList,
+        start: usize,
+        stop_at_layer_end: bool,
+    ) -> usize
+    {
+        let saved_stats = self.stats;
+        let saved_frame = core::mem::take(&mut self.frame);
+        let saved_clip_stack = core::mem::take(&mut self.clip_stack);
+        let mut index = start;
+        let mut layer_depth = 0usize;
+        while index < list.items.len()
+        {
+            match &list.items[index]
+            {
+                api::DrawCmd::LayerBegin { id, .. } =>
+                {
+                    self.record_profiled_draw_kind(DrawKind::Layer { id: *id });
+                    layer_depth = layer_depth.saturating_add(1);
+                }
+                api::DrawCmd::LayerEnd if stop_at_layer_end && layer_depth == 0 =>
+                {
+                    index += 1;
+                    break;
+                }
+                api::DrawCmd::LayerEnd =>
+                {
+                    layer_depth = layer_depth.saturating_sub(1);
+                }
+                item => self.encode_draw_cmd(list, item),
+            }
+            index += 1;
+        }
+        self.frame = saved_frame;
+        self.clip_stack = saved_clip_stack;
+        self.stats = saved_stats;
+        index
+    }
+
     fn push_draw(&mut self, kind: DrawKind, vertices: &[PackedVertex; 4]) {
         let clip = self.current_clip();
         let target = self.current_target();
@@ -5016,7 +5399,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -5057,7 +5440,7 @@ impl WebGpuRenderer {
         if self.try_coalesce_draw_item(kind, range, clip, target) {
             return;
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind,
             index_kind: range.kind,
             first_index: range.first_index,
@@ -5107,7 +5490,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::RRect { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5165,7 +5548,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Image { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5226,7 +5609,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Glyph { image, kind, first_instance, instance_count },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5289,7 +5672,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::NineSlice { image, kind, first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5339,7 +5722,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::Spinner { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5389,7 +5772,7 @@ impl WebGpuRenderer {
                 }
             }
         }
-        self.frame.push_gpu_draw(GpuDraw {
+        self.push_profiled_draw(GpuDraw {
             kind: DrawKind::NeonMarker { first_instance, instance_count: 1 },
             index_kind: PackedIndexKind::U16,
             first_index: 0,
@@ -5652,6 +6035,15 @@ impl WebGpuRenderer {
             self.encode_items(list, index, true);
             return;
         };
+        if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+        {
+            self.record_profiled_draw_kind(DrawKind::Layer { id });
+            if self.pipeline_profile_violation.is_some()
+            {
+                let _ = skip_layer_body(list, index);
+                return;
+            }
+        }
         if !dirty {
             let cached_rect = self.cached_layer(id, frame).map(|layer| layer.composite_rect);
             if let Some(cached_rect) = cached_rect {
@@ -5661,6 +6053,15 @@ impl WebGpuRenderer {
                 self.stats.layer_cache_skipped_draws =
                     self.stats.layer_cache_skipped_draws.saturating_add(skipped);
                 self.push_layer_draw(id, cached_rect);
+                return;
+            }
+        }
+        if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+        {
+            let body_end = self.preflight_draw_list_profile(list, *index, true);
+            if self.pipeline_profile_violation.is_some()
+            {
+                *index = body_end;
                 return;
             }
         }
@@ -6429,7 +6830,7 @@ impl WebGpuRenderer {
         }));
         self.id_mask_uniform_capacity = capacity;
         self.id_mask_raster_bind_group = None;
-        let uniform_buffer = self.id_mask_uniform_buffer.as_ref().unwrap();
+        let Some(uniform_buffer) = self.id_mask_uniform_buffer.as_ref() else { return };
         for entry in &mut self.id_mask_field_cache {
             rebuild_id_mask_target_bind_groups(
                 &self.device,
@@ -6493,8 +6894,7 @@ impl WebGpuRenderer {
                 self.stats.backend_cache_misses.saturating_add(1);
             let width = draw.mask_width.max(1);
             let height = draw.mask_height.max(1);
-            let packed = self.programs.id_mask_packed.is_some()
-                && id_mask_packed_coordinates_fit(width, height);
+            let packed = self.programs.id_mask.packed();
             let required = id_mask_render_targets_bytes(width, height, packed);
             let admission = self.prepare_id_mask_cache_admission(required, width, height);
             let cacheable = admission.is_some();
@@ -6597,8 +6997,7 @@ impl WebGpuRenderer {
         height: u32,
         reusable: Option<IdMaskRenderTargets>,
     ) -> Option<IdMaskRenderTargets> {
-        let packed = self.programs.id_mask_packed.is_some()
-            && id_mask_packed_coordinates_fit(width, height);
+        let packed = self.programs.id_mask.packed();
         if let Some(targets) = reusable {
             if targets.width == width
                 && targets.height == height
@@ -6619,27 +7018,26 @@ impl WebGpuRenderer {
         let city_view = city_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let neighborhood_view =
             neighborhood_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let fields = if packed {
-            let programs = self.programs.id_mask_packed.as_ref()?;
-            create_packed_id_mask_field_targets(
-                &self.device,
-                programs,
-                uniform_buffer,
-                &city_view,
-                &neighborhood_view,
-                width,
-                height,
-            )
-        } else {
-            create_wide_id_mask_field_targets(
-                &self.device,
-                &self.programs.id_mask_wide,
-                uniform_buffer,
-                &city_view,
-                &neighborhood_view,
-                width,
-                height,
-            )
+        let fields = match &self.programs.id_mask {
+            IdMaskPrograms::Packed(programs) => create_packed_id_mask_field_targets(
+               &self.device,
+               programs,
+               uniform_buffer,
+               &city_view,
+               &neighborhood_view,
+               width,
+               height,
+            ),
+            IdMaskPrograms::Wide(programs) => create_wide_id_mask_field_targets(
+               &self.device,
+               programs,
+               uniform_buffer,
+               &city_view,
+               &neighborhood_view,
+               width,
+               height,
+            ),
+            IdMaskPrograms::Disabled => return None,
         };
         let targets = IdMaskRenderTargets {
             width,
@@ -6980,6 +7378,38 @@ impl WebGpuRenderer
             entry.frame.viewport[11] = self.animation_phase;
             entry.frame.force_refresh = true;
          }
+      }
+      if self.pipeline_profile != BrowserRendererPipelineProfile::full()
+      {
+         for entry in &plan
+         {
+            self.record_profiled_draw_kind(DrawKind::Layer { id: entry.frame.key.id });
+            if self.pipeline_profile_violation.is_some()
+            {
+               break;
+            }
+            let frame = entry.frame;
+            let hit = entry.duplicate
+               || !frame.force_refresh && self.cached_prepared_layer(frame, &entry.chunk).is_some();
+            if !hit
+            {
+               self.preflight_draw_list_profile(entry.chunk.draw_list(), 0, false);
+               if self.pipeline_profile_violation.is_some()
+               {
+                  break;
+               }
+            }
+         }
+         if self.pipeline_profile_violation.is_some()
+         {
+            self.prepared_layer_key_indices = layer_keys;
+            self.prepared_layer_plan = plan;
+            self.prepared_layer_snapshot = None;
+            return Some(Ok(()));
+         }
+      }
+      for entry in &mut plan
+      {
          let frame = entry.frame;
          self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
          let hit = entry.duplicate
@@ -7319,6 +7749,10 @@ impl WebGpuRenderer
       self.clip_stack = saved_clip_stack;
       self.target_stack = saved_target_stack;
       self.stats = saved_stats;
+      if self.pipeline_profile_violation.is_some()
+      {
+         return None;
+      }
       if !lowered.layer_passes.is_empty() || lowered.effect_count != 0 || lowered.draws.is_empty()
       {
          return None;
@@ -7561,7 +7995,9 @@ impl WebGpuRenderer
          draws: lowered.draws,
          segments,
          resources,
+         #[cfg(feature = "diagnostic-instrumentation")]
          vertex_bytes,
+         #[cfg(feature = "diagnostic-instrumentation")]
          index_bytes,
          resident_bytes,
          bundle_generation,
@@ -7978,22 +8414,59 @@ impl WebGpuRenderer
    {
       match pipeline
       {
-         DrawPipelineKey::Solid => Some(self.solid_pipeline()),
-         DrawPipelineKey::RRect => Some(self.rrect_pipeline()),
-         DrawPipelineKey::ImageRgba => Some(self.image_rgba_pipeline()),
-         DrawPipelineKey::ImageA8 => Some(self.image_a8_pipeline()),
-         DrawPipelineKey::NineSliceRgba => Some(self.nine_slice_rgba_pipeline()),
-         DrawPipelineKey::NineSliceA8 => Some(self.nine_slice_a8_pipeline()),
-         DrawPipelineKey::Spinner => Some(self.spinner_pipeline()),
-         DrawPipelineKey::NeonMarker => Some(self.neon_marker_pipeline()),
-         DrawPipelineKey::GlyphRgba => Some(self.glyph_rgba_pipeline()),
-         DrawPipelineKey::GlyphA8 => Some(self.glyph_a8_pipeline()),
-         DrawPipelineKey::GlyphSdf => Some(self.glyph_sdf_pipeline()),
-         DrawPipelineKey::Rgba => Some(self.rgba_pipeline()),
-         DrawPipelineKey::A8 => Some(self.a8_pipeline()),
-         DrawPipelineKey::Sdf => Some(self.sdf_pipeline()),
-         DrawPipelineKey::Effect => None,
+         DrawPipelineKey::Solid => self.programs.solid_pipeline.get(),
+         DrawPipelineKey::RRect => self.programs.rrect_pipeline.get(),
+         DrawPipelineKey::ImageRgba => self.programs.image_rgba_pipeline.get(),
+         DrawPipelineKey::ImageA8 => self.programs.image_a8_pipeline.get(),
+         DrawPipelineKey::NineSliceRgba => self.programs.nine_slice_rgba_pipeline.get(),
+         DrawPipelineKey::NineSliceA8 => self.programs.nine_slice_a8_pipeline.get(),
+         DrawPipelineKey::Spinner => self.programs.spinner_pipeline.get(),
+         DrawPipelineKey::NeonMarker => self.programs.neon_marker_pipeline.get(),
+         DrawPipelineKey::GlyphRgba => self.programs.glyph_rgba_pipeline.get(),
+         DrawPipelineKey::GlyphA8 => self.programs.glyph_a8_pipeline.get(),
+         DrawPipelineKey::GlyphSdf => self.programs.glyph_sdf_pipeline.get(),
+         DrawPipelineKey::Rgba => self.programs.rgba_pipeline.get(),
+         DrawPipelineKey::A8 => self.programs.a8_pipeline.get(),
+         DrawPipelineKey::Sdf => self.programs.sdf_pipeline.get(),
+         DrawPipelineKey::Effect => self.programs.effect_pipeline.get(),
       }
+   }
+
+   fn draw_pipeline_for_kind(kind: DrawKind) -> DrawPipelineKey
+   {
+      match kind
+      {
+         DrawKind::Solid => DrawPipelineKey::Solid,
+         DrawKind::RRect { .. } => DrawPipelineKey::RRect,
+         DrawKind::Image { kind: GpuImageKind::Rgba, .. } => DrawPipelineKey::ImageRgba,
+         DrawKind::Image { kind: GpuImageKind::A8, .. } => DrawPipelineKey::ImageA8,
+         DrawKind::NineSlice { kind: GpuImageKind::Rgba, .. } => DrawPipelineKey::NineSliceRgba,
+         DrawKind::NineSlice { kind: GpuImageKind::A8, .. } => DrawPipelineKey::NineSliceA8,
+         DrawKind::Spinner { .. } => DrawPipelineKey::Spinner,
+         DrawKind::NeonMarker { .. } => DrawPipelineKey::NeonMarker,
+         DrawKind::Glyph { kind: GlyphPipelineKind::Rgba, .. } => DrawPipelineKey::GlyphRgba,
+         DrawKind::Glyph { kind: GlyphPipelineKind::A8, .. } => DrawPipelineKey::GlyphA8,
+         DrawKind::Glyph { kind: GlyphPipelineKind::Sdf, .. } => DrawPipelineKey::GlyphSdf,
+         DrawKind::Rgba { .. } | DrawKind::Layer { .. } => DrawPipelineKey::Rgba,
+         DrawKind::A8 { .. } => DrawPipelineKey::A8,
+         DrawKind::Sdf { .. } => DrawPipelineKey::Sdf,
+         DrawKind::Backdrop { .. } => DrawPipelineKey::Effect,
+      }
+   }
+
+   fn pipeline_profile_violation(&self) -> Option<&'static str>
+   {
+      if self.pipeline_profile_violation.is_some()
+      {
+         return self.pipeline_profile_violation;
+      }
+      if !self.direct_surface_enabled
+         && (!self.pipeline_profile.contains_draw(BrowserDrawPipeline::Rgba)
+            || self.pipeline_for_draw(DrawPipelineKey::Rgba).is_none())
+      {
+         return Some("RGBA present pipeline was not declared at renderer construction");
+      }
+      None
    }
 }
 
@@ -8063,6 +8536,7 @@ impl api::Renderer for WebGpuRenderer {
         self.clip_stack.clear();
         self.target_stack.clear();
         self.layer_frame_ids.clear();
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some(timestamps) = &mut self.timestamp_queries {
             timestamps.harvest();
             timestamps.begin_frame();
@@ -8077,7 +8551,9 @@ impl api::Renderer for WebGpuRenderer {
         };
         self.apply_layer_cache_stats();
         self.apply_id_mask_cache_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.apply_memory_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.apply_timestamp_stats();
         self.frame_scratch_capacity = self.scratch_capacity_breakdown();
         self.frame_scratch_capacity_bytes = self.frame_scratch_capacity.total();
@@ -8097,19 +8573,31 @@ impl api::Renderer for WebGpuRenderer {
             self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
             return Err(api::RenderError::InvalidOperation("frame token mismatch"));
         }
+        if let Some(violation) = self.pipeline_profile_violation() {
+            self.active_token = None;
+            self.stats.skipped_submissions = self.stats.skipped_submissions.saturating_add(1);
+            return Err(api::RenderError::InvalidOperation(violation));
+        }
         self.active_token = None;
+        #[cfg(feature = "diagnostic-instrumentation")]
         if self.cpu_submit_timing_enabled {
             self.cpu_submit_timing = WebGpuCpuSubmitTimingSample::default();
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.upload_frame_buffers();
         self.upload_scene3d_instances();
         self.prepare_effect_uniforms();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Upload, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.upload_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let surface_texture = match self.surface.get_current_texture() {
             Ok(texture) => texture,
@@ -8139,19 +8627,27 @@ impl api::Renderer for WebGpuRenderer {
         };
         let surface_view =
             surface_texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Surface, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.surface_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-webgpu-frame"),
         });
         self.stats.command_buffers = self.stats.command_buffers.saturating_add(1);
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Encoder, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.encoder_create_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.render_layer_passes(&mut encoder);
         if self.target_uses_backdrop(None, 0, self.frame.draws.len())
@@ -8162,44 +8658,69 @@ impl api::Renderer for WebGpuRenderer {
         } else {
             self.render_direct(&mut encoder, &surface_view);
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Render, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.command_encoding_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_readback = self.prepare_timestamp_readback(&mut encoder);
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Timestamp, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_readback_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         self.record_scratch_growth_stats();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::ScratchStats, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.scratch_stats_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         let command_buffer = encoder.finish();
         self.queue.submit(core::iter::once(command_buffer));
         self.stats.actual_submissions = self.stats.actual_submissions.saturating_add(1);
         self.stats.shaded_damage_pixels = u64::from(self.width).saturating_mul(u64::from(self.height));
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::FinishQueue, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.queue_submit_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
         surface_texture.present();
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::Present, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.present_ms, timing_before);
 
+        #[cfg(feature = "diagnostic-instrumentation")]
         let timing_before = cpu_submit_timing_begin(self.cpu_submit_timing_enabled);
+        #[cfg(feature = "diagnostic-instrumentation")]
         let alloc_before = oxide_wasm_alloc_counter::snapshot();
+        #[cfg(feature = "diagnostic-instrumentation")]
         if let Some((slot_index, bytes)) = timestamp_readback {
             self.map_timestamp_readback(slot_index, bytes);
             self.apply_timestamp_stats();
         }
+        #[cfg(feature = "diagnostic-instrumentation")]
         self.record_submit_allocation_stage(SubmitAllocationStage::TimestampMap, alloc_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         cpu_submit_timing_end(&mut self.cpu_submit_timing.timestamp_map_ms, timing_before);
+        #[cfg(feature = "diagnostic-instrumentation")]
         if self.memory_stats_enabled
             && self.frame_id.saturating_sub(1) % self.memory_stats_interval == 0
         {
@@ -8609,73 +9130,13 @@ impl WebGpuRenderer {
        self.record_effect_graph_stats(stats, false);
     }
 
-    fn solid_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.solid_pipeline
-    }
-
-    fn rrect_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.rrect_pipeline
-    }
-
-    fn image_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.image_rgba_pipeline
-    }
-
-    fn image_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.image_a8_pipeline
-    }
-
-    fn nine_slice_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.nine_slice_rgba_pipeline
-    }
-
-    fn nine_slice_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.nine_slice_a8_pipeline
-    }
-
-    fn spinner_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.spinner_pipeline
-    }
-
-    fn neon_marker_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.neon_marker_pipeline
-    }
-
-    fn glyph_rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_rgba_pipeline
-    }
-
-    fn glyph_a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_a8_pipeline
-    }
-
-    fn glyph_sdf_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.glyph_sdf_pipeline
-    }
-
-    fn rgba_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.rgba_pipeline
-    }
-
-    fn a8_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.a8_pipeline
-    }
-
-    fn sdf_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.sdf_pipeline
-    }
-
-    fn effect_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.effect_pipeline
-    }
-
     fn scene3d_pipeline(
         &self,
         kind: Scene3dPipelineKind,
         cull: scene3d::CullMode3d,
-    ) -> &wgpu::RenderPipeline {
+    ) -> Option<&wgpu::RenderPipeline> {
         let index = scene3d_cull_index(cull);
-        match kind {
+        let slot = match kind {
             Scene3dPipelineKind::AlphaDepthRead => {
                 &self.programs.scene3d_color_tri_depth_read_pipelines[index]
             }
@@ -8700,30 +9161,29 @@ impl WebGpuRenderer {
             Scene3dPipelineKind::AdditiveNoDepth => {
                 &self.programs.scene3d_color_tri_add_pipelines[index]
             }
-        }
+        };
+        slot.get()
     }
 
-    fn id_mask_raster_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.programs.id_mask_raster_pipeline
+    fn id_mask_raster_pipeline(&self) -> Option<&wgpu::RenderPipeline> {
+        self.programs.id_mask_raster_pipeline.get()
     }
 
-    fn id_mask_programs(&self, packed: bool) -> &IdMaskVariantPrograms {
-        match (packed, self.programs.id_mask_packed.as_ref()) {
-            (true, Some(programs)) => programs,
-            _ => &self.programs.id_mask_wide,
-        }
+    fn id_mask_programs(&self, packed: bool) -> Option<&IdMaskVariantPrograms> {
+        debug_assert_eq!(packed, self.programs.id_mask.packed());
+        self.programs.id_mask.get()
     }
 
-    fn id_mask_field_seed_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).field_seed_pipeline
+    fn id_mask_field_seed_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.field_seed_pipeline)
     }
 
-    fn id_mask_field_jump_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).field_jump_pipeline
+    fn id_mask_field_jump_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.field_jump_pipeline)
     }
 
-    fn id_mask_compositor_pipeline(&self, packed: bool) -> &wgpu::RenderPipeline {
-        &self.id_mask_programs(packed).compositor_pipeline
+    fn id_mask_compositor_pipeline(&self, packed: bool) -> Option<&wgpu::RenderPipeline> {
+        Some(&self.id_mask_programs(packed)?.compositor_pipeline)
     }
 
     fn render_direct(
@@ -8785,8 +9245,8 @@ impl WebGpuRenderer {
            };
            self.stats.render_passes = self.stats.render_passes.saturating_add(1);
            self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
-           let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-           let timestamp_writes = self.timestamp_writes(timestamp_pair);
+           let timestamp_writes =
+              diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
            {
               let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                  label: Some("oxide-webgpu-prepared-snapshot-pass"),
@@ -8869,8 +9329,7 @@ impl WebGpuRenderer {
         self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
         let cache = core::mem::take(&mut self.prepared_chunks);
         let plan = core::mem::take(&mut self.prepared_frame_plan);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
         let mut draws = 0_u32;
         let mut draw_items = 0_u32;
         let mut pipeline_binds = 0_u32;
@@ -9288,14 +9747,18 @@ impl WebGpuRenderer {
                 else {
                     return;
                 };
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let encoder_timestamp_writes = self.timestamp_queries.as_ref()
                     .is_some_and(|timestamps| timestamps.encoder_writes_supported);
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let fence_timestamp_writes = !encoder_timestamp_writes
                     && self.backdrop_copy_timestamp_fences_enabled;
+                #[cfg(feature = "diagnostic-instrumentation")]
                 let copy_timestamp_pair = (!self.backdrop_copy_regions.is_empty()
                     && (encoder_timestamp_writes || fence_timestamp_writes))
                     .then(|| self.reserve_timestamp_pass(TimestampPassFamily::BackdropCopy))
                     .flatten();
+                #[cfg(feature = "diagnostic-instrumentation")]
                 if encoder_timestamp_writes {
                     self.write_encoder_timestamp(encoder, copy_timestamp_pair, false);
                 } else if fence_timestamp_writes {
@@ -9340,6 +9803,7 @@ impl WebGpuRenderer {
                         ),
                     );
                 }
+                #[cfg(feature = "diagnostic-instrumentation")]
                 if encoder_timestamp_writes {
                     self.write_encoder_timestamp(encoder, copy_timestamp_pair, true);
                 } else if fence_timestamp_writes {
@@ -9397,8 +9861,7 @@ impl WebGpuRenderer {
     ) {
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.clear_passes = self.stats.clear_passes.saturating_add(1);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Clear);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Clear);
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9422,8 +9885,7 @@ impl WebGpuRenderer {
         target_view: &wgpu::TextureView,
     ) {
         self.ensure_scene_depth_target();
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3d);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Scene3d);
         let Some(depth_target) = self.scene_depth_target.as_ref() else {
             return;
         };
@@ -9480,7 +9942,10 @@ impl WebGpuRenderer {
             };
             let pipeline_key = (draw.pipeline, draw.cull);
             if active_pipeline != Some(pipeline_key) {
-                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                let Some(pipeline) = self.scene3d_pipeline(draw.pipeline, draw.cull) else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
                 active_pipeline = Some(pipeline_key);
                 pipeline_binds = pipeline_binds.saturating_add(1);
             }
@@ -9527,8 +9992,8 @@ impl WebGpuRenderer {
             return;
         }
         self.ensure_scene_depth_target();
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Scene3dOverlay);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes =
+            diagnostic_timestamp_writes!(self, TimestampPassFamily::Scene3dOverlay);
         let Some(depth_target) = self.scene_depth_target.as_ref() else {
             return;
         };
@@ -9570,7 +10035,10 @@ impl WebGpuRenderer {
             };
             let pipeline_key = (draw.pipeline, draw.cull);
             if active_pipeline != Some(pipeline_key) {
-                pass.set_pipeline(self.scene3d_pipeline(draw.pipeline, draw.cull));
+                let Some(pipeline) = self.scene3d_pipeline(draw.pipeline, draw.cull) else {
+                    continue;
+                };
+                pass.set_pipeline(pipeline);
                 active_pipeline = Some(pipeline_key);
                 pipeline_binds = pipeline_binds.saturating_add(1);
             }
@@ -9673,12 +10141,12 @@ impl WebGpuRenderer {
                 }
 
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskRaster,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskRaster
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_raster_pipeline() else { return };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-raster-pass"),
                     color_attachments: &[
@@ -9705,7 +10173,7 @@ impl WebGpuRenderer {
                     timestamp_writes,
                     occlusion_query_set: None,
                 });
-                pass.set_pipeline(self.id_mask_raster_pipeline());
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, raster_bind_group, &[uniform_offsets.raster]);
                 for cache_pos in cache_start..cache_end {
                     let cache_index = self.id_mask_draw_chunk_indices[cache_pos];
@@ -9727,17 +10195,19 @@ impl WebGpuRenderer {
             // scheduling stalls this path was built to remove.
             let mut field_offset_index = uniform_offsets.field_first;
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskFieldSeed,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskFieldSeed
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_field_seed_pipeline(packed_fields) else {
+                    return;
+                };
                 encode_id_mask_field_pass(
                     encoder,
                     "oxide-webgpu-id-mask-field-seed-pass",
                     targets.field_pair(true),
-                    self.id_mask_field_seed_pipeline(packed_fields),
+                    pipeline,
                     targets.field_bind_group(false),
                     self.id_mask_field_uniform_offsets[field_offset_index],
                     timestamp_writes,
@@ -9752,17 +10222,19 @@ impl WebGpuRenderer {
             let mut jump = width.max(height).next_power_of_two() / 2;
             while jump >= 1 {
                 {
-                    let timestamp_pair = reserve_webgpu_timestamp_pass(
+                    let timestamp_writes = diagnostic_query_timestamp_writes!(
                         &mut self.timestamp_queries,
-                        TimestampPassFamily::IdMaskFieldJump,
+                        &self.timestamp_queries,
+                        TimestampPassFamily::IdMaskFieldJump
                     );
-                    let timestamp_writes =
-                        webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                    let Some(pipeline) = self.id_mask_field_jump_pipeline(packed_fields) else {
+                        return;
+                    };
                     encode_id_mask_field_pass(
                         encoder,
                         "oxide-webgpu-id-mask-field-jump-pass",
                         targets.field_pair(!src_is_a),
-                        self.id_mask_field_jump_pipeline(packed_fields),
+                        pipeline,
                         targets.field_bind_group(src_is_a),
                         self.id_mask_field_uniform_offsets[field_offset_index],
                         timestamp_writes,
@@ -9785,12 +10257,14 @@ impl WebGpuRenderer {
             );
 
             {
-                let timestamp_pair = reserve_webgpu_timestamp_pass(
+                let timestamp_writes = diagnostic_query_timestamp_writes!(
                     &mut self.timestamp_queries,
-                    TimestampPassFamily::IdMaskCompositor,
+                    &self.timestamp_queries,
+                    TimestampPassFamily::IdMaskCompositor
                 );
-                let timestamp_writes =
-                    webgpu_timestamp_writes(&self.timestamp_queries, timestamp_pair);
+                let Some(pipeline) = self.id_mask_compositor_pipeline(packed_fields) else {
+                    return;
+                };
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxide-webgpu-id-mask-compositor-pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -9813,7 +10287,7 @@ impl WebGpuRenderer {
                     self.width,
                     self.height,
                 );
-                pass.set_pipeline(self.id_mask_compositor_pipeline(packed_fields));
+                pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, compositor_bind_group, &[uniform_offsets.compositor]);
                 pass.draw(0..6, 0..1);
             }
@@ -9942,8 +10416,7 @@ impl WebGpuRenderer {
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.draw_passes = self.stats.draw_passes.saturating_add(1);
 
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Draw);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Draw);
         let vertex_buffer = self.vertex_buffer.clone();
         let rrect_instance_buffer = self.rrect_instance_buffer.clone();
         let image_instance_buffer = self.image_instance_buffer.clone();
@@ -10023,15 +10496,16 @@ impl WebGpuRenderer {
                 bound_clip = Some(state.clip);
             }
             if force_bind || bound_pipeline != Some(state.pipeline) {
+                let Some(pipeline) = self.pipeline_for_draw(state.pipeline) else { continue };
                 match state.pipeline {
                     DrawPipelineKey::RRect => {
                         let Some(buffer) = rrect_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.rrect_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::ImageRgba => {
                         let Some(buffer) = image_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.image_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.image_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10042,7 +10516,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::ImageA8 => {
                         let Some(buffer) = image_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.image_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.image_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10053,7 +10527,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::NineSliceRgba => {
                         let Some(buffer) = nine_slice_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.nine_slice_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.nine_slice_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10064,7 +10538,7 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::NineSliceA8 => {
                         let Some(buffer) = nine_slice_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.nine_slice_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, self.programs.nine_slice_unit_vertex_buffer.slice(..));
                         pass.set_vertex_buffer(1, buffer.slice(..));
                         pass.set_index_buffer(
@@ -10075,60 +10549,60 @@ impl WebGpuRenderer {
                     }
                     DrawPipelineKey::Spinner => {
                         let Some(buffer) = spinner_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.spinner_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
                     DrawPipelineKey::NeonMarker => {
                         let Some(buffer) = neon_marker_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.neon_marker_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphRgba => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphA8 => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::GlyphSdf => {
                         let Some(buffer) = glyph_instance_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.glyph_sdf_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                         glyph_instance_buffer_binds = glyph_instance_buffer_binds.saturating_add(1);
                         bound_index = None;
                     }
                     DrawPipelineKey::Solid => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.solid_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Rgba => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.rgba_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::A8 => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.a8_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Sdf => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.sdf_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                     DrawPipelineKey::Effect => {
                         let Some(buffer) = vertex_buffer.as_ref() else { continue };
-                        pass.set_pipeline(self.effect_pipeline());
+                        pass.set_pipeline(pipeline);
                         pass.set_vertex_buffer(0, buffer.slice(..));
                     }
                 }
@@ -10268,8 +10742,8 @@ impl WebGpuRenderer {
         self.ensure_present_buffers();
         self.stats.render_passes = self.stats.render_passes.saturating_add(1);
         self.stats.present_passes = self.stats.present_passes.saturating_add(1);
-        let timestamp_pair = self.reserve_timestamp_pass(TimestampPassFamily::Present);
-        let timestamp_writes = self.timestamp_writes(timestamp_pair);
+        let timestamp_writes = diagnostic_timestamp_writes!(self, TimestampPassFamily::Present);
+        let Some(pipeline) = self.pipeline_for_draw(DrawPipelineKey::Rgba) else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("oxide-webgpu-present-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -10285,7 +10759,7 @@ impl WebGpuRenderer {
             timestamp_writes,
             occlusion_query_set: None,
         });
-        pass.set_pipeline(self.rgba_pipeline());
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.viewport_bind_group, &[0]);
         pass.set_bind_group(1, &scene_bind_group, &[]);
         pass.set_vertex_buffer(0, self.present_vertex_buffer.slice(..));
@@ -10314,10 +10788,12 @@ fn browser_webgpu_present() -> bool {
         .is_some()
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn timestamp_readback_bytes(query_count: u32) -> u64 {
     u64::from(query_count).saturating_mul(u64::from(wgpu::QUERY_SIZE))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
     let start = (query_index as usize).checked_mul(wgpu::QUERY_SIZE as usize)?;
     let bytes = data.get(start..start.checked_add(8)?)?;
@@ -10326,6 +10802,7 @@ fn timestamp_sample(data: &[u8], query_index: u32) -> Option<u64> {
     ]))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn reserve_webgpu_timestamp_pass(
     timestamps: &mut Option<WebGpuTimestampQueries>,
     family: TimestampPassFamily,
@@ -10333,6 +10810,7 @@ fn reserve_webgpu_timestamp_pass(
     timestamps.as_mut().and_then(|timestamps| timestamps.reserve(family))
 }
 
+#[cfg(feature = "diagnostic-instrumentation")]
 fn webgpu_timestamp_writes(
     timestamps: &Option<WebGpuTimestampQueries>,
     pair: Option<(u32, u32)>,
@@ -10350,6 +10828,7 @@ fn create_programs(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     packed_id_mask_fields: bool,
+    profile: BrowserRendererPipelineProfile,
 ) -> GpuPrograms {
     let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-viewport-layout"),
@@ -10424,7 +10903,8 @@ fn create_programs(
             count: None,
         }],
     });
-    let id_mask_wide_field_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let id_mask_wide_field_layout = (profile.includes_id_mask_compositor()
+        && !packed_id_mask_fields).then(|| device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-id-mask-wide-field-layout"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
@@ -10478,8 +10958,9 @@ fn create_programs(
                 count: None,
             },
         ],
-    });
-    let id_mask_wide_compositor_layout =
+    }));
+    let id_mask_wide_compositor_layout = (profile.includes_id_mask_compositor()
+        && !packed_id_mask_fields).then(|| {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-compositor-layout"),
             entries: &[
@@ -10534,7 +11015,8 @@ fn create_programs(
                     count: None,
                 },
             ],
-        });
+        })
+    });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("oxide-webgpu-linear-sampler"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -10546,21 +11028,29 @@ fn create_programs(
         ..Default::default()
     });
 
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-shader"),
-        source: wgpu::ShaderSource::Wgsl(WGSL.into()),
+    let shader = profile.has_draw_pipelines().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-shader"),
+            source: wgpu::ShaderSource::Wgsl(WGSL.into()),
+        })
     });
-    let scene3d_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-scene3d-shader"),
-        source: wgpu::ShaderSource::Wgsl(SCENE3D_WGSL.into()),
+    let scene3d_shader = profile.has_scene3d_pipelines().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-scene3d-shader"),
+            source: wgpu::ShaderSource::Wgsl(SCENE3D_WGSL.into()),
+        })
     });
-    let id_mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-id-mask-shader"),
-        source: wgpu::ShaderSource::Wgsl(ID_MASK_WGSL.into()),
+    let id_mask_shader = profile.includes_id_mask_compositor().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-id-mask-shader"),
+            source: wgpu::ShaderSource::Wgsl(ID_MASK_WGSL.into()),
+        })
     });
-    let id_mask_field_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("oxide-webgpu-id-mask-field-shader"),
-        source: wgpu::ShaderSource::Wgsl(ID_MASK_FIELD_WGSL.into()),
+    let id_mask_field_shader = profile.includes_id_mask_compositor().then(|| {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxide-webgpu-id-mask-field-shader"),
+            source: wgpu::ShaderSource::Wgsl(ID_MASK_FIELD_WGSL.into()),
+        })
     });
     let solid_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("oxide-webgpu-solid-pipeline-layout"),
@@ -10588,62 +11078,81 @@ fn create_programs(
             bind_group_layouts: &[&id_mask_raster_layout],
             push_constant_ranges: &[],
         });
-    let id_mask_wide_field_pipeline_layout =
+    let id_mask_wide_field_pipeline_layout = id_mask_wide_field_layout.as_ref().map(|layout| {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-field-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_wide_field_layout],
+            bind_group_layouts: &[layout],
             push_constant_ranges: &[],
-        });
+        })
+    });
     let id_mask_wide_compositor_pipeline_layout =
+        id_mask_wide_compositor_layout.as_ref().map(|layout| {
         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxide-webgpu-id-mask-wide-compositor-pipeline-layout"),
-            bind_group_layouts: &[&id_mask_wide_compositor_layout],
+            bind_group_layouts: &[layout],
             push_constant_ranges: &[],
-        });
+        })
+    });
 
     let draw_vertex_layout = vertex_layout();
     let draw_color_target = alpha_color_target(format);
-    let solid_pipeline = create_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_solid",
+    let solid_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Solid),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_solid",
+        ),
     );
     let rrect_instance_layout = rrect_instance_layout();
     let rrect_vertex_layouts = [rrect_instance_layout];
-    let rrect_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &rrect_vertex_layouts,
-        &draw_color_target,
-        "vs_rrect",
-        "fs_rrect",
-        "oxide-webgpu-rrect",
+    let rrect_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::RRect),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &rrect_vertex_layouts,
+            &draw_color_target,
+            "vs_rrect",
+            "fs_rrect",
+            "oxide-webgpu-rrect",
+        ),
     );
     let image_instance_layout = image_instance_layout();
     let image_vertex_layouts = [image_unit_vertex_layout(), image_instance_layout];
-    let image_rgba_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &image_vertex_layouts,
-        &draw_color_target,
-        "vs_image_instance",
-        "fs_rgba",
-        "oxide-webgpu-image-rgba",
+    let image_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::ImageRgba),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &image_vertex_layouts,
+            &draw_color_target,
+            "vs_image_instance",
+            "fs_rgba",
+            "oxide-webgpu-image-rgba",
+        ),
     );
-    let image_a8_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &image_vertex_layouts,
-        &draw_color_target,
-        "vs_image_instance",
-        "fs_a8",
-        "oxide-webgpu-image-a8",
+    let image_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::ImageA8),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &image_vertex_layouts,
+            &draw_color_target,
+            "vs_image_instance",
+            "fs_a8",
+            "oxide-webgpu-image-a8",
+        ),
     );
     let image_unit_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("oxide-webgpu-image-unit-vertices"),
@@ -10662,25 +11171,33 @@ fn create_programs(
     });
     let nine_slice_instance_layout = nine_slice_instance_layout();
     let nine_slice_vertex_layouts = [nine_slice_unit_vertex_layout(), nine_slice_instance_layout];
-    let nine_slice_rgba_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &nine_slice_vertex_layouts,
-        &draw_color_target,
-        "vs_nine_slice_instance",
-        "fs_rgba",
-        "oxide-webgpu-nine-slice-rgba",
+    let nine_slice_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NineSliceRgba),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &nine_slice_vertex_layouts,
+            &draw_color_target,
+            "vs_nine_slice_instance",
+            "fs_rgba",
+            "oxide-webgpu-nine-slice-rgba",
+        ),
     );
-    let nine_slice_a8_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &nine_slice_vertex_layouts,
-        &draw_color_target,
-        "vs_nine_slice_instance",
-        "fs_a8",
-        "oxide-webgpu-nine-slice-a8",
+    let nine_slice_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NineSliceA8),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &nine_slice_vertex_layouts,
+            &draw_color_target,
+            "vs_nine_slice_instance",
+            "fs_a8",
+            "oxide-webgpu-nine-slice-a8",
+        ),
     );
     let nine_slice_unit_vertex_buffer =
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -10696,93 +11213,131 @@ fn create_programs(
         });
     let spinner_instance_layout = spinner_instance_layout();
     let spinner_vertex_layouts = [spinner_instance_layout];
-    let spinner_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &spinner_vertex_layouts,
-        &draw_color_target,
-        "vs_spinner_instance",
-        "fs_rrect",
-        "oxide-webgpu-spinner",
+    let spinner_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Spinner),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &spinner_vertex_layouts,
+            &draw_color_target,
+            "vs_spinner_instance",
+            "fs_rrect",
+            "oxide-webgpu-spinner",
+        ),
     );
     let neon_marker_instance_layout = neon_marker_instance_layout();
     let neon_marker_vertex_layouts = [neon_marker_instance_layout];
-    let neon_marker_pipeline = create_instanced_pipeline(
-        device,
-        &shader,
-        &solid_pipeline_layout,
-        &neon_marker_vertex_layouts,
-        &draw_color_target,
-        "vs_neon_marker_instance",
-        "fs_neon_marker",
-        "oxide-webgpu-neon-marker",
+    let neon_marker_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::NeonMarker),
+        shader.as_ref(),
+        |shader| create_instanced_pipeline(
+            device,
+            shader,
+            &solid_pipeline_layout,
+            &neon_marker_vertex_layouts,
+            &draw_color_target,
+            "vs_neon_marker_instance",
+            "fs_neon_marker",
+            "oxide-webgpu-neon-marker",
+        ),
     );
     let glyph_instance_layout = glyph_instance_layout();
     let glyph_vertex_layouts = [glyph_instance_layout];
-    let glyph_rgba_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_rgba",
-        "oxide-webgpu-glyph-rgba",
+    let glyph_rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphRgba),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_rgba",
+            "oxide-webgpu-glyph-rgba",
+        ),
     );
-    let glyph_a8_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_a8",
-        "oxide-webgpu-glyph-a8",
+    let glyph_a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphA8),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_a8",
+            "oxide-webgpu-glyph-a8",
+        ),
     );
-    let glyph_sdf_pipeline = create_glyph_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &glyph_vertex_layouts,
-        &draw_color_target,
-        "fs_sdf",
-        "oxide-webgpu-glyph-sdf",
+    let glyph_sdf_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::GlyphSdf),
+        shader.as_ref(),
+        |shader| create_glyph_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &glyph_vertex_layouts,
+            &draw_color_target,
+            "fs_sdf",
+            "oxide-webgpu-glyph-sdf",
+        ),
     );
-    let rgba_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_rgba",
+    let rgba_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Rgba),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_rgba",
+        ),
     );
-    let a8_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_a8",
+    let a8_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::A8),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_a8",
+        ),
     );
-    let sdf_pipeline = create_pipeline(
-        device,
-        &shader,
-        &texture_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_sdf",
+    let sdf_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Sdf),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &texture_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_sdf",
+        ),
     );
-    let effect_pipeline = create_pipeline(
-        device,
-        &shader,
-        &effect_pipeline_layout,
-        &draw_vertex_layout,
-        &draw_color_target,
-        "fs_backdrop",
+    let effect_pipeline = PipelineSlot::create_with(
+        profile.contains_draw(BrowserDrawPipeline::Effect),
+        shader.as_ref(),
+        |shader| create_pipeline(
+            device,
+            shader,
+            &effect_pipeline_layout,
+            &draw_vertex_layout,
+            &draw_color_target,
+            "fs_backdrop",
+        ),
     );
     let scene3d_vertex_layout = scene3d_color_vertex_layout();
     let scene3d_color_tri_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaDepthRead,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10793,7 +11348,9 @@ fn create_programs(
     );
     let scene3d_color_tri_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10804,7 +11361,9 @@ fn create_programs(
     );
     let scene3d_color_tri_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaNoTestDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10815,7 +11374,9 @@ fn create_programs(
     );
     let scene3d_color_tri_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AlphaNoDepth,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10826,7 +11387,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_depth_read_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveDepthRead,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10837,7 +11400,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10848,7 +11413,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_no_test_depth_write_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveNoTestDepthWrite,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10859,7 +11426,9 @@ fn create_programs(
     );
     let scene3d_color_tri_add_pipelines = create_scene3d_pipeline_variants(
         device,
-        &scene3d_shader,
+        scene3d_shader.as_ref(),
+        profile,
+        BrowserScene3dPipeline::AdditiveNoDepth,
         &scene3d_pipeline_layout,
         &scene3d_vertex_layout,
         format,
@@ -10868,49 +11437,81 @@ fn create_programs(
         false,
         "oxide-webgpu-scene3d-color-tri-add",
     );
-    let id_mask_vertex_layout = id_mask_raster_vertex_layout();
-    let id_mask_raster_pipeline = create_id_mask_raster_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_raster_pipeline_layout,
-        &id_mask_vertex_layout,
-    );
-    let id_mask_wide_field_seed_pipeline = create_id_mask_field_pipeline(
-        device,
-        &id_mask_field_shader,
-        &id_mask_wide_field_pipeline_layout,
-        "fs_id_mask_field_seed",
-        "oxide-webgpu-id-mask-wide-field-seed",
-        ID_MASK_WIDE_FIELD_FORMAT,
-        false,
-    );
-    let id_mask_wide_field_jump_pipeline = create_id_mask_field_pipeline(
-        device,
-        &id_mask_field_shader,
-        &id_mask_wide_field_pipeline_layout,
-        "fs_id_mask_field_jump",
-        "oxide-webgpu-id-mask-wide-field-jump",
-        ID_MASK_WIDE_FIELD_FORMAT,
-        false,
-    );
-    let id_mask_wide_compositor_pipeline = create_id_mask_compositor_pipeline(
-        device,
-        &id_mask_shader,
-        &id_mask_wide_compositor_pipeline_layout,
-        format,
-        "fs_id_mask_compositor",
-        "oxide-webgpu-id-mask-wide-compositor",
-    );
-    let id_mask_wide = IdMaskVariantPrograms {
-        field_layout: id_mask_wide_field_layout,
-        compositor_layout: id_mask_wide_compositor_layout,
-        field_seed_pipeline: id_mask_wide_field_seed_pipeline,
-        field_jump_pipeline: id_mask_wide_field_jump_pipeline,
-        compositor_pipeline: id_mask_wide_compositor_pipeline,
+    let id_mask_raster_pipeline = match (
+        profile.includes_id_mask_compositor(),
+        id_mask_shader.as_ref(),
+    )
+    {
+        (true, Some(shader)) => PipelineSlot::Enabled(create_id_mask_raster_pipeline(
+            device,
+            shader,
+            &id_mask_raster_pipeline_layout,
+            &id_mask_raster_vertex_layout(),
+        )),
+        _ => PipelineSlot::Disabled,
     };
-    let id_mask_packed = packed_id_mask_fields.then(|| {
-        create_packed_id_mask_programs(device, &id_mask_field_shader, &id_mask_shader, format)
-    });
+    let id_mask = match (
+        profile.includes_id_mask_compositor(),
+        packed_id_mask_fields,
+        id_mask_field_shader.as_ref(),
+        id_mask_shader.as_ref(),
+        id_mask_wide_field_layout,
+        id_mask_wide_compositor_layout,
+        id_mask_wide_field_pipeline_layout,
+        id_mask_wide_compositor_pipeline_layout,
+    )
+    {
+        (true, true, Some(field_shader), Some(compositor_shader), _, _, _, _) => {
+            IdMaskPrograms::Packed(create_packed_id_mask_programs(
+                device,
+                field_shader,
+                compositor_shader,
+                format,
+            ))
+        }
+        (
+            true,
+            false,
+            Some(field_shader),
+            Some(compositor_shader),
+            Some(field_layout),
+            Some(compositor_layout),
+            Some(field_pipeline_layout),
+            Some(compositor_pipeline_layout),
+        ) => {
+            IdMaskPrograms::Wide(IdMaskVariantPrograms {
+                field_layout,
+                compositor_layout,
+                field_seed_pipeline: create_id_mask_field_pipeline(
+                    device,
+                    field_shader,
+                    &field_pipeline_layout,
+                    "fs_id_mask_field_seed",
+                    "oxide-webgpu-id-mask-wide-field-seed",
+                    ID_MASK_WIDE_FIELD_FORMAT,
+                    false,
+                ),
+                field_jump_pipeline: create_id_mask_field_pipeline(
+                    device,
+                    field_shader,
+                    &field_pipeline_layout,
+                    "fs_id_mask_field_jump",
+                    "oxide-webgpu-id-mask-wide-field-jump",
+                    ID_MASK_WIDE_FIELD_FORMAT,
+                    false,
+                ),
+                compositor_pipeline: create_id_mask_compositor_pipeline(
+                    device,
+                    compositor_shader,
+                    &compositor_pipeline_layout,
+                    format,
+                    "fs_id_mask_compositor",
+                    "oxide-webgpu-id-mask-wide-compositor",
+                ),
+            })
+        }
+        _ => IdMaskPrograms::Disabled,
+    };
 
     GpuPrograms {
         viewport_layout,
@@ -10918,8 +11519,7 @@ fn create_programs(
         effect_layout,
         scene3d_layout,
         id_mask_raster_layout,
-        id_mask_wide,
-        id_mask_packed,
+        id_mask,
         solid_pipeline,
         rrect_pipeline,
         image_rgba_pipeline,
@@ -11083,7 +11683,9 @@ fn create_glyph_pipeline(
 
 fn create_scene3d_pipeline_variants(
     device: &wgpu::Device,
-    shader: &wgpu::ShaderModule,
+    shader: Option<&wgpu::ShaderModule>,
+    profile: BrowserRendererPipelineProfile,
+    pipeline: BrowserScene3dPipeline,
     layout: &wgpu::PipelineLayout,
     vertex_layout: &wgpu::VertexBufferLayout<'_>,
     format: wgpu::TextureFormat,
@@ -11091,45 +11693,31 @@ fn create_scene3d_pipeline_variants(
     depth_test: bool,
     depth_write: bool,
     label: &'static str,
-) -> [wgpu::RenderPipeline; 3] {
-    [
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            None,
-            label,
-        ),
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            Some(wgpu::Face::Front),
-            label,
-        ),
-        create_scene3d_pipeline(
-            device,
-            shader,
-            layout,
-            vertex_layout,
-            format,
-            blend,
-            depth_test,
-            depth_write,
-            Some(wgpu::Face::Back),
-            label,
-        ),
-    ]
+) -> [PipelineSlot; 3] {
+    let Some(shader) = shader else {
+        return core::array::from_fn(|_| PipelineSlot::Disabled);
+    };
+    core::array::from_fn(|index| {
+        let (cull, cull_mode) = match index {
+            0 => (scene3d::CullMode3d::None, None),
+            1 => (scene3d::CullMode3d::Front, Some(wgpu::Face::Front)),
+            _ => (scene3d::CullMode3d::Back, Some(wgpu::Face::Back)),
+        };
+        PipelineSlot::create(profile.contains_scene3d(pipeline, cull), || {
+            create_scene3d_pipeline(
+                device,
+                shader,
+                layout,
+                vertex_layout,
+                format,
+                blend,
+                depth_test,
+                depth_write,
+                cull_mode,
+                label,
+            )
+        })
+    })
 }
 
 fn create_scene3d_pipeline(
@@ -12172,7 +12760,7 @@ fn rebuild_id_mask_target_bind_groups(
             compositor_bind_group_b,
             ..
         } => {
-            let Some(programs) = programs.id_mask_packed.as_ref() else { return };
+            let IdMaskPrograms::Packed(programs) = &programs.id_mask else { return };
             *field_bind_group_a = create_packed_id_mask_field_bind_group(
                 device,
                 &programs.field_layout,
@@ -12221,7 +12809,7 @@ fn rebuild_id_mask_target_bind_groups(
             compositor_bind_group_b,
             ..
         } => {
-            let programs = &programs.id_mask_wide;
+            let IdMaskPrograms::Wide(programs) = &programs.id_mask else { return };
             *field_bind_group_a = create_wide_id_mask_field_bind_group(
                 device,
                 &programs.field_layout,
@@ -13210,7 +13798,7 @@ fn append_scene3d_draw(draws: &mut Vec<Scene3dDraw>, draw: Scene3dDraw) -> bool 
     true
 }
 
-fn scene3d_cull_index(cull: scene3d::CullMode3d) -> usize {
+const fn scene3d_cull_index(cull: scene3d::CullMode3d) -> usize {
     match cull {
         scene3d::CullMode3d::None => 0,
         scene3d::CullMode3d::Front => 1,
@@ -13255,7 +13843,11 @@ fn align_usize(value: usize, alignment: usize) -> usize {
 fn align_uniform_bytes(out: &mut Vec<u8>, alignment: usize) -> u32 {
     let offset = align_usize(out.len(), alignment);
     out.resize(offset, 0);
-    u32::try_from(offset).expect("ID-mask uniform arena exceeds dynamic-offset range")
+    match u32::try_from(offset)
+    {
+       Ok(offset) => offset,
+       Err(_) => u32::MAX - u32::MAX % alignment as u32,
+    }
 }
 
 fn f32x4_bytes(values: [f32; 4]) -> [u8; 16] {
@@ -13305,7 +13897,355 @@ fn write_u32(out: &mut [u8], offset: &mut usize, value: u32) {
     *offset += 4;
 }
 
-const WGSL: &str = oxide_renderer_wgpu::UI_WGSL;
+const WGSL: &str = r#"
+struct Viewport {
+   size_origin: vec4<f32>,
+   matrix: vec4<f32>,
+   translation_opacity: vec4<f32>,
+};
+
+struct Effect {
+   texel_radius: vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> viewport: Viewport;
+@group(1) @binding(0) var source_tex: texture_2d<f32>;
+@group(1) @binding(1) var source_sampler: sampler;
+@group(2) @binding(0) var<uniform> effect: Effect;
+
+struct VertexIn {
+   @location(0) pos: vec2<f32>,
+   @location(1) uv: vec2<f32>,
+   @location(2) color: vec4<f32>,
+};
+
+struct VertexOut {
+   @builtin(position) pos: vec4<f32>,
+   @location(0) uv: vec2<f32>,
+   @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(input: VertexIn) -> VertexOut {
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let origin = viewport.size_origin.zw;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * input.pos.x + viewport.matrix.z * input.pos.y + viewport.translation_opacity.x,
+      viewport.matrix.y * input.pos.x + viewport.matrix.w * input.pos.y + viewport.translation_opacity.y,
+   );
+   let local = (transformed - origin) / size;
+   var out: VertexOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.uv = input.uv;
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
+   return out;
+}
+
+struct GlyphInstanceIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) uv_rect: vec4<f32>,
+   @location(2) color: vec4<f32>,
+};
+
+@vertex
+fn vs_glyph_instance(
+   @builtin(vertex_index) vertex_index: u32,
+   input: GlyphInstanceIn,
+) -> VertexOut {
+   let unit = array<vec2<f32>, 4>(
+      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0),
+      vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 1.0),
+   )[vertex_index];
+   let dp = input.rect.xy + unit * input.rect.zw;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: VertexOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.uv = mix(input.uv_rect.xy, input.uv_rect.zw, unit);
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
+   return out;
+}
+
+struct ImageInstanceIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) uv_rect: vec4<f32>,
+   @location(2) alpha: f32,
+   @location(3) unit: vec2<f32>,
+};
+
+@vertex
+fn vs_image_instance(input: ImageInstanceIn) -> VertexOut {
+   let dp = input.rect.xy + input.unit * input.rect.zw;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: VertexOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.uv = mix(input.uv_rect.xy, input.uv_rect.zw, input.unit);
+   out.color = vec4<f32>(1.0, 1.0, 1.0, input.alpha * viewport.translation_opacity.z);
+   return out;
+}
+
+struct NineSliceInstanceIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) image_size: vec2<f32>,
+   @location(2) slice: vec4<f32>,
+   @location(3) alpha: f32,
+   @location(4) grid: vec4<u32>,
+};
+
+@vertex
+fn vs_nine_slice_instance(input: NineSliceInstanceIn) -> VertexOut {
+   let x2 = max(input.rect.z - input.slice.z, input.slice.x);
+   let y2 = max(input.rect.w - input.slice.w, input.slice.y);
+   let dx = array<f32, 4>(0.0, input.slice.x, x2, max(input.rect.z, x2));
+   let dy = array<f32, 4>(0.0, input.slice.y, y2, max(input.rect.w, y2));
+   let sx = array<f32, 4>(0.0, input.slice.x, input.image_size.x - input.slice.z, input.image_size.x);
+   let sy = array<f32, 4>(0.0, input.slice.y, input.image_size.y - input.slice.w, input.image_size.y);
+   let corner = vec2<f32>(f32(input.grid.z), f32(input.grid.w));
+   let col = input.grid.x;
+   let row = input.grid.y;
+   let dp = input.rect.xy + vec2<f32>(
+      mix(dx[col], dx[col + 1u], corner.x),
+      mix(dy[row], dy[row + 1u], corner.y),
+   );
+   let source_valid = sx[col + 1u] > sx[col] && sy[row + 1u] > sy[row];
+   let source_px = vec2<f32>(
+      mix(sx[col], sx[col + 1u], corner.x),
+      mix(sy[row], sy[row + 1u], corner.y),
+   );
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: VertexOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.uv = select(corner, source_px / input.image_size, source_valid);
+   out.color = vec4<f32>(1.0, 1.0, 1.0, input.alpha * viewport.translation_opacity.z);
+   return out;
+}
+
+struct RRectIn {
+   @location(0) rect: vec4<f32>,
+   @location(1) radii: vec4<f32>,
+   @location(2) color: vec4<f32>,
+};
+
+struct RRectOut {
+   @builtin(position) pos: vec4<f32>,
+   @location(0) local_px: vec2<f32>,
+   @location(1) @interpolate(flat) rect_size: vec2<f32>,
+   @location(2) @interpolate(flat) radii: vec4<f32>,
+   @location(3) @interpolate(flat) color: vec4<f32>,
+};
+
+struct SpinnerInstanceIn {
+   @location(0) center: vec2<f32>,
+   @location(1) atom: f32,
+   @location(2) alpha: f32,
+   @location(3) color: vec4<f32>,
+};
+
+@vertex
+fn vs_spinner_instance(
+   @builtin(vertex_index) vertex_index: u32,
+   input: SpinnerInstanceIn,
+) -> RRectOut {
+   let corners = array<vec2<f32>, 6>(
+      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+      vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+   );
+   let directions = array<vec2<f32>, 12>(
+      vec2<f32>(1.0, 0.0), vec2<f32>(0.8660253882, 0.5),
+      vec2<f32>(0.5, 0.8660253882), vec2<f32>(0.0, 1.0),
+      vec2<f32>(-0.5, 0.8660253882), vec2<f32>(-0.8660253882, 0.5),
+      vec2<f32>(-1.0, 0.0), vec2<f32>(-0.8660253882, -0.5),
+      vec2<f32>(-0.5, -0.8660253882), vec2<f32>(0.0, -1.0),
+      vec2<f32>(0.5, -0.8660253882), vec2<f32>(0.8660253882, -0.5),
+   );
+   let atom_index = vertex_index / 6u;
+   let unit = corners[vertex_index % 6u];
+   let dot_radius = input.atom * 0.12;
+   let rect_size = vec2<f32>(dot_radius * 2.0);
+   let dot_center = input.center + directions[atom_index] * max(input.atom * 1.5, 1.0);
+   let local_px = unit * rect_size;
+   let dp = dot_center - vec2<f32>(dot_radius) + local_px;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   let progress = fract(f32(atom_index) / 12.0 + viewport.translation_opacity.w);
+   let dot_alpha = round(clamp(input.alpha, 0.0, 1.0)
+      * (0.25 + progress * 0.75) * 255.0) / 255.0;
+   var out: RRectOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.local_px = local_px;
+   out.rect_size = rect_size;
+   out.radii = vec4<f32>(dot_radius);
+   out.color = vec4<f32>(input.color.rgb, dot_alpha * viewport.translation_opacity.z);
+   return out;
+}
+
+struct NeonMarkerIn {
+   @location(0) center: vec2<f32>,
+   @location(1) shape: vec4<f32>,
+   @location(2) alpha: vec3<f32>,
+   @location(3) core_color: vec4<f32>,
+   @location(4) ring_color: vec4<f32>,
+   @location(5) marker_viewport: vec4<f32>,
+};
+
+struct NeonMarkerOut {
+   @builtin(position) pos: vec4<f32>,
+   @location(0) pos_dp: vec2<f32>,
+   @location(1) @interpolate(flat) center: vec2<f32>,
+   @location(2) @interpolate(flat) shape: vec4<f32>,
+   @location(3) @interpolate(flat) alpha: vec3<f32>,
+   @location(4) @interpolate(flat) core_color: vec4<f32>,
+   @location(5) @interpolate(flat) ring_color: vec4<f32>,
+};
+
+@vertex
+fn vs_neon_marker_instance(
+   @builtin(vertex_index) vertex_index: u32,
+   input: NeonMarkerIn,
+) -> NeonMarkerOut {
+   let corners = array<vec2<f32>, 6>(
+      vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(-1.0, 1.0),
+      vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+   );
+   let radius = max(max(input.shape.w, input.shape.y + input.shape.z), input.shape.x);
+   let dp = input.center + corners[vertex_index] * radius;
+   let viewport_size = max(input.marker_viewport.zw, vec2<f32>(0.00001));
+   let local = (dp - input.marker_viewport.xy) / viewport_size;
+   var out: NeonMarkerOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.pos_dp = dp;
+   out.center = input.center;
+   out.shape = input.shape;
+   out.alpha = input.alpha;
+   out.core_color = input.core_color;
+   out.ring_color = input.ring_color;
+   return out;
+}
+
+@fragment
+fn fs_neon_marker(input: NeonMarkerOut) -> @location(0) vec4<f32> {
+   let distance = length(input.pos_dp - input.center);
+   if (distance > input.shape.w) {
+      return vec4<f32>(0.0);
+   }
+   if (distance <= input.shape.x) {
+      let edge = clamp(distance / max(input.shape.x, 0.001), 0.0, 1.0);
+      let core_alpha = input.core_color.a * (1.0 - edge * 0.08);
+      return vec4<f32>(input.core_color.rgb, core_alpha);
+   }
+   let ring_width = max(input.shape.z, 0.001);
+   let ring_alpha = clamp(1.0 - abs(distance - input.shape.y) / ring_width, 0.0, 1.0)
+      * input.alpha.z;
+   let sigma = max(input.alpha.x, 0.001);
+   let halo_alpha = exp(-(distance * distance) / (2.0 * sigma * sigma)) * input.alpha.y;
+   let marker_alpha = max(ring_alpha, halo_alpha) * input.ring_color.a;
+   if (marker_alpha <= 0.001) {
+      return vec4<f32>(0.0);
+   }
+   return vec4<f32>(input.ring_color.rgb, clamp(marker_alpha, 0.0, 1.0));
+}
+
+@vertex
+fn vs_rrect(@builtin(vertex_index) vertex_index: u32, input: RRectIn) -> RRectOut {
+   let unit = array<vec2<f32>, 6>(
+      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(0.0, 1.0),
+      vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+   )[vertex_index];
+   let local_px = unit * input.rect.zw;
+   let dp = input.rect.xy + local_px;
+   let transformed = vec2<f32>(
+      viewport.matrix.x * dp.x + viewport.matrix.z * dp.y + viewport.translation_opacity.x,
+      viewport.matrix.y * dp.x + viewport.matrix.w * dp.y + viewport.translation_opacity.y,
+   );
+   let size = max(viewport.size_origin.xy, vec2<f32>(1.0, 1.0));
+   let local = (transformed - viewport.size_origin.zw) / size;
+   var out: RRectOut;
+   out.pos = vec4<f32>(local.x * 2.0 - 1.0, 1.0 - local.y * 2.0, 0.0, 1.0);
+   out.local_px = local_px;
+   out.rect_size = input.rect.zw;
+   out.radii = input.radii;
+   out.color = vec4<f32>(input.color.rgb, input.color.a * viewport.translation_opacity.z);
+   return out;
+}
+
+@fragment
+fn fs_rrect(input: RRectOut) -> @location(0) vec4<f32> {
+   let center = input.rect_size * 0.5;
+   let right = input.local_px.x >= center.x;
+   let bottom = input.local_px.y >= center.y;
+   let top_radius = select(input.radii.x, input.radii.y, right);
+   let bottom_radius = select(input.radii.w, input.radii.z, right);
+   let radius = clamp(select(top_radius, bottom_radius, bottom), 0.0, min(center.x, center.y));
+   let q = abs(input.local_px - center) - (center - vec2<f32>(radius));
+   let distance = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+   let aa = max(fwidth(distance), 0.0001);
+   let coverage = 1.0 - smoothstep(-aa, aa, distance);
+   if coverage <= 0.0 {
+      discard;
+   }
+   return vec4<f32>(input.color.rgb, input.color.a * coverage);
+}
+
+@fragment
+fn fs_solid(input: VertexOut) -> @location(0) vec4<f32> {
+   return input.color;
+}
+
+@fragment
+fn fs_rgba(input: VertexOut) -> @location(0) vec4<f32> {
+   return textureSample(source_tex, source_sampler, input.uv) * input.color;
+}
+
+@fragment
+fn fs_a8(input: VertexOut) -> @location(0) vec4<f32> {
+   let coverage = textureSample(source_tex, source_sampler, input.uv).r;
+   return vec4<f32>(input.color.rgb, input.color.a * coverage);
+}
+
+@fragment
+fn fs_sdf(input: VertexOut) -> @location(0) vec4<f32> {
+   let distance = textureSample(source_tex, source_sampler, input.uv).r;
+   let width = max(fwidth(distance), 0.001);
+   let coverage = smoothstep(0.5 - width, 0.5 + width, distance);
+   return vec4<f32>(input.color.rgb, input.color.a * coverage);
+}
+
+@fragment
+fn fs_backdrop(input: VertexOut) -> @location(0) vec4<f32> {
+   let texel = effect.texel_radius.xy;
+   let radius = max(effect.texel_radius.z, 0.0);
+   let step = texel * max(radius * 0.35, 1.0);
+   var color = textureSample(source_tex, source_sampler, input.uv) * 0.227027;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>( step.x, 0.0)) * 0.1945946;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>(-step.x, 0.0)) * 0.1945946;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>(0.0,  step.y)) * 0.1216216;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>(0.0, -step.y)) * 0.1216216;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>( step.x,  step.y)) * 0.035135;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>(-step.x,  step.y)) * 0.035135;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>( step.x, -step.y)) * 0.035135;
+   color += textureSample(source_tex, source_sampler, input.uv + vec2<f32>(-step.x, -step.y)) * 0.035135;
+   let tint = input.color;
+   return vec4<f32>(mix(color.rgb, tint.rgb, tint.a), max(color.a, tint.a));
+}
+"#;
 
 const SCENE3D_WGSL: &str = r#"
 struct Scene3dInstance {

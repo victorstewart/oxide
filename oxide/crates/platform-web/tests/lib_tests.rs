@@ -4,6 +4,14 @@ use std::fs;
 use std::path::PathBuf;
 
 #[test]
+fn web_platform_runtime_omits_accessibility_attributes()
+{
+   let source = include_str!("../src/lib.rs");
+   let forbidden_prefix = ["ar", "ia-"].concat();
+   assert!(!source.contains(&forbidden_prefix));
+}
+
+#[test]
 fn hex_round_trips_secret_bytes() {
     let bytes = [0_u8, 1, 2, 15, 16, 127, 128, 255];
     let encoded = hex_encode(&bytes);

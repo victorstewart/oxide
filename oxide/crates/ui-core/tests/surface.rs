@@ -75,42 +75,65 @@ fn retained_encode_reuses_clean_drawlist_and_rebuilds_after_dirty() {
 }
 
 #[test]
-fn retained_encode_text_atlas_context_overload_reuses_clean_surface() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(100.0), h: oxide_ui_core::Dim::Px(100.0) },
-        background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        ..NodeStyle::default()
-    });
-    let atlases = [(gfx::ImageHandle(4), 3)];
-    surface.layout(100.0, 100.0);
+fn released_text_context_aliases_match_plain_surface_encoding()
+{
+   let mut surface = UiSurface::new(NodeStyle {
+      size: Size2D { w: Dim::Px(100.0), h: Dim::Px(100.0) },
+      background: gfx::Color::rgba(0.2, 0.3, 0.4, 1.0),
+      ..NodeStyle::default()
+   });
+   surface.layout(100.0, 100.0);
+   let viewport = gfx::RectF::new(0.0, 0.0, 100.0, 100.0);
+   let atlases = [(gfx::ImageHandle(4), 3)];
+   let text = TextCtx::default();
 
-    let mut first = DrawListBuilder::new();
-    assert_eq!(
-        surface.encode_retained_with_text_atlas_revisions(&mut first, &atlases),
-        RetainedDrawStatus::Rebuilt,
-    );
-    let first_items = first.drawlist().items.clone();
+   let mut plain = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained(&mut plain), RetainedDrawStatus::Rebuilt);
+   let expected = plain.drawlist().items.clone();
 
-    let mut second = DrawListBuilder::new();
-    assert_eq!(
-        surface.encode_retained_with_text_atlas_revisions(&mut second, &atlases),
-        RetainedDrawStatus::Reused,
-    );
-    assert_eq!(second.drawlist().items, first_items);
+   let mut atlas_alias = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained_with_text_atlas_revisions(&mut atlas_alias, &atlases), RetainedDrawStatus::Reused);
+   let mut text_alias = DrawListBuilder::new();
+   assert_eq!(surface.encode_retained_with_text_ctx(&mut text_alias, &text), RetainedDrawStatus::Reused);
+   assert_eq!(atlas_alias.drawlist().items, expected);
+   assert_eq!(text_alias.drawlist().items, expected);
+
+   let mut router = SurfaceRouter::new(surface);
+   let mut routed_plain = DrawListBuilder::new();
+   router.encode_with_overlays(viewport, 1.0, &mut routed_plain);
+   let mut routed_atlas_alias = DrawListBuilder::new();
+   router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut routed_atlas_alias, &atlases);
+   let mut routed_text_alias = DrawListBuilder::new();
+   router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut routed_text_alias, &text);
+   assert_eq!(routed_atlas_alias.drawlist().items, routed_plain.drawlist().items);
+   assert_eq!(routed_text_alias.drawlist().items, routed_plain.drawlist().items);
 }
 
 #[test]
-fn text_ctx_retained_snapshot_requires_clean_uploaded_atlas() {
+fn text_ctx_manual_retained_snapshot_tracks_storage_and_device_scale() {
     let mut text = TextCtx::default();
     text.atlas_handle = Some(gfx::ImageHandle(4));
 
-    assert_eq!(text.retained_text_atlas_revision(), Some((gfx::ImageHandle(4), 0)));
+    let initial = text.retained_text_atlas_revision().expect("initial manual atlas");
+    assert_eq!(initial, (gfx::ImageHandle(4), 0));
+
+    text.begin_frame_at_scale(1.0);
+    let scale_one = text.retained_text_atlas_revision().expect("1x manual atlas");
+    assert_ne!(scale_one.1, initial.1);
+
+    text.begin_frame_at_scale(1.0);
+    assert_eq!(text.retained_text_atlas_revision(), Some(scale_one));
+
+    text.begin_frame_at_scale(3.0);
+    let scale_three = text.retained_text_atlas_revision().expect("3x manual atlas");
+    assert_ne!(scale_three.1, scale_one.1);
 
     text.atlas.reset();
     assert_eq!(text.retained_text_atlas_revision(), None);
 
     text.atlas.clear_dirty();
-    assert_eq!(text.retained_text_atlas_revision(), Some((gfx::ImageHandle(4), 1)));
+    let reset = text.retained_text_atlas_revision().expect("reset manual atlas");
+    assert_ne!(reset.1, scale_three.1);
 }
 
 #[test]
@@ -355,7 +378,7 @@ fn node_content_dirty_classes_skip_layout_and_reuse_retained_subtrees() {
 }
 
 #[test]
-fn non_draw_dirty_classes_skip_layout_and_reuse_retained_drawlist() {
+fn hit_test_dirty_skips_layout_and_reuses_retained_drawlist() {
     let mut surface = UiSurface::new(NodeStyle {
         axis: Axis::Row,
         size: Size2D { w: Dim::Px(180.0), h: Dim::Px(80.0) },
@@ -396,26 +419,21 @@ fn non_draw_dirty_classes_skip_layout_and_reuse_retained_drawlist() {
     let mut warm = DrawListBuilder::new();
     assert_eq!(surface.encode_retained(&mut warm), RetainedDrawStatus::Rebuilt);
     let warm_draws = warm.drawlist().items.clone();
-    for class in [DirtyClass::Accessibility, DirtyClass::HitTest] {
-        assert!(surface.mark_node_dirty(leaf, class));
-        assert!(surface.dirty().contains(class));
-        assert!(!surface.dirty().contains(DirtyClass::Layout));
-        assert!(!surface.dirty().affects_draw());
-        assert_eq!(surface.layout(180.0, 80.0), oxide_ui_core::LayoutStats::default());
-        assert_eq!(surface.tree().layout_rect(leaf), Some(leaf_layout));
-        assert_eq!(surface.tree().layout_rect(sibling), Some(sibling_layout));
+    assert!(surface.mark_node_dirty(leaf, DirtyClass::HitTest));
+    assert!(surface.dirty().contains(DirtyClass::HitTest));
+    assert!(!surface.dirty().contains(DirtyClass::Layout));
+    assert!(!surface.dirty().affects_draw());
+    assert_eq!(surface.layout(180.0, 80.0), oxide_ui_core::LayoutStats::default());
+    assert_eq!(surface.tree().layout_rect(leaf), Some(leaf_layout));
+    assert_eq!(surface.tree().layout_rect(sibling), Some(sibling_layout));
 
-        let mut dirty = DrawListBuilder::new();
-        assert_eq!(surface.encode_retained(&mut dirty), RetainedDrawStatus::Reused);
-        assert_eq!(dirty.drawlist().items, warm_draws);
-        let stats = surface.retained_node_stats();
-        assert_eq!(
-            stats.rebuilt_nodes, 0,
-            "non-draw dirty class should not rebuild, got {stats:?}"
-        );
-        assert_eq!(stats.reused_nodes, 1, "non-draw dirty class should reuse cached draw list");
-    }
-    assert!(!surface.mark_node_dirty(NodeId(99), DirtyClass::Accessibility));
+    let mut dirty = DrawListBuilder::new();
+    assert_eq!(surface.encode_retained(&mut dirty), RetainedDrawStatus::Reused);
+    assert_eq!(dirty.drawlist().items, warm_draws);
+    let stats = surface.retained_node_stats();
+    assert_eq!(stats.rebuilt_nodes, 0, "hit-test dirtiness should not rebuild, got {stats:?}");
+    assert_eq!(stats.reused_nodes, 1, "hit-test dirtiness should reuse cached draw list");
+    assert!(!surface.mark_node_dirty(NodeId(99), DirtyClass::HitTest));
 }
 
 #[test]
@@ -800,51 +818,6 @@ fn router_encode_with_overlays_reuses_clean_overlay_and_popup_surfaces() {
     assert_eq!(stats.current_reused, 1);
     assert_eq!(stats.overlay_rebuilt, 1);
     assert_eq!(stats.popup_reused, 1);
-}
-
-#[test]
-fn router_encode_with_overlays_accepts_text_atlas_context_path() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(120.0), h: oxide_ui_core::Dim::Px(120.0) },
-        background: gfx::Color::rgba(0.16, 0.20, 0.26, 1.0),
-        ..NodeStyle::default()
-    });
-    surface.layout(120.0, 120.0);
-    let viewport = gfx::RectF::new(0.0, 0.0, 120.0, 120.0);
-    let atlases = [(gfx::ImageHandle(4), 3)];
-    let mut router = SurfaceRouter::new(surface);
-
-    let mut first = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut first, &atlases);
-    assert!(!router.current().dirty().affects_draw());
-    let first_items = first.drawlist().items.clone();
-
-    let mut second = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_atlas_revisions(viewport, 1.0, &mut second, &atlases);
-    assert_eq!(second.drawlist().items, first_items);
-}
-
-#[test]
-fn router_encode_with_overlays_uses_clean_text_ctx_atlas_snapshot() {
-    let mut surface = UiSurface::new(NodeStyle {
-        size: Size2D { w: oxide_ui_core::Dim::Px(120.0), h: oxide_ui_core::Dim::Px(120.0) },
-        background: gfx::Color::rgba(0.16, 0.20, 0.26, 1.0),
-        ..NodeStyle::default()
-    });
-    surface.layout(120.0, 120.0);
-    let viewport = gfx::RectF::new(0.0, 0.0, 120.0, 120.0);
-    let mut text = TextCtx::default();
-    text.atlas_handle = Some(gfx::ImageHandle(4));
-    let mut router = SurfaceRouter::new(surface);
-
-    let mut first = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut first, &text);
-    assert!(!router.current().dirty().affects_draw());
-    let first_items = first.drawlist().items.clone();
-
-    let mut second = DrawListBuilder::new();
-    router.encode_with_overlays_with_text_ctx(viewport, 1.0, &mut second, &text);
-    assert_eq!(second.drawlist().items, first_items);
 }
 
 #[test]
@@ -1317,7 +1290,7 @@ fn transform_and_opacity_animation_reuses_all_warm_geometry()
 }
 
 #[test]
-fn nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()
+fn nested_animation_keeps_clip_and_hit_test_geometry_synchronized()
 {
    let mut surface = UiSurface::new(NodeStyle {
       size: Size2D { w: Dim::Px(240.0), h: Dim::Px(240.0) },
@@ -1354,8 +1327,20 @@ fn nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized(
    ).unwrap();
    let leaf_instance = rendered.snapshot.instance(2).unwrap();
    assert_eq!(leaf_instance.dynamic_clips.len(), 1);
-   let frame = surface.accessibility_frame(leaf).unwrap();
-   let center = [frame.x + frame.w * 0.5, frame.y + frame.h * 0.5];
+   let leaf_transform = leaf_instance.property_slots.iter().find_map(|id| {
+      rendered.snapshot.properties().iter().find(|property| property.id == *id).and_then(|property| {
+         match property.value {
+            gfx::RenderPropertyValue::Transform(value) => Some(value),
+            gfx::RenderPropertyValue::Opacity(_) => None,
+         }
+      })
+   }).unwrap();
+   let layout = surface.tree().layout_rect(leaf).unwrap();
+   let local_center = [layout.x + layout.w * 0.5, layout.y + layout.h * 0.5];
+   let center = [
+      leaf_transform[0] * local_center[0] + leaf_transform[2] * local_center[1] + leaf_transform[4],
+      leaf_transform[1] * local_center[0] + leaf_transform[3] * local_center[1] + leaf_transform[5],
+   ];
    let hit = surface.hit_test(center[0], center[1]).unwrap();
    assert_eq!(hit.0, leaf);
    assert!(hit.1[0] >= 0.0 && hit.1[0] < 40.0);

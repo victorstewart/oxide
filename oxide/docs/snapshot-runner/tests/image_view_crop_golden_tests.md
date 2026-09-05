@@ -46,4 +46,5 @@ Set `UPDATE_GOLDENS=1` only when intentionally reviewing a source-mapping change
 
 ## Changelog
 
+- 2026-08-09: refreshed the exact DPR 1/2/3 fixtures after the source-over alpha correction.
 - 2026-07-13: added C14 clipped-parent parity and DPR 1/2/3 image-view crop goldens.

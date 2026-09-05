@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 #[cfg(not(target_arch = "wasm32"))]
 use std::convert::TryFrom;
 use std::mem;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
@@ -127,16 +127,11 @@ static ANIMS: LazyLock<Mutex<HashMap<api::AnimId, AnimState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static RUNNING_PROP: LazyLock<Mutex<HashMap<api::AnimProp, api::AnimId>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
-
-pub fn set_reduce_motion(enabled: bool) {
-    REDUCE_MOTION.store(enabled, Ordering::Relaxed);
-}
 
 #[cfg_attr(not(test), doc(hidden))]
 #[cfg_attr(not(test), allow(dead_code))]
 pub mod testing {
-    use super::{ANIMS, NEXT_TID, REDUCE_MOTION, RUNNING_PROP, TIMERS};
+    use super::{ANIMS, NEXT_TID, RUNNING_PROP, TIMERS};
     use oxide_platform_api as api;
     use std::sync::atomic::Ordering;
 
@@ -145,7 +140,6 @@ pub mod testing {
         NEXT_TID.store(1, Ordering::Relaxed);
         ANIMS.lock().unwrap().clear();
         RUNNING_PROP.lock().unwrap().clear();
-        REDUCE_MOTION.store(false, Ordering::Relaxed);
     }
 
     pub fn pending_timers() -> usize {
@@ -162,20 +156,13 @@ pub mod testing {
 }
 
 pub mod anim {
-    use super::{ease_value, lerp_value, now_ms, AnimState, ANIMS, REDUCE_MOTION, RUNNING_PROP};
+    use super::{ease_value, lerp_value, now_ms, AnimState, ANIMS, RUNNING_PROP};
     use oxide_platform_api as api;
-    use std::sync::atomic::Ordering;
 
     pub fn start(desc: &api::AnimDesc) -> api::AnimId {
-        let reduce = REDUCE_MOTION.load(Ordering::Relaxed);
         let now = now_ms();
-        let mut d = desc.clone();
-        if reduce {
-            d.duration_ms = 0;
-            d.delay_ms = 0;
-        }
-        let id = d.id;
-        let st = AnimState { desc: d, start_ms: now, elapsed_ms: 0, finished: false };
+        let id = desc.id;
+        let st = AnimState { desc: desc.clone(), start_ms: now, elapsed_ms: 0, finished: false };
         let mut running = RUNNING_PROP.lock().unwrap();
         let old = running.insert(desc.prop, id);
         let mut anims = ANIMS.lock().unwrap();

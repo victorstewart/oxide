@@ -1,0 +1,21 @@
+[package]
+name = "oxide-feed-v1-app"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Benchmark-only production-path Oxide feed-v1 iOS app"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+oxide-host-ios = { path = "../../../../../host/ios-app/oxide-host-ios", default-features = false }
+oxide-platform-api = { path = "../../../../../crates/platform-api" }
+oxide-renderer-api = { path = "../../../../../crates/renderer-api" }
+oxide-text = { path = "../../../../../crates/text" }
+oxide-ui-core = { path = "../../../../../crates/ui-core" }
+sha2 = "0.10"
+
+[dev-dependencies]
+serde_json = "1"

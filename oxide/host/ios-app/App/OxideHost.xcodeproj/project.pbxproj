@@ -8,24 +8,85 @@
 
 /* Begin PBXBuildFile section */
 		0B7824FDAC6E903B004E1768 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 31CC28F1DA3B796B599ECF95 /* main.m */; };
+		1C1E180327989FD00FB856F1 /* OxideHostPerfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BED1D3377407818689FB2AB /* OxideHostPerfTests.swift */; };
+		2CE2D6C347EF3C67C55559E1 /* OxideUIKitLaunchPerfTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7A1C44D344E01491529F13 /* OxideUIKitLaunchPerfTests.swift */; };
+		2E85489A201B0B7AD0F6544A /* OxidePerfParkedApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B33B375FB03C1EF579F76C1F /* OxidePerfParkedApp.swift */; };
+		44BC6D3165F451CB349FC8E4 /* OxideUIKitBenchmarkRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2556CDCD197E2E452AF4EBB /* OxideUIKitBenchmarkRuntime.swift */; };
+		6FA58E75DC23955E899CEFC7 /* OxideHostUITests.m in Sources */ = {isa = PBXBuildFile; fileRef = 1BA1B71A0F3B02648875650B /* OxideHostUITests.m */; };
+		B62535811E44E008EF152B0E /* OxideUIKitBenchmarkRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2556CDCD197E2E452AF4EBB /* OxideUIKitBenchmarkRuntime.swift */; };
 		CAEC4E477DEC5DA379A9ADF7 /* capabilities.toml in Resources */ = {isa = PBXBuildFile; fileRef = 3DBB8F1997BEA86E58CB8FAA /* capabilities.toml */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		2B94C58B2FBD1A09FCBA7C7F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CBD5A510A9C2708C9E663181 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6304642090109E5662143E4E;
+			remoteInfo = OxideHost;
+		};
+		FD8F4F6D5FCD7FEE7AD679E1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CBD5A510A9C2708C9E663181 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 6304642090109E5662143E4E;
+			remoteInfo = OxideHost;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		0A7A1C44D344E01491529F13 /* OxideUIKitLaunchPerfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxideUIKitLaunchPerfTests.swift; sourceTree = "<group>"; };
+		1BA1B71A0F3B02648875650B /* OxideHostUITests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OxideHostUITests.m; sourceTree = "<group>"; };
+		1BED1D3377407818689FB2AB /* OxideHostPerfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxideHostPerfTests.swift; sourceTree = "<group>"; };
 		31CC28F1DA3B796B599ECF95 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		3DBB8F1997BEA86E58CB8FAA /* capabilities.toml */ = {isa = PBXFileReference; path = capabilities.toml; sourceTree = "<group>"; };
+		5D04E40C4642FDAC614E382E /* OxideHostPerfTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OxideHostPerfTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		74F1F4AA0293BCD3CD33A58A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		8CEFA17F6F2A26F5B3C1D83E /* OxideHost.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OxideHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B33B375FB03C1EF579F76C1F /* OxidePerfParkedApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxidePerfParkedApp.swift; sourceTree = "<group>"; };
+		B8C456EDAEF1BA4D7514E891 /* OxideHostUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OxideHostUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CCF414843895732193C1A141 /* App.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App.entitlements; sourceTree = "<group>"; };
 		D5B4824221377903C4D3A4FC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E2556CDCD197E2E452AF4EBB /* OxideUIKitBenchmarkRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxideUIKitBenchmarkRuntime.swift; sourceTree = "<group>"; };
+		F1C5AB1EC5667C8DD5757BC3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		1018DFF9989270C0FF9FB7B1 /* OxideHostUITests */ = {
+			isa = PBXGroup;
+			children = (
+				74F1F4AA0293BCD3CD33A58A /* Info.plist */,
+				1BA1B71A0F3B02648875650B /* OxideHostUITests.m */,
+				0A7A1C44D344E01491529F13 /* OxideUIKitLaunchPerfTests.swift */,
+			);
+			path = OxideHostUITests;
+			sourceTree = "<group>";
+		};
 		1E3969CC05EA58ABFAB2699F /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				8CEFA17F6F2A26F5B3C1D83E /* OxideHost.app */,
+				5D04E40C4642FDAC614E382E /* OxideHostPerfTests.xctest */,
+				B8C456EDAEF1BA4D7514E891 /* OxideHostUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		593ABF622A5E218FC94C896D /* OxideHostPerfTests */ = {
+			isa = PBXGroup;
+			children = (
+				F1C5AB1EC5667C8DD5757BC3 /* Info.plist */,
+				1BED1D3377407818689FB2AB /* OxideHostPerfTests.swift */,
+			);
+			path = OxideHostPerfTests;
+			sourceTree = "<group>";
+		};
+		78B288D9C0BAD4E2D6458FBE /* PerfShared */ = {
+			isa = PBXGroup;
+			children = (
+				E2556CDCD197E2E452AF4EBB /* OxideUIKitBenchmarkRuntime.swift */,
+			);
+			path = PerfShared;
 			sourceTree = "<group>";
 		};
 		A4528DDB400A29C1D3C2F17B /* App */ = {
@@ -35,6 +96,7 @@
 				3DBB8F1997BEA86E58CB8FAA /* capabilities.toml */,
 				D5B4824221377903C4D3A4FC /* Info.plist */,
 				31CC28F1DA3B796B599ECF95 /* main.m */,
+				B33B375FB03C1EF579F76C1F /* OxidePerfParkedApp.swift */,
 			);
 			name = App;
 			path = .;
@@ -44,6 +106,9 @@
 			isa = PBXGroup;
 			children = (
 				A4528DDB400A29C1D3C2F17B /* App */,
+				593ABF622A5E218FC94C896D /* OxideHostPerfTests */,
+				1018DFF9989270C0FF9FB7B1 /* OxideHostUITests */,
+				78B288D9C0BAD4E2D6458FBE /* PerfShared */,
 				1E3969CC05EA58ABFAB2699F /* Products */,
 			);
 			sourceTree = "<group>";
@@ -70,6 +135,42 @@
 			productReference = 8CEFA17F6F2A26F5B3C1D83E /* OxideHost.app */;
 			productType = "com.apple.product-type.application";
 		};
+		70F0E208AC08BC03B54859C8 /* OxideHostPerfTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0AA84C6F9F97A3BFB4CA4369 /* Build configuration list for PBXNativeTarget "OxideHostPerfTests" */;
+			buildPhases = (
+				A16C5B13A74E24797AA3B03B /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				17EA160F61D59ECC36BBCC9A /* PBXTargetDependency */,
+			);
+			name = OxideHostPerfTests;
+			packageProductDependencies = (
+			);
+			productName = OxideHostPerfTests;
+			productReference = 5D04E40C4642FDAC614E382E /* OxideHostPerfTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		BA375559A820254B20B8B51D /* OxideHostUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B44655B671324872E697A33E /* Build configuration list for PBXNativeTarget "OxideHostUITests" */;
+			buildPhases = (
+				76B86A51E3CB7943157272A9 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6745C8BD7096ECAF0CFF848B /* PBXTargetDependency */,
+			);
+			name = OxideHostUITests;
+			packageProductDependencies = (
+			);
+			productName = OxideHostUITests;
+			productReference = B8C456EDAEF1BA4D7514E891 /* OxideHostUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -78,6 +179,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					BA375559A820254B20B8B51D = {
+						TestTargetID = 6304642090109E5662143E4E;
+					};
+				};
 			};
 			buildConfigurationList = 71C491C5FB158777849AA22C /* Build configuration list for PBXProject "OxideHost" */;
 			compatibilityVersion = "Xcode 14.0";
@@ -94,6 +200,8 @@
 			projectRoot = "";
 			targets = (
 				6304642090109E5662143E4E /* OxideHost */,
+				70F0E208AC08BC03B54859C8 /* OxideHostPerfTests */,
+				BA375559A820254B20B8B51D /* OxideHostUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -128,26 +236,60 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nPROJECT_DIR=\"${PROJECT_DIR}\"\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${REPO_ROOT}/target\"\n# Determine Rust target triple from SDK\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/xcode-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\necho \"Building Rust staticlib for ${RUST_TARGET}…\"\n(cd \"${REPO_ROOT}/host/ios-app/oxide-host-ios\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \\\n   cargo build -p oxide-host-ios --release --features perf-host-stubs --target \"${RUST_TARGET}\")\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\nSRC=\"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a\"\ncp -v \"${SRC}\" \"${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a\"\n";
+			shellScript = "set -euo pipefail\nPROJECT_DIR=\"${PROJECT_DIR}\"\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../../..\" && pwd)\"\nCARGO_TARGET_DIR=\"${CARGO_TARGET_DIR:-${REPO_ROOT}/target}\"\nexport CARGO_TARGET_DIR\n# Determine Rust target triple from SDK\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\nRUST_IOS_DEPLOYMENT_TARGET=\"${IPHONEOS_DEPLOYMENT_TARGET:-18.0}\"\nmkdir -p \"${CARGO_TARGET_DIR}\"\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/xcode-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\necho \"Building Rust staticlib for ${RUST_TARGET}…\"\n(cd \"${REPO_ROOT}/host/ios-app/oxide-host-ios\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   export IPHONEOS_DEPLOYMENT_TARGET=\"${RUST_IOS_DEPLOYMENT_TARGET}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME && \\\n   cargo build --locked -p oxide-host-ios --release --features perf-host-stubs,test-scenes-entrypoint,tokio-runtime --target \"${RUST_TARGET}\")\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\nSRC=\"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a\"\ncp -v \"${SRC}\" \"${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		76B86A51E3CB7943157272A9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6FA58E75DC23955E899CEFC7 /* OxideHostUITests.m in Sources */,
+				2CE2D6C347EF3C67C55559E1 /* OxideUIKitLaunchPerfTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A16C5B13A74E24797AA3B03B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1C1E180327989FD00FB856F1 /* OxideHostPerfTests.swift in Sources */,
+				44BC6D3165F451CB349FC8E4 /* OxideUIKitBenchmarkRuntime.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A2822FCA14FFDC21D5F73A04 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2E85489A201B0B7AD0F6544A /* OxidePerfParkedApp.swift in Sources */,
+				B62535811E44E008EF152B0E /* OxideUIKitBenchmarkRuntime.swift in Sources */,
 				0B7824FDAC6E903B004E1768 /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		17EA160F61D59ECC36BBCC9A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6304642090109E5662143E4E /* OxideHost */;
+			targetProxy = 2B94C58B2FBD1A09FCBA7C7F /* PBXContainerItemProxy */;
+		};
+		6745C8BD7096ECAF0CFF848B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 6304642090109E5662143E4E /* OxideHost */;
+			targetProxy = FD8F4F6D5FCD7FEE7AD679E1 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
 		1C1683889C6B3FF052CEBAAB /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -243,6 +385,25 @@
 			};
 			name = Debug;
 		};
+		49DCE27BC8FB2C4AF7DD8552 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = OxideHostPerfTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.host.PerfTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OxideHost.app/OxideHost";
+			};
+			name = Debug;
+		};
 		AB1CE9413F39000CE3A5587A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -286,10 +447,49 @@
 			};
 			name = Release;
 		};
+		C23764945C2934DE2268FA5D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = OxideHostUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.host.UITests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = OxideHost;
+			};
+			name = Release;
+		};
+		D7056A94738F06F9BB59D5B0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = OxideHostUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.host.UITests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = OxideHost;
+			};
+			name = Debug;
+		};
 		DA711087F2242D49A29B387C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				"ARCHS[sdk=iphonesimulator*]" = arm64;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -349,9 +549,37 @@
 			};
 			name = Debug;
 		};
+		F5751B783187E4A66495174A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = OxideHostPerfTests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.host.PerfTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/OxideHost.app/OxideHost";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		0AA84C6F9F97A3BFB4CA4369 /* Build configuration list for PBXNativeTarget "OxideHostPerfTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				49DCE27BC8FB2C4AF7DD8552 /* Debug */,
+				F5751B783187E4A66495174A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		2BADA1FA77CED3AE1681F20A /* Build configuration list for PBXNativeTarget "OxideHost" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -366,6 +594,15 @@
 			buildConfigurations = (
 				DA711087F2242D49A29B387C /* Debug */,
 				1C1683889C6B3FF052CEBAAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B44655B671324872E697A33E /* Build configuration list for PBXNativeTarget "OxideHostUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D7056A94738F06F9BB59D5B0 /* Debug */,
+				C23764945C2934DE2268FA5D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -1,0 +1,151 @@
+name: FeedV1Pilot
+options:
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: 18.0
+settings:
+  base:
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: YES
+    SUPPORTED_PLATFORMS: iphoneos
+    SDKROOT: iphoneos
+    IPHONEOS_DEPLOYMENT_TARGET: 18.0
+    TARGETED_DEVICE_FAMILY: "1"
+    SWIFT_VERSION: 5.0
+    CODE_SIGN_STYLE: Automatic
+schemes:
+  FeedV1Pilot:
+    build:
+      targets:
+        FeedV1UIKit:
+          - test
+        FeedV1Oxide:
+          - test
+        FeedV1Controller:
+          - test
+      buildImplicitDependencies: false
+    test:
+      targets:
+        - FeedV1Controller
+      environmentVariables:
+        OXIDE_FEED_V1_CONTROLLER_MODE: primary
+  FeedV1PilotSmoke:
+    build:
+      targets:
+        FeedV1UIKit:
+          - test
+        FeedV1Oxide:
+          - test
+        FeedV1Controller:
+          - test
+      buildImplicitDependencies: false
+    test:
+      targets:
+        - FeedV1Controller
+      environmentVariables:
+        OXIDE_FEED_V1_CONTROLLER_MODE: smoke
+targets:
+  FeedV1UIKit:
+    type: application
+    platform: iOS
+    sources:
+      - path: ../FeedV1Contract.swift
+      - path: ../FeedV1UIKitCellContent.swift
+      - path: ../FeedV1UIKitResources.swift
+      - path: ../FeedV1UIKitRoot.swift
+      - path: ../FeedV1IdiomaticUIKitView.swift
+      - path: ../FeedV1OptimizedUIKitView.swift
+      - path: ../../../../../crates/ui-core/assets/Asap-Regular.ttf
+        buildPhase: resources
+      - path: ../../../../../crates/ui-core/assets/Asap-Bold.ttf
+        buildPhase: resources
+      - path: UIKitApp
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.feed-v1.uikit
+        PRODUCT_NAME: FeedV1UIKit
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: "${FEED_V1_SOURCE_ROOT}/UIKitApp/Info.plist"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+  FeedV1Oxide:
+    type: application
+    platform: iOS
+    sources:
+      - path: OxideApp
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.feed-v1.oxide
+        PRODUCT_NAME: FeedV1Oxide
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: "${FEED_V1_SOURCE_ROOT}/OxideApp/Info.plist"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        OTHER_LDFLAGS:
+          - "$(BUILT_PRODUCTS_DIR)/liboxide_feed_v1_app.a"
+          - "-lc++"
+          - "-framework"
+          - UIKit
+          - "-framework"
+          - Foundation
+          - "-framework"
+          - QuartzCore
+          - "-framework"
+          - Metal
+          - "-framework"
+          - CoreGraphics
+          - "-framework"
+          - UserNotifications
+          - "-framework"
+          - CoreLocation
+          - "-framework"
+          - AVFoundation
+          - "-framework"
+          - Contacts
+          - "-framework"
+          - CoreBluetooth
+          - "-framework"
+          - CoreMotion
+    prebuildScripts:
+      - name: Build arm64 Oxide feed app
+        shell: /bin/sh
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/liboxide_feed_v1_app.a"
+        script: |
+          set -euo pipefail
+          FEED_V1_SOURCE_ROOT="${FEED_V1_SOURCE_ROOT:?feed-v1 source root is required}"
+          MANIFEST="${FEED_V1_SOURCE_ROOT}/../oxide-feed-app/Cargo.toml"
+          CARGO_TARGET_DIR="${FEED_V1_CARGO_TARGET_DIR:-${OBJROOT}/feed-v1-rust}"
+          export CARGO_TARGET_DIR
+          mkdir -p "${CARGO_TARGET_DIR}"
+          HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/xcode-host-clang.sh"
+          cat >"${HOST_LINKER_WRAPPER}" <<'EOF'
+          #!/bin/sh
+          exec xcrun --sdk macosx clang "$@"
+          EOF
+          chmod +x "${HOST_LINKER_WRAPPER}"
+          export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}"
+          export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-18.0}"
+          unset SDKROOT SDK_DIR SDK_NAME
+          cargo rustc --locked --profile feed-v1-device --target aarch64-apple-ios --manifest-path "${MANIFEST}" --lib --crate-type staticlib
+          cp "${CARGO_TARGET_DIR}/aarch64-apple-ios/feed-v1-device/liboxide_feed_v1_app.a" "${BUILT_PRODUCTS_DIR}/liboxide_feed_v1_app.a"
+  FeedV1Controller:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: Controller
+    dependencies:
+      - target: FeedV1UIKit
+      - target: FeedV1Oxide
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.feed-v1.controller
+        PRODUCT_NAME: FeedV1Controller
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FeedV1UIKit

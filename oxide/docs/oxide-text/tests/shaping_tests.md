@@ -11,10 +11,20 @@
 ## Entry points list
 - `latin_text_shapes_into_atlas`
   Shapes Latin text and verifies glyph vertices, indices, and atlas pixels.
-- `shaped_width_tracks_requested_font_size`
-  Verifies Rustybuzz design-unit advances scale proportionally with the requested pixel size.
+- `variable_font_coordinates_affect_shaping`
+  Verifies a `wght` coordinate changes shaping for the restored variable-font fixture.
+- `device_scale_rasterizes_physical_glyphs_without_changing_logical_quads`
+  Verifies both atlas implementations create distinct physical-resolution 1x/3x A8 entries while keeping emitted quad placement and dimensions in logical points, requires small text to retain native A8 coverage, proves fractional sizes share or split entries only at rounded pixel-per-em boundaries, and requires direct retained-replay identities to include device scale.
+- `sdf_rasterization_is_device_scale_independent`
+  Verifies 1x/3x SDF baking reuses one atlas entry without another dirty upload while preserving logical quad dimensions.
+- `nonpositive_or_nonfinite_sizes_emit_no_glyph_geometry`
+  Verifies both atlas implementations reject zero, negative, NaN, and infinite sizes without geometry, cache entries, or dirty pixels.
 - `shaped_prefix_widths_match_ascii_prefix_shapes`
   Verifies one shaped-run prefix widths match repeated prefix shaping for simple ASCII text.
+- `shaped_positions_scale_from_font_units`
+  Verifies fixture design-unit advances scale by requested pixels divided by units-per-em, including borrowed/owned parity and proportional sizes.
+- `baked_glyphs_apply_shaped_offsets`
+  Verifies a positioned combining mark uses Rustybuzz x/y offsets when emitting screen-space glyph quads.
 - `shaped_prefix_widths_follow_combining_grapheme_boundaries`
   Verifies shaped cluster advances land on grapheme boundaries for combining-mark text.
 - `shaped_cursor_map_tracks_combining_grapheme_boundaries`
@@ -43,16 +53,12 @@
   Verifies whitespace or missing visible glyphs do not create geometry.
 - `fallback_decisions_invalidate_for_font_database_and_chain_changes`
   Verifies a newly added fallback font and a changed fallback chain cannot reuse stale cached coverage or font decisions.
-- `variable_font_coordinates_affect_shaping_and_rasterization`
-  Verifies a pinned width coordinate changes Rustybuzz advances and a pinned weight coordinate changes Swash bitmap coverage.
-- `device_scale_rasterizes_a8_glyphs_at_physical_resolution`
-  Verifies 3x A8 baking uses a distinct larger physical raster while preserving logical quad geometry in both `Atlas` and `PagedAtlas`.
 
 ## Logic narrative
 - Tests load fixed Latin and CJK fixture fonts to avoid platform font differences.
 - The library's test-only SDF oracle compares the exact EDT with the retired 17x17 search at a predeclared zero-byte tolerance for synthetic holes/thin strokes and the Latin/CJK 2x/3x by 48/96 px glyph matrix.
+- The font-unit test computes its oracle directly from the fixture Rustybuzz face rather than comparing two Oxide paths that could share the same scaling defect.
 - Prefix-width tests derive caret positions from one shaped run, compare the result against repeated prefix shaping where that is a valid ASCII oracle, and verify owned-run cache reuse does not change the cursor map.
-- The font-size test compares two requested sizes for the same pinned face, rejecting an implementation that mistakes Rustybuzz design units for 26.6 pixel units.
 - Cursor-map tests validate both the shaped width table and UTF-8 byte ranges, so text input code cannot split combining or ZWJ clusters while mapping pointer x positions.
 - Atlas-pressure coverage uses a deliberately small atlas and feeds unique glyphs until a stale slot must be reused.
 - The pressure tests check the current glyph-run spans, atlas revision, resident dirty rectangle, and eviction counter rather than depending on private atlas coordinates.
@@ -65,6 +71,7 @@
 ## Edge cases and failure modes
 - Empty and oversize glyph output is covered.
 - Repeated glyph baking with cached atlas entries is covered.
+- Cross-scale glyph baking is covered so a Retina surface cannot reuse or stretch a 1x A8 atlas entry and cannot multiply scale-independent SDF work.
 - Atlas pressure is covered without requiring a full atlas reset.
 - Smaller replacement glyphs in larger evicted slots are covered so dirty-rect uploads cannot preserve stale edge pixels.
 - Same-run pressure is covered so a tiny atlas cannot corrupt vertices emitted earlier in the same `GlyphRun`.
@@ -81,6 +88,7 @@
 - The pressure test protects the allocation-avoidance policy that reuses stale atlas slots instead of rebuilding the entire atlas.
 - The full-slot reuse test protects dirty-rect upload correctness after slot-level eviction.
 - Revision assertions protect retained draw-list invalidation after atlas eviction or reset.
+- Device-scale assertions protect the quality/cost boundary: cold A8 atlas pixels scale physically while SDF pixels and warm logical draw geometry do not.
 
 ## Feature flags and cfgs
 - No feature-specific branches.
@@ -96,8 +104,9 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
-- 2026-07-26: covered immutable variable-axis shaping/rasterization and physical-resolution A8 glyph baking with logical-geometry preservation.
-- 2026-07-26: added requested-font-size width scaling coverage for the units-per-em shaping correction.
+- 2026-08-07: covered nonpositive and non-finite size rejection before glyph rasterization.
+- 2026-08-06: added 1x/3x physical-A8, scale-independent-SDF, bounded pixel-per-em quantization, and logical-quad coverage for monolithic and paged glyph atlases; collapsed the SDF oracle matrix to unique script-by-size work.
+- 2026-08-02: added direct units-per-em and positioned-glyph-offset oracles for shaping and baking.
 - 2026-07-14: added fallback cache invalidation coverage and documented the exact zero-tolerance SDF reference matrix.
 - 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
 - 2026-06-01: added full-slot clear/dirty coverage for smaller replacement glyphs reusing larger evicted atlas slots.

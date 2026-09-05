@@ -84,6 +84,7 @@ impl<T> GenerationSlots<T>
          )
    }
 
+   #[cfg(feature = "diagnostic-instrumentation")]
    pub(crate) fn values(&self) -> impl Iterator<Item = &T>
    {
       self.slots.iter().filter_map(|slot| slot.value.as_ref())

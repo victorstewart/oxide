@@ -10,9 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
    api_vertex_descriptor, append_glyph_instances, append_remapped_indices_to_span, apply_scissor_dp,
-   configure_layer_source_alpha_blend, configure_source_alpha_blend, effective_scissor_dp,
-   final_target_plan, intersect_scissor_dp, pack_image_params, pack_nine_slice_params,
-   pack_rrect_params,
+   configure_straight_alpha_source_over_blend, effective_scissor_dp, final_target_plan,
+   intersect_scissor_dp, pack_image_params, pack_nine_slice_params, pack_rrect_params,
    pipeline_error, pipeline_function, pipeline_state, solid_primitive_for_index_count,
    solid_primitive_for_vertex_count, transparent_drawable_clear_enabled, MetalInitError,
    MetalRenderer, NineSliceGpuParams,
@@ -40,27 +39,27 @@ pub(super) struct PreparedPipelines
 
 impl PreparedPipelines
 {
-   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool) -> Result<Self, MetalInitError>
+   pub fn new(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32) -> Result<Self, MetalInitError>
    {
       Ok(Self {
-         solid: prepared_pipeline(device, library, format, sample_count, layer, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
-         rrect: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
-         rrect_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
-         image: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
-         image_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
-         image_single: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
-         image_single_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
-         image_mesh: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
-         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
-         text: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text", "v_prepared_glyph", "f_prepared_glyph", false)?,
-         text_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_opaque", "v_prepared_glyph", "f_glyph", false)?,
-         text_sdf: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf", "v_prepared_glyph", "f_prepared_glyph_sdf", false)?,
-         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, layer, "prepared.text_sdf_opaque", "v_prepared_glyph", "f_glyph_sdf", false)?,
+         solid: prepared_pipeline(device, library, format, sample_count, "prepared.solid", "v_prepared_solid", "f_solid", true)?,
+         rrect: prepared_pipeline(device, library, format, sample_count, "prepared.rrect", "v_prepared_inst_rect", "f_prepared_rrect", false)?,
+         rrect_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.rrect_opaque", "v_prepared_inst_rect", "f_rrect", false)?,
+         image: prepared_pipeline(device, library, format, sample_count, "prepared.image", "v_prepared_inst_rect", "f_prepared_image", false)?,
+         image_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_opaque", "v_prepared_inst_rect", "f_image", false)?,
+         image_single: prepared_pipeline(device, library, format, sample_count, "prepared.image_single", "v_prepared_inst_rect", "f_prepared_image_single", false)?,
+         image_single_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_single_opaque", "v_prepared_inst_rect", "f_image_single", false)?,
+         image_mesh: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh", "v_prepared_text", "f_prepared_image_mesh", true)?,
+         image_mesh_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.image_mesh_opaque", "v_prepared_text", "f_image_mesh", true)?,
+         text: prepared_pipeline(device, library, format, sample_count, "prepared.text", "v_prepared_glyph", "f_prepared_glyph", false)?,
+         text_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_opaque", "v_prepared_glyph", "f_glyph", false)?,
+         text_sdf: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf", "v_prepared_glyph", "f_prepared_glyph_sdf", false)?,
+         text_sdf_opaque: prepared_pipeline(device, library, format, sample_count, "prepared.text_sdf_opaque", "v_prepared_glyph", "f_glyph_sdf", false)?,
       })
    }
 }
 
-fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, layer: bool, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
+fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat, sample_count: u32, stage: &str, vertex: &str, fragment: &str, vertex_descriptor: bool) -> Result<RenderPipelineState, MetalInitError>
 {
    let vertex = pipeline_function(library, stage, vertex)?;
    let fragment = pipeline_function(library, stage, fragment)?;
@@ -75,14 +74,7 @@ fn prepared_pipeline(device: &Device, library: &Library, format: MTLPixelFormat,
    let attachment = descriptor.color_attachments().object_at(0)
       .ok_or_else(|| pipeline_error(stage, "missing color attachment zero"))?;
    attachment.set_pixel_format(format);
-   if layer
-   {
-      configure_layer_source_alpha_blend(attachment);
-   }
-   else
-   {
-      configure_source_alpha_blend(attachment);
-   }
+   configure_straight_alpha_source_over_blend(attachment);
    pipeline_state(device, stage, &descriptor)
 }
 
@@ -860,6 +852,7 @@ pub(super) enum PreparedOperation
       argument_buffer: Option<Buffer>,
       handles: Vec<api::ImageHandle>,
       instance_handles: Vec<api::ImageHandle>,
+      sampling: api::ImageSampling,
       first_command: u32,
       count: u64,
    },
@@ -931,6 +924,11 @@ fn prepare_rrects(device: &DeviceRef, commands: &[api::DrawCmd], first_command: 
 
 fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) -> Option<(PreparedOperation, usize, u64)>
 {
+   let api::DrawCmd::Image { tex: first_texture, .. } = list.items.get(start)? else
+   {
+      return None;
+   };
+   let sampling = renderer.images.get(&first_texture.0)?.sampling;
    let mut slots = HashMap::<u32, u32>::new();
    let mut handles = Vec::new();
    let mut instance_handles = Vec::new();
@@ -939,6 +937,10 @@ fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) 
    while let Some(api::DrawCmd::Image { tex, dst, src, alpha }) = list.items.get(index)
    {
       let texture = renderer.images.get(&tex.0)?;
+      if texture.sampling != sampling
+      {
+         break;
+      }
       let slot = if let Some(slot) = slots.get(&tex.0).copied()
       {
          slot
@@ -987,6 +989,7 @@ fn prepare_images(renderer: &MetalRenderer, list: &api::DrawList, start: usize) 
       argument_buffer,
       handles,
       instance_handles,
+      sampling,
       first_command: start as u32,
       count: (index - start) as u64,
    }, index, bytes))
@@ -2041,7 +2044,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             renderer.acc_draws = renderer.acc_draws.saturating_add(1);
             renderer.acc_instanced = renderer.acc_instanced.saturating_add((*count).min(u64::from(u32::MAX)) as u32);
          }
-         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, first_command, count } =>
+         PreparedOperation::Images { params, argument_buffer, handles, instance_handles, sampling, first_command, count } =>
          {
             if filtered && !selected_range(damage_commands, *first_command, *count)
             {
@@ -2055,7 +2058,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                encoder.set_vertex_buffer(0, Some(params), 0);
                encoder.set_fragment_buffer(1, Some(params), 0);
                encoder.set_fragment_buffer(2, Some(argument_buffer), 0);
-               if let Some(sampler) = renderer.sampler.as_ref()
+               if let Some(sampler) = renderer.sampler_for_image_sampling(*sampling)
                {
                   encoder.set_fragment_sampler_state(0, Some(sampler));
                }
@@ -2076,7 +2079,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
                let pipelines = prepared_pipelines_for_target(renderer, target);
                let Some(pipelines) = pipelines.as_ref() else { return };
                encoder.set_render_pipeline_state(if opaque { &pipelines.image_single_opaque } else { &pipelines.image_single });
-               if let Some(sampler) = renderer.sampler.as_ref()
+               if let Some(sampler) = renderer.sampler_for_image_sampling(*sampling)
                {
                   encoder.set_fragment_sampler_state(0, Some(sampler));
                }
@@ -2164,7 +2167,7 @@ fn encode_prepared_chunk(encoder: &RenderCommandEncoderRef, renderer: &mut Metal
             let Some(pipelines) = pipelines.as_ref() else { return };
             encoder.set_render_pipeline_state(if opaque { &pipelines.image_mesh_opaque } else { &pipelines.image_mesh });
             encoder.set_fragment_texture(0, Some(texture));
-            if let Some(sampler) = renderer.sampler.as_ref()
+            if let Some(sampler) = renderer.sampler_for_image_sampling(texture.sampling)
             {
                encoder.set_fragment_sampler_state(0, Some(sampler));
             }

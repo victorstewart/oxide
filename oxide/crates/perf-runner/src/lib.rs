@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use oxide_harness_registry as registry;
 use oxide_input::{GestureRecognizer, TouchSurfaceRecognizer};
 use oxide_permissions as permissions;
@@ -8,6 +8,7 @@ use oxide_platform_web as platform_web;
 use oxide_renderer_api as api;
 use oxide_renderer_api::Renderer;
 use oxide_renderer_metal as metal;
+use oxide_renderer_web as web;
 use oxide_test_scenes as scenes;
 use oxide_text as text;
 use oxide_timing as timing;
@@ -15,20 +16,22 @@ use oxide_ui_core as ui;
 use serde::{Deserialize, Serialize};
 use std::boxed::Box;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::hint::black_box;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-mod paired_statistics;
 pub mod paired;
 mod architecture_matrix;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
 const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
+const FILE_PROMOTION_JOURNAL: &str = ".oxide-report-promotion.json";
+const FILE_PROMOTION_NEXT_JOURNAL: &str = ".oxide-report-promotion.next.json";
 const DEFAULT_MARKDOWN_RENDER_BENCH_ITERS: usize = 256;
 const DEFAULT_JSON_RENDER_BENCH_ITERS: usize = 256;
 const DEFAULT_SAMPLE_SUMMARY_BENCH_ITERS: usize = 262_144;
@@ -41,8 +44,6 @@ const DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS: usize = 16_384;
 const LINEAR_COMPARE_BASELINE_CASE_LIMIT: usize = 32;
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
-const COMPARISON_LATIN_VARIABLE_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/NotoSans-VF.ttf");
-const COMPARISON_CJK_VARIABLE_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/NotoSansSC-VF.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 const DAMAGE_USE_THRESH: f32 = 0.75;
 const DAMAGE_PREFILTER_THRESH: f32 = 0.25;
@@ -50,7 +51,45 @@ const PERF_DEVICE_SCALE: f32 = 2.0;
 const PERF_SCENE_W: u32 = 1200;
 const PERF_SCENE_H: u32 = 800;
 const PERF_RUNNER_FILTER_ENV: &str = "OXIDE_PERF_RUNNER_FILTER";
+const PERF_120_HZ_STEP_NS: u64 = 8_333_333;
+const PERF_SCROLL_TRACE_START_NS: u64 = 1_000_000_000;
+const FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS: u64 = 1_024;
+const GPU_SCENE_OWNED_BY_ANIMATION_BATTERY: &str = "anim_timeline";
 static PERF_CASE_FILTERS: OnceLock<Vec<String>> = OnceLock::new();
+static FILE_PROMOTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+const CANONICAL_CASE_IDS: &[&str] = &[
+   "cpu.authoring.app.prepared_frame",
+   "cpu.authoring.surface_retained.dirty_leaf_encode",
+   "cpu.bridge.permission_callback_fanout",
+   "cpu.image_pipeline.png.decode",
+   "cpu.journey.feed_raw_touch_fling",
+   "cpu.launch.simple_home.cold_launch",
+   "cpu.layout.dirty_subtree.incremental_relayout",
+   "cpu.primitive.control_set.mount",
+   "cpu.primitive.control_set.mutate_state",
+   "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
+   "cpu.reconcile.tree_mutation_10pct",
+   "cpu.stress.flat_rects.10000.mount",
+   "cpu.system.text_sdf_bake",
+   "cpu.system.text_shape_bake",
+   "cpu.text_input.ime.composition_commit_cycle",
+   "gpu.animation.effects.refresh_matrix",
+   "gpu.architecture.scene3d.create_release_endurance",
+   "gpu.authoring.image_store.atlas_grid_1000",
+   "gpu.authoring.retained_snapshot.clean_mixed",
+   "gpu.authoring.scene3d.mixed_frame",
+   "gpu.image_pipeline.png.first_visible",
+   "gpu.image_pipeline.png.upload",
+   "gpu.journey.collection_navigation.frame_pacing",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PerfSuiteScope
+{
+   Canonical,
+   Touched,
+}
 
 struct ScenePerfSpec {
     slug: &'static str,
@@ -92,7 +131,7 @@ enum PrimitiveLifecycleKind {
 enum PrimitiveLifecycleOp {
     Mount,
     Mutate,
-    RemoveAll,
+    RemoveRebuildCycle,
     Remount,
 }
 
@@ -109,7 +148,7 @@ impl PrimitiveLifecycleOp {
         match self {
             Self::Mount => "mount",
             Self::Mutate => "mutate",
-            Self::RemoveAll => "remove-all",
+            Self::RemoveRebuildCycle => "remove-rebuild-cycle",
             Self::Remount => "remount",
         }
     }
@@ -136,16 +175,67 @@ fn load_perf_case_filters() -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
-fn perf_case_allowed(case_id: &str) -> bool {
-    let filters = perf_case_filters();
-    filters.is_empty()
-        || filters.iter().any(|filter| case_id.starts_with(filter))
+fn perf_case_allowed(case_id: &str) -> bool
+{
+   match perf_suite_scope()
+   {
+      PerfSuiteScope::Canonical => CANONICAL_CASE_IDS.contains(&case_id),
+      PerfSuiteScope::Touched => perf_case_filters()
+         .iter()
+         .any(|filter| case_id.starts_with(filter)),
+   }
 }
 
-fn perf_case_prefix_allowed(prefix: &str) -> bool {
-    let filters = perf_case_filters();
-    filters.is_empty()
-        || filters.iter().any(|filter| filter.starts_with(prefix) || prefix.starts_with(filter))
+fn perf_case_prefix_allowed(prefix: &str) -> bool
+{
+   match perf_suite_scope()
+   {
+      PerfSuiteScope::Canonical => CANONICAL_CASE_IDS
+         .iter()
+         .any(|case_id| case_id.starts_with(prefix) || prefix.starts_with(case_id)),
+      PerfSuiteScope::Touched => perf_case_filters()
+         .iter()
+         .any(|filter| filter.starts_with(prefix) || prefix.starts_with(filter)),
+   }
+}
+
+fn perf_suite_scope() -> PerfSuiteScope
+{
+   if perf_case_filters().is_empty()
+   {
+      PerfSuiteScope::Canonical
+   }
+   else
+   {
+      PerfSuiteScope::Touched
+   }
+}
+
+fn assert_canonical_case_inventory(cases: &[PerfCaseResult]) -> Result<()>
+{
+   ensure!(
+      cases.len() == CANONICAL_CASE_IDS.len(),
+      "canonical battery produced {} cases instead of {}",
+      cases.len(),
+      CANONICAL_CASE_IDS.len()
+   );
+   let actual = cases
+      .iter()
+      .map(|case| case.id.as_str())
+      .collect::<BTreeSet<_>>();
+   ensure!(
+      actual.len() == CANONICAL_CASE_IDS.len(),
+      "canonical battery contains duplicate case IDs"
+   );
+   for expected in CANONICAL_CASE_IDS
+   {
+      ensure!(
+         actual.contains(expected),
+         "canonical battery omitted `{}`",
+         expected
+      );
+   }
+   Ok(())
 }
 
 fn set_env_if_unset(name: &str, value: &str) {
@@ -206,6 +296,7 @@ const PERF_JOURNEY_SPECS: &[JourneyPerfSpec] = &[
         id: "cpu.journey.orchestration_transition_modal",
         name: "Orchestration Transition + Modal",
     },
+    JourneyPerfSpec { id: "cpu.journey.feed_raw_touch_fling", name: "Feed Raw Touch Fling" },
     JourneyPerfSpec { id: "cpu.journey.feed_scroll_matrix", name: "Feed Scroll Matrix" },
     JourneyPerfSpec {
         id: "cpu.journey.thumbnail_grid_scroll_matrix",
@@ -226,10 +317,6 @@ const POPUP_WHEEL_PICKER_CASE_ID: &str = "cpu.authoring.popup_wheel_picker.inter
 
 const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec { id: "cpu.authoring.text_fields.edit_cycle", name: "Text Fields" },
-    AuthoringPerfSpec {
-        id: "cpu.authoring.font.variable_instance_construct",
-        name: "Variable Font Instance Construction",
-    },
     AuthoringPerfSpec { id: POPUP_WHEEL_PICKER_CASE_ID, name: "Popup Wheel Picker" },
     AuthoringPerfSpec { id: "cpu.authoring.burst_emitter.sample", name: "Burst Emitter" },
     AuthoringPerfSpec {
@@ -245,15 +332,11 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Surface Retained Dirty Leaf Encode",
     },
     AuthoringPerfSpec {
-        id: "cpu.authoring.surface_retained.text_atlas_context",
-        name: "Surface Retained Text Atlas Context",
-    },
-    AuthoringPerfSpec {
         id: "cpu.authoring.surface_retained.cache_policy",
         name: "Surface Retained Cache Policy",
     },
     AuthoringPerfSpec {
-        id: "cpu.authoring.animation.dynamic_properties_300",
+        id: "cpu.authoring.animation.dynamic_properties_hit_test_300",
         name: "Dynamic Property Animation",
     },
     AuthoringPerfSpec {
@@ -289,8 +372,24 @@ const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
         name: "Collection Prefix Update Full Scan",
     },
     AuthoringPerfSpec {
+        id: "cpu.authoring.vertical_scroll_surface.input_advance",
+        name: "Vertical Scroll Surface Input + Advance",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.app.prepared_frame",
+        name: "App Prepared Frame",
+    },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.webgpu_pipeline_profile.compose",
+        name: "WebGPU Pipeline Profile",
+    },
+    AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.clean_mixed",
         name: "Retained Snapshot Metal Replay",
+    },
+    AuthoringPerfSpec {
+        id: "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100",
+        name: "Retained Snapshot Prepared Layers",
     },
     AuthoringPerfSpec {
         id: "gpu.authoring.retained_snapshot.spatial_damage_10000",
@@ -336,8 +435,8 @@ const PERF_LAYOUT_SPECS: &[NamedPerfSpec] = &[
         name: "Node Content Dirty Retained Replay",
     },
     NamedPerfSpec {
-        id: "cpu.layout.non_draw_dirty.retained_reuse",
-        name: "Non-Draw Dirty Retained Reuse",
+        id: "cpu.layout.hit_test_dirty.retained_reuse",
+        name: "Hit-Test Dirty Retained Reuse",
     },
     NamedPerfSpec {
         id: "cpu.layout.scoped_tree_mutation.add_remove",
@@ -378,6 +477,10 @@ const PERF_IMAGE_PIPELINE_SPECS: &[NamedPerfSpec] = &[
     NamedPerfSpec { id: "cpu.image_pipeline.png.decode", name: "PNG Decode" },
     NamedPerfSpec { id: "gpu.image_pipeline.png.upload", name: "PNG Upload" },
     NamedPerfSpec { id: "gpu.image_pipeline.png.first_visible", name: "PNG First Visible" },
+    NamedPerfSpec {
+        id: "gpu.image_pipeline.rgba.nearest_first_visible",
+        name: "RGBA Nearest First Visible",
+    },
 ];
 
 const PERF_NAVIGATION_SPECS: &[NamedPerfSpec] = &[
@@ -465,11 +568,11 @@ const PERF_PRIMITIVE_LIFECYCLE_SPECS: &[PrimitiveLifecycleSpec] = &[
         op: PrimitiveLifecycleOp::Mutate,
     },
     PrimitiveLifecycleSpec {
-        id: "cpu.primitive.flat_rects.100.remove_all",
-        name: "Flat Rects 100 Remove All",
+        id: "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
+        name: "Flat Rects 100 Remove/Rebuild Cycle",
         kind: PrimitiveLifecycleKind::FlatRects,
         count: 100,
-        op: PrimitiveLifecycleOp::RemoveAll,
+        op: PrimitiveLifecycleOp::RemoveRebuildCycle,
     },
     PrimitiveLifecycleSpec {
         id: "cpu.primitive.flat_rects.100.remount",
@@ -620,12 +723,8 @@ struct Cli {
     compare: Option<PathBuf>,
     json_out: Option<PathBuf>,
     markdown_out: Option<PathBuf>,
-    paired_run: Option<PathBuf>,
     paired_analyze: Option<PathBuf>,
     paired_json_out: Option<PathBuf>,
-    paired_create_instrumentation_patch: Option<PathBuf>,
-    paired_instrumentation_root: Option<PathBuf>,
-    paired_instrumentation_paths: Vec<PathBuf>,
     markdown_bench_report: Option<PathBuf>,
     markdown_write_bench_report: Option<PathBuf>,
     markdown_bench_compare: Option<PathBuf>,
@@ -651,16 +750,153 @@ struct Cli {
     write_baseline: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RepositoryProvenance
+{
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_ref: Option<String>,
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_head_commit: Option<String>,
+   #[serde(skip_serializing_if = "Option::is_none")]
+   pub repository_tree: Option<String>,
+}
+
+impl RepositoryProvenance
+{
+   pub fn resolve_root(path: &Path) -> Result<PathBuf>
+   {
+      let root = PathBuf::from(repository_git_output(path, &["rev-parse", "--show-toplevel"])?);
+      ensure!(root.is_absolute(), "Git top level is not an absolute path");
+      fs::canonicalize(&root).with_context(|| format!("resolving Git top level {}", root.display()))
+   }
+
+   pub fn capture(root: &Path) -> Result<Self>
+   {
+      let repository_root = Self::resolve_root(root)?;
+      let status = repository_git_output(&repository_root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+      ensure!(status.is_empty(), "repository worktree is not clean at evidence capture");
+      let repository_ref = repository_git_output(&repository_root, &["symbolic-ref", "--quiet", "HEAD"])?;
+      let repository_head_commit = repository_git_output(&repository_root, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+      let repository_tree = repository_git_output(&repository_root, &["rev-parse", "--verify", "HEAD^{tree}"])?;
+      let provenance = Self {
+         repository_ref: Some(repository_ref),
+         repository_head_commit: Some(repository_head_commit),
+         repository_tree: Some(repository_tree),
+      };
+      provenance.validate()?;
+      Ok(provenance)
+   }
+
+   pub fn validate(&self) -> Result<()>
+   {
+      let repository_ref = self.repository_ref.as_deref().context("missing repository ref")?;
+      let repository_head_commit = self.repository_head_commit.as_deref().context("missing repository HEAD commit")?;
+      let repository_tree = self.repository_tree.as_deref().context("missing repository tree")?;
+      ensure!(
+         repository_ref.starts_with("refs/heads/") && repository_ref.len() > "refs/heads/".len(),
+         "repository ref is not a named branch"
+      );
+      ensure!(is_git_object_id(repository_head_commit), "repository HEAD commit is malformed");
+      ensure!(is_git_object_id(repository_tree), "repository tree is malformed");
+      Ok(())
+   }
+
+   pub fn ensure_unchanged(&self, root: &Path) -> Result<()>
+   {
+      self.validate()?;
+      let current = Self::capture(root).context("recapturing repository source revision")?;
+      ensure!(current == *self, "repository ref, HEAD commit, or tree changed during evidence capture");
+      Ok(())
+   }
+}
+
+fn repository_git_output(root: &Path, args: &[&str]) -> Result<String>
+{
+   let output = Command::new("git")
+      .arg("-C")
+      .arg(root)
+      .args(args)
+      .output()
+      .with_context(|| format!("running git {}", args.join(" ")))?;
+   ensure!(
+      output.status.success(),
+      "git {} failed: {}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr).trim()
+   );
+   String::from_utf8(output.stdout)
+      .map(|text| text.trim().to_string())
+      .with_context(|| format!("decoding git {} output", args.join(" ")))
+}
+
+fn is_git_object_id(value: &str) -> bool
+{
+   matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub fn assert_report_repository_provenance(version: u32, repository: &RepositoryProvenance) -> Result<()>
+{
+   match version
+   {
+      1 => ensure!(
+         repository == &RepositoryProvenance::default(),
+         "version 1 perf reports cannot carry version 2 repository provenance"
+      ),
+      2 => repository.validate().context("validating version 2 perf report repository provenance")?,
+      _ => bail!("unsupported perf report version {}", version),
+   }
+   Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct PerfReport {
     pub version: u32,
     pub suite: String,
     pub generated_label: Option<String>,
+    #[serde(flatten, default)]
+    pub repository: RepositoryProvenance,
     pub cases: Vec<PerfCaseResult>,
     pub coverage: CoverageReport,
     #[serde(default)]
     pub contract: ContractCoverageReport,
     pub findings: Vec<AuditFinding>,
+}
+
+#[derive(Serialize)]
+struct SerializablePerfReport<'a>
+{
+   version: u32,
+   suite: &'a str,
+   generated_label: &'a Option<String>,
+   #[serde(flatten)]
+   repository: &'a RepositoryProvenance,
+   cases: &'a [PerfCaseResult],
+   coverage: &'a CoverageReport,
+   contract: &'a ContractCoverageReport,
+   findings: &'a [AuditFinding],
+}
+
+impl Serialize for PerfReport
+{
+   fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+   where
+      S: serde::Serializer,
+   {
+      assert_report_repository_provenance(self.version, &self.repository)
+         .map_err(serde::ser::Error::custom)?;
+      SerializablePerfReport {
+         version: self.version,
+         suite: &self.suite,
+         generated_label: &self.generated_label,
+         repository: &self.repository,
+         cases: &self.cases,
+         coverage: &self.coverage,
+         contract: &self.contract,
+         findings: &self.findings,
+      }
+      .serialize(serializer)
+   }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -811,6 +1047,26 @@ struct TextAtlasPressureStats {
     max_dirty_pixels: u64,
     vertices: u64,
     indices: u64,
+}
+
+struct TextSdfBakeBench
+{
+   fonts: text::FontDb,
+   shapes: Vec<(usize, text::OwnedShape)>,
+   raster: text::RasterCtx,
+   atlas: text::Atlas,
+   vertices: Vec<api::Vertex>,
+   indices: Vec<u16>,
+}
+
+#[derive(Default)]
+struct TextSdfBakeStats
+{
+   checksum: u64,
+   glyph_runs: u64,
+   vertices: u64,
+   indices: u64,
+   dirty_pixels: u64,
 }
 
 #[derive(Default)]
@@ -1292,17 +1548,11 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let cli = parse_cli(args)?;
-    if cli.paired_create_instrumentation_patch.is_some() {
-        return run_create_instrumentation_patch(cli);
-    }
-    if cli.paired_run.is_some() {
-        return run_paired_workflow(cli);
-    }
     if cli.paired_analyze.is_some() {
         return run_paired_analysis(cli);
     }
     if cli.paired_json_out.is_some() {
-        bail!("--paired-json-out requires --paired-run or --paired-analyze");
+        bail!("--paired-json-out requires --paired-analyze");
     }
     if cli.sample_summary_bench {
         return run_sample_summary_bench(cli);
@@ -1404,25 +1654,9 @@ fn parse_cli(args: &[String]) -> Result<Cli> {
                 let path = it.next().context("missing value for --paired-analyze")?;
                 cli.paired_analyze = Some(PathBuf::from(path));
             }
-            "--paired-run" => {
-                let path = it.next().context("missing value for --paired-run")?;
-                cli.paired_run = Some(PathBuf::from(path));
-            }
             "--paired-json-out" => {
                 let path = it.next().context("missing value for --paired-json-out")?;
                 cli.paired_json_out = Some(PathBuf::from(path));
-            }
-            "--paired-create-instrumentation-patch" => {
-                let path = it.next().context("missing value for --paired-create-instrumentation-patch")?;
-                cli.paired_create_instrumentation_patch = Some(PathBuf::from(path));
-            }
-            "--paired-instrumentation-root" => {
-                let path = it.next().context("missing value for --paired-instrumentation-root")?;
-                cli.paired_instrumentation_root = Some(PathBuf::from(path));
-            }
-            "--paired-instrumentation-path" => {
-                let path = it.next().context("missing value for --paired-instrumentation-path")?;
-                cli.paired_instrumentation_paths.push(PathBuf::from(path));
             }
             "--bench-markdown-render" => {
                 let path = it.next().context("missing value for --bench-markdown-render")?;
@@ -1563,75 +1797,44 @@ fn parse_cli(args: &[String]) -> Result<Cli> {
     Ok(cli)
 }
 
-fn print_usage() {
-    println!("oxide-perf-runner");
-    println!("  default: legacy renderer summary for sweep scripts");
-    println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
-    println!("  --write-baseline writes to benchmarks/workspace/latest.json and latest.md");
-    println!("  --paired-run PLAN --paired-json-out PATH");
-    println!("  --paired-analyze INPUT --paired-json-out PATH");
-    println!("  --paired-create-instrumentation-patch OUT --paired-instrumentation-root ROOT --paired-instrumentation-path PATH [...]");
-    println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
-    println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
-    println!("  --bench-json-render PATH [--bench-json-iters N]");
-    println!("  --bench-json-string-render PATH [--bench-json-iters N]");
-    println!("  --bench-sample-summary [--bench-sample-summary-iters N]");
-    println!("  --bench-case-filter [--bench-case-filter-iters N]");
-    println!("  --bench-compare-reports CURRENT BASELINE [--bench-compare-iters N]");
-    println!("  --bench-frame-pacing-metrics [--bench-frame-pacing-iters N]");
-    println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
-    println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
-    println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
+fn print_usage()
+{
+   println!("oxide-perf-runner");
+   println!("  default: legacy renderer summary for sweep scripts");
+   println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
+   println!("  --write-baseline writes the canonical battery to benchmarks/workspace/latest.json and latest.md");
+   println!("  --paired-analyze INPUT --paired-json-out OUTPUT");
+   println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+   println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
+   println!("  --bench-json-render PATH [--bench-json-iters N]");
+   println!("  --bench-json-string-render PATH [--bench-json-iters N]");
+   println!("  --bench-sample-summary [--bench-sample-summary-iters N]");
+   println!("  --bench-case-filter [--bench-case-filter-iters N]");
+   println!("  --bench-compare-reports CURRENT BASELINE [--bench-compare-iters N]");
+   println!("  --bench-frame-pacing-metrics [--bench-frame-pacing-iters N]");
+   println!("  --bench-distribution-metrics [--bench-distribution-iters N]");
+   println!("  --bench-case-metric-contract PATH [--bench-case-metric-iters N]");
+   println!("  --bench-contract-coverage PATH [--bench-contract-iters N]");
 }
 
-fn run_paired_analysis(cli: Cli) -> Result<()> {
-    let input_path = cli.paired_analyze.context("missing paired experiment input")?;
-    let output_path = cli.paired_json_out.context("--paired-analyze requires --paired-json-out")?;
-    let input_bytes = fs::read(&input_path)
-        .with_context(|| format!("read paired experiment input {}", input_path.display()))?;
-    let input = serde_json::from_slice::<paired::PairedExperimentInput>(&input_bytes)
-        .with_context(|| format!("parse paired experiment input {}", input_path.display()))?;
-    let report = paired::analyze_paired_experiment(input)?;
-    let report_bytes = paired::report_json(&report)?;
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create paired report directory {}", parent.display()))?;
-    }
-    fs::write(&output_path, report_bytes)
-        .with_context(|| format!("write paired experiment report {}", output_path.display()))?;
-    Ok(())
-}
-
-fn run_paired_workflow(cli: Cli) -> Result<()> {
-    let plan_path = cli.paired_run.context("missing paired workflow plan")?;
-    let output_path = cli.paired_json_out.context("--paired-run requires --paired-json-out")?;
-    let plan_bytes = fs::read(&plan_path)
-        .with_context(|| format!("read paired workflow plan {}", plan_path.display()))?;
-    let plan = serde_json::from_slice::<paired::PairedWorkflowPlan>(&plan_bytes)
-        .with_context(|| format!("parse paired workflow plan {}", plan_path.display()))?;
-    let report = paired::run_paired_workflow(plan)?;
-    let report_bytes = paired::report_json(&report)?;
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create paired report directory {}", parent.display()))?;
-    }
-    fs::write(&output_path, report_bytes)
-        .with_context(|| format!("write paired workflow report {}", output_path.display()))?;
-    Ok(())
-}
-
-fn run_create_instrumentation_patch(cli: Cli) -> Result<()> {
-    let output_path = cli
-        .paired_create_instrumentation_patch
-        .context("missing instrumentation patch output")?;
-    let source_root = cli.paired_instrumentation_root.unwrap_or_else(|| PathBuf::from("."));
-    let sha256 = paired::create_instrumentation_patch(
-        &source_root,
-        &cli.paired_instrumentation_paths,
-        &output_path,
-    )?;
-    println!("{}  {}", sha256, output_path.display());
-    Ok(())
+fn run_paired_analysis(cli: Cli) -> Result<()>
+{
+   let input_path = cli.paired_analyze.context("missing paired experiment input")?;
+   let output_path = cli.paired_json_out.context("--paired-analyze requires --paired-json-out")?;
+   let input_bytes = fs::read(&input_path)
+      .with_context(|| format!("read paired experiment input {}", input_path.display()))?;
+   let input = serde_json::from_slice::<paired::PairedExperimentInput>(&input_bytes)
+      .with_context(|| format!("parse paired experiment input {}", input_path.display()))?;
+   let report = paired::analyze_paired_experiment(input)?;
+   let report_bytes = paired::report_json(&report)?;
+   if let Some(parent) = output_path.parent().filter(|parent| !parent.as_os_str().is_empty())
+   {
+      fs::create_dir_all(parent)
+         .with_context(|| format!("create paired report directory {}", parent.display()))?;
+   }
+   fs::write(&output_path, report_bytes)
+      .with_context(|| format!("write paired experiment report {}", output_path.display()))?;
+   Ok(())
 }
 
 fn load_markdown_bench_inputs(path: &Path, compare_path: Option<&PathBuf>) -> Result<(PerfReport, Option<PerfComparison>)> {
@@ -2313,48 +2516,110 @@ fn comparison_bench_hash_u64(hash: u64, value: u64) -> u64 {
     (hash ^ value).wrapping_mul(0x100000001b3)
 }
 
-fn run_suite(cli: Cli) -> Result<()> {
-    let report = collect_suite(cli.smoke)?;
-    if perf_case_filters().is_empty() {
-        assert_full_coverage(&report.coverage)?;
-        assert_contract_coverage(&report.contract)?;
-        assert_case_metric_contract(&report.cases)?;
-    }
+fn run_suite(cli: Cli) -> Result<()>
+{
+   ensure!(
+      !(cli.write_baseline && cli.smoke),
+      "--write-baseline cannot be combined with --smoke"
+   );
+   ensure!(
+      !(cli.write_baseline && !perf_case_filters().is_empty()),
+      "--write-baseline cannot be combined with OXIDE_PERF_RUNNER_FILTER"
+   );
+   let working_directory = std::env::current_dir().context("resolving performance-runner working directory")?;
+   let repository_root = RepositoryProvenance::resolve_root(&working_directory)
+      .context("resolving performance-runner Git top level")?;
+   let repository = match RepositoryProvenance::capture(&repository_root)
+   {
+      Ok(repository) => Some(repository),
+      Err(error) if cli.write_baseline =>
+      {
+         return Err(error).context("capturing clean repository source revision for baseline promotion");
+      }
+      Err(_) => None,
+   };
+   let scope = perf_suite_scope();
+   let mut report = collect_suite(cli.smoke)?;
+   if let Some(repository) = repository.as_ref()
+   {
+      repository.ensure_unchanged(&repository_root)?;
+      report.version = 2;
+      report.repository = repository.clone();
+   }
+   if scope == PerfSuiteScope::Canonical
+   {
+      assert_canonical_case_inventory(&report.cases)?;
+   }
+   assert_contract_coverage(&report.contract)?;
+   assert_case_metric_contract(&report.cases)?;
 
-    let comparison = if let Some(path) = cli.compare.as_ref() {
-        let baseline = load_report(path)?;
-        Some(compare_reports(&report, &baseline))
-    } else {
-        None
-    };
+   let comparison = if let Some(path) = cli.compare.as_ref()
+   {
+      let baseline = load_report(path)?;
+      Some(compare_reports(&report, &baseline))
+   }
+   else
+   {
+      None
+   };
 
-    let json_out = if cli.write_baseline {
-        Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_JSON)))
-    } else {
-        cli.json_out
-    };
-    let markdown_out = if cli.write_baseline {
-        Some(cli.markdown_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_MARKDOWN)))
-    } else {
-        cli.markdown_out
-    };
+   print_summary(&report, comparison.as_ref());
+   if let Some(comp) = comparison.as_ref()
+   {
+      if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty()
+      {
+         bail!("performance comparison failed; existing report outputs were preserved");
+      }
+   }
 
-    if let Some(path) = json_out.as_ref() {
-        write_report_json(path, &report)?;
-    }
-    if let Some(path) = markdown_out.as_ref() {
-        write_markdown_outputs(path, &report, comparison.as_ref())?;
-    }
+   let json_out = if cli.write_baseline
+   {
+      Some(cli.json_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_JSON)))
+   }
+   else
+   {
+      cli.json_out
+   };
+   let markdown_out = if cli.write_baseline
+   {
+      Some(cli.markdown_out.unwrap_or_else(|| PathBuf::from(DEFAULT_BASELINE_MARKDOWN)))
+   }
+   else
+   {
+      cli.markdown_out
+   };
 
-    print_summary(&report, comparison.as_ref());
+   if let Some(repository) = repository.as_ref()
+   {
+      repository.ensure_unchanged(&repository_root)?;
+   }
+   if cli.write_baseline
+   {
+      let outputs = workspace_baseline_outputs(
+         json_out.as_deref().expect("baseline JSON output"),
+         markdown_out.as_deref().expect("baseline markdown output"),
+         &report,
+         comparison.as_ref(),
+      )?;
+      if let Some(repository) = repository.as_ref()
+      {
+         repository.ensure_unchanged(&repository_root)?;
+      }
+      promote_files_atomically(&outputs)?;
+   }
+   else if let Some(path) = json_out.as_ref()
+   {
+      write_report_json(path, &report)?;
+   }
+   if !cli.write_baseline
+   {
+      if let Some(path) = markdown_out.as_ref()
+      {
+         write_markdown_outputs(path, &report, comparison.as_ref())?;
+      }
+   }
 
-    if let Some(comp) = comparison.as_ref() {
-        if !comp.missing_baseline.is_empty() || !comp.regressions.is_empty() {
-            bail!("performance comparison failed; inspect the generated report and update the committed baseline only with review");
-        }
-    }
-
-    Ok(())
+   Ok(())
 }
 
 pub fn collect_suite_report(smoke: bool) -> Result<PerfReport> {
@@ -2467,7 +2732,10 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
         primitive_lifecycle_covered: covered_primitive_lifecycle.into_iter().collect(),
         scenes_cpu_total: PERF_SCENE_SPECS.len(),
         scenes_cpu_covered: covered_cpu_scenes.into_iter().collect(),
-        scenes_gpu_total: PERF_SCENE_SPECS.len(),
+        scenes_gpu_total: PERF_SCENE_SPECS
+            .iter()
+            .filter(|spec| spec.slug != GPU_SCENE_OWNED_BY_ANIMATION_BATTERY)
+            .count(),
         scenes_gpu_covered: covered_gpu_scenes.into_iter().collect(),
         journeys_total: PERF_JOURNEY_SPECS.len(),
         journeys_covered: covered_journeys.into_iter().collect(),
@@ -2533,12 +2801,6 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
       AuditFinding {
          status: String::from("fixed"),
          summary: String::from(
-            "oxide-timing animation start now uses atomic reduce-motion state and a consistent RUNNING_PROP-to-ANIMS lock order, reducing property-animation replacement overhead.",
-         ),
-      },
-      AuditFinding {
-         status: String::from("fixed"),
-         summary: String::from(
             "oxide-ui-core label encoding now avoids non-wrapped internal label clones, skips disabled diagnostic string formatting on the hot path, and preallocates the common wrapped-line buffers.",
          ),
       },
@@ -2582,8 +2844,15 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 
     Ok(PerfReport {
         version: 1,
-        suite: if smoke { String::from("smoke") } else { String::from("full") },
+        suite: String::from(match (perf_suite_scope(), smoke)
+        {
+           (PerfSuiteScope::Canonical, false) => "canonical",
+           (PerfSuiteScope::Canonical, true) => "canonical-smoke",
+           (PerfSuiteScope::Touched, false) => "touched",
+           (PerfSuiteScope::Touched, true) => "touched-smoke",
+        }),
         generated_label: std::env::var("PERF_REPORT_DATE").ok(),
+        repository: RepositoryProvenance::default(),
         cases,
         coverage,
         contract,
@@ -2592,24 +2861,27 @@ fn collect_suite(smoke: bool) -> Result<PerfReport> {
 }
 
 fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageReport {
-    let has = |prefix: &str| cases.iter().any(|case| case.id.starts_with(prefix));
     let has_case = |needle: &str| cases.iter().any(|case| case.id == needle);
+    let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let layers = vec![
         contract_entry(
             "engine",
             "Engine Microbenchmarks",
-            if has("cpu.system.")
-                && has("cpu.component.")
-                && has("cpu.animation.")
-                && has("cpu.primitive.")
-                && has("cpu.authoring.")
+            if has_all(&[
+                "cpu.authoring.app.prepared_frame",
+                "cpu.authoring.surface_retained.dirty_leaf_encode",
+                "cpu.layout.dirty_subtree.incremental_relayout",
+                "cpu.primitive.control_set.mount",
+                "cpu.reconcile.tree_mutation_10pct",
+                "cpu.system.text_shape_bake",
+            ])
             {
                 "implemented"
             } else {
                 "partial"
             },
             vec![String::from(
-                "Engine coverage currently spans system hot paths, primitive views, animations, primitive lifecycle slices, and author-facing APIs.",
+                "The canonical engine signal spans app injection, retained invalidation, layout, primitive lifecycle, reconciliation, and text hot paths; subsystem matrices remain explicit touched-case tools.",
             )],
         ),
         contract_entry(
@@ -2617,84 +2889,55 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
             "Representative Screen Flows",
             "partial",
             vec![String::from(
-                "Flow coverage now spans offscreen launch/lifecycle, router scenes, explicit CPU user journeys, and a macOS Metal collection-navigation journey frame-pacing row, but physical-device refresh-mode batteries remain incomplete.",
+                "The canonical flow signal spans an internal cold-bootstrap proxy, a raw-touch settled feed, and a Metal collection-navigation journey; process lifecycle and native-refresh authority remain physical-device work.",
             )],
         ),
         contract_entry(
             "os-bridge",
             "OS-Bridge Benchmarks",
-            if has("cpu.bridge.") { "implemented" } else { "missing" },
+            if has_case("cpu.bridge.permission_callback_fanout") { "implemented" } else { "missing" },
             vec![String::from(
-                "Bridge coverage currently measures only app-owned wrapper overhead, not system-owned surface cost as a renderer win.",
+                "The canonical bridge signal measures app-owned permission callback overhead; system-owned surface cost remains separate device evidence rather than an Oxide renderer win.",
             )],
         ),
     ];
-    let has_all = |needles: &[&str]| needles.iter().all(|needle| has_case(needle));
     let battery = vec![
-        contract_battery_entry(
+        contract_entry(
             "launch-lifecycle",
             "Launch & Lifecycle",
-            has_all(&[
-                "cpu.launch.simple_home.cold_launch",
-                "cpu.launch.heavy_home.cold_launch",
-                "cpu.launch.detail.deep_link_launch",
-                "cpu.launch.simple_home.warm_resume",
-                "cpu.launch.heavy_home.foreground_after_background",
-            ]),
-            "Offscreen bootstrap now includes simple-home and heavy-home cold launch, route-driven detail launch, warm resume, and foreground-after-background lifecycle workloads.",
-            "No dedicated cold launch, warm resume, deep-link launch, or foreground-after-background battery is wired into oxide-perf-runner yet.",
+            if has_case("cpu.launch.simple_home.cold_launch") { "partial" } else { "missing" },
+            vec![String::from(
+                "The canonical workspace signal includes one internal cold-bootstrap/first-frame proxy; real process launch, warm resume, and foreground lifecycle remain physical-device work.",
+            )],
         ),
         contract_battery_entry(
             "primitive-lifecycle",
             "Primitive Mount / Update / Destroy",
             has_all(&[
-                "cpu.primitive.empty_root.mount",
                 "cpu.primitive.control_set.mount",
                 "cpu.primitive.control_set.mutate_state",
-                "cpu.primitive.flat_rects.100.remove_all",
-                "cpu.primitive.flat_rects.100.remount",
+                "cpu.primitive.flat_rects.100.remove_rebuild_cycle",
             ]),
-            "Flat rects, labels, cards, images, an empty-root slice, a shared control-set slice, and retained-tree remove-all/remount slices are all covered.",
-            "Flat rects, labels, cards, and images cover mount plus mutate, but the empty-root, shared control-set, and retained-tree remove-all/remount slices are still incomplete.",
+            "The canonical primitive signal covers representative control mount, control-state mutation, and a retained-tree remove/rebuild cycle; count/type matrices remain touched-case tools.",
+            "The canonical mount, update, and remove/rebuild lifecycle slices are not all present.",
         ),
         contract_battery_entry(
             "layout-invalidation",
             "Layout & Invalidation",
-            has_all(&[
-                "cpu.layout.flat_grid.rotation_relayout",
-                "cpu.layout.deep_stack.theme_swap",
-                "cpu.layout.grid.safe_area_swap",
-                "cpu.layout.dirty_subtree.incremental_relayout",
-                "cpu.layout.descendant_only.incremental_relayout",
-                "cpu.layout.transform_only.reposition",
-                "cpu.layout.paint_only.opacity_clip",
-                "cpu.layout.node_content_dirty.retained_replay",
-                "cpu.layout.non_draw_dirty.retained_reuse",
-                "cpu.layout.scoped_tree_mutation.add_remove",
-            ]),
-            "Flat-grid rotation, deep-stack theme swap, safe-area inset relayout, dirty-subtree relayout, descendant-only relayout, transform-only reposition, paint-only opacity/clip, node content-dirty retained-replay, non-draw dirty retained-reuse, and scoped tree add/remove batteries are all implemented.",
-            "Dedicated relayout batteries now exist, but not every required flat/deep/grid invalidation slice is present yet.",
+            has_case("cpu.layout.dirty_subtree.incremental_relayout"),
+            "The canonical layout signal measures dirty-subtree incremental relayout with direct visit/skip counters; invalidation-class variants remain touched-case tools.",
+            "The canonical dirty-subtree layout/invalidation signal is absent.",
         ),
         contract_battery_entry(
             "text-input",
             "Text & Text Input",
             has_all(&[
-                "cpu.system.text_atlas_pressure",
-                "cpu.system.text_atlas_dirty_rect_upload",
-                "cpu.system.text_fallback_label_encode",
-                "cpu.system.wrapped_label_cached_encode",
-                "cpu.text_input.large_editor.keystroke_burst",
-                "cpu.text_input.large_editor.paste_10kb",
-                "cpu.text_input.large_editor.selection_replace",
+                "cpu.system.text_sdf_bake",
+                "cpu.system.text_shape_bake",
                 "cpu.text_input.ime.composition_commit_cycle",
-                "cpu.text_input.cursor_pick.cluster_map",
-                "cpu.text_input.cursor_pick.rtl_cluster_map",
-                "cpu.text_input.cursor_pick.fallback_cluster_map",
-                "cpu.text_input.cursor_pick.mixed_bidi_affinity",
-                "cpu.journey.text_ime_composition_cycle",
             ]),
-            "Large-editor keystroke, paste, selection-replace, IME composition, LTR/RTL/fallback-font/mixed-bidi cursor-pick cluster-map, fallback-font label encoding, wrapped-label cache-miss fitting, atlas eviction pressure, and dirty-rect atlas upload workloads now complement the text-field and routed input-form coverage.",
-            "Text fields, wrapped labels, and the input-form journey are covered, but the full large-editor, IME composition, atlas eviction, and dirty-rect upload battery is still incomplete.",
+            "The canonical text signal separates shaping, SDF generation, and IME composition/commit; editor, atlas-pressure, fallback, and cursor variants remain touched-case tools.",
+            "The canonical shaping, SDF, and IME signals are not all present.",
         ),
         contract_battery_entry(
             "image-pipeline",
@@ -2704,30 +2947,25 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "gpu.image_pipeline.png.upload",
                 "gpu.image_pipeline.png.first_visible",
             ]),
-            "The committed image battery now splits PNG decode, Metal texture upload, and first-visible presentation into separate persisted workloads.",
-            "Image view and zoom workloads exist, but decode, upload, and first-visible phases are not yet split into separate benchmark metrics.",
+            "The canonical image signal separates PNG decode, Metal upload, and first-visible presentation; sampling/count/storage variants remain touched-case tools.",
+            "The canonical decode, upload, and first-visible image phases are not all present.",
         ),
         contract_battery_entry(
             "lists-grids-chat",
             "Lists, Grids, & Chat",
             has_all(&[
-                "cpu.journey.feed_scroll_matrix",
-                "cpu.journey.thumbnail_grid_scroll_matrix",
-                "cpu.journey.chat_thread_scroll_matrix",
+                "cpu.journey.feed_raw_touch_fling",
+                "gpu.authoring.image_store.atlas_grid_1000",
             ]),
-            "Feed, thumbnail-grid, and chat-thread scroll matrices now exist alongside the collection encode and navigation slices.",
-            "Collection encode and collection-navigation journey coverage exist, but the full feed/grid/chat scroll matrices are still incomplete.",
+            "The canonical collection signal combines a settled 2,000-row raw-touch feed with a 1,000-image atlas grid; programmatic feed, thumbnail-grid, and chat variants remain explicit touched cases.",
+            "The canonical feed and grid collection signals are not both present.",
         ),
         contract_battery_entry(
             "navigation-input",
             "Navigation & Input Latency",
-            has_all(&[
-                "cpu.navigation.button_press.response",
-                "cpu.navigation.slider_scrub.response",
-                "cpu.navigation.text_focus.response",
-            ]),
-            "Direct button-press, slider-scrub, and text-focus response batteries now complement the higher-level journey cases.",
-            "Navigation, orchestration, and zoom journeys exist, but direct event-to-first-response latency batteries are still missing.",
+            has_case("gpu.journey.collection_navigation.frame_pacing"),
+            "The canonical navigation journey reports event-to-visible, frame, GPU, hitch, and missed-frame distributions; interaction variants remain touched-case tools.",
+            "The canonical event-to-visible collection navigation signal is absent.",
         ),
         contract_entry(
             "animation-effects",
@@ -2746,52 +2984,31 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
         contract_battery_entry(
             "state-reconcile",
             "State Mutation & Reconciliation",
-            has_all(&[
-                "cpu.reconcile.single_node_mutation",
-                "cpu.reconcile.tree_mutation_1pct",
-                "cpu.reconcile.tree_mutation_10pct",
-                "cpu.reconcile.theme_swap_full",
-            ]),
-            "Single-node, 1 percent, 10 percent, and full-theme tree mutation batteries now expose diff/apply cost directly.",
-            "Primitive mutations and surface-router composition exist, but there is no dedicated diff/apply battery for 1 percent, 10 percent, or full-theme tree mutation yet.",
+            has_case("cpu.reconcile.tree_mutation_10pct"),
+            "The canonical reconciliation signal measures a nontrivial 10-percent retained-tree mutation; single-node, 1-percent, and full-theme variants remain touched-case tools.",
+            "The canonical retained-tree reconciliation signal is absent.",
         ),
         contract_battery_entry(
             "os-bridge",
             "OS Bridge Overhead",
-            has_all(&[
-                "cpu.bridge.permission_callback_fanout",
-                "cpu.bridge.sensor_location_snapshot",
-                "cpu.bridge.bluetooth_cache_update",
-                "cpu.bridge.photo_import_thumbnail",
-                "cpu.bridge.file_import_render",
-                "cpu.bridge.share_payload_prepare",
-                "cpu.bridge.local_json_transport_render",
-                "cpu.bridge.local_image_transport_render",
-            ]),
-            "Permission, sensor, photo import, file import, share payload, and localhost transport/render bridge workloads are all covered without claiming system-owned UI as a renderer win.",
-            "Permission, location, and Bluetooth wrappers are covered, but photo import, file import, share sheet, and transport/decode/render bridge batteries remain missing.",
+            has_case("cpu.bridge.permission_callback_fanout"),
+            "The canonical bridge signal measures app-owned permission callback fanout without claiming system-owned UI as renderer work; other bridge variants remain touched cases or device evidence.",
+            "The canonical app-owned OS-bridge overhead signal is absent.",
         ),
-        contract_battery_entry(
+        contract_entry(
             "endurance-thermal",
             "Endurance, Memory, & Thermal Drift",
-            has_all(&[
-                "cpu.endurance.open_close_heavy_screen.100x",
-                "cpu.endurance.tab_switch_heavy.500x",
-                "cpu.endurance.idle_animation.600_frames",
-            ]),
-            "Open/close, tab-switch, and idle-animation endurance loops are now part of the committed Oxide battery.",
-            "There is still not a complete long-run open/close, tab-switch, and idle-animation endurance battery in the current Oxide suite.",
+            if has_case("gpu.architecture.scene3d.create_release_endurance") { "partial" } else { "missing" },
+            vec![String::from(
+                "The canonical workspace signal exercises repeated Scene3D resource creation/release with post-churn live GPU-byte accounting; thermal drift and energy remain physical-device evidence.",
+            )],
         ),
         contract_battery_entry(
             "stress-pathological",
             "Stress & Pathological Regressions",
-            has_all(&[
-                "cpu.stress.flat_rects.10000.mount",
-                "cpu.stress.simultaneous_animations.300",
-                "cpu.stress.ticker_100hz",
-            ]),
-            "Dedicated 10k-node, 300-animation, and 100 Hz ticker traps now complement the router stress scene.",
-            "The router stress scene exists, but the explicit 10k-node, 300-animation, and 100 Hz ticker traps are still incomplete.",
+            has_case("cpu.stress.flat_rects.10000.mount"),
+            "The canonical pathological signal mounts a 10,000-node retained tree; animation and ticker traps remain touched-case tools.",
+            "The canonical 10,000-node stress signal is absent.",
         ),
     ];
     ContractCoverageReport {
@@ -2802,7 +3019,7 @@ fn build_oxide_contract_coverage(cases: &[PerfCaseResult]) -> ContractCoverageRe
                 "The Oxide report is intentionally explicit about missing contract families so the battery does not over-claim comprehensiveness.",
             ),
             String::from(
-                "Current Oxide coverage now spans engine hot paths, launch/lifecycle, representative scenes, and bridge slices; the biggest remaining gaps are hitch-oriented flow metrics and real-device refresh-mode coverage.",
+                "The canonical workspace battery covers one high-signal row per required family or distinct production phase; dense variants are selected explicitly when their owning code changes.",
             ),
         ],
     }
@@ -2944,6 +3161,10 @@ fn push_system_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()>
             vec![String::from("Mixed Latin+CJK shaping and atlas bake.")],
             move || run_text_shape_bake(),
         ));
+    }
+
+    if perf_case_allowed("cpu.system.text_sdf_bake") {
+        cases.push(text_sdf_bake_case(smoke, text_loops));
     }
 
     if perf_case_allowed("cpu.system.text_prefix_width_map") {
@@ -3183,42 +3404,80 @@ fn push_component_cases(
     cases: &mut Vec<PerfCaseResult>,
     smoke: bool,
     covered: &mut BTreeSet<String>,
-) {
-    for spec in registry::components() {
-        covered.insert(spec.name.to_string());
-        let case = match spec.id {
-            registry::ComponentId::Label => component_label_case(smoke),
-            registry::ComponentId::ProgressBar => component_progress_case(smoke),
-            registry::ComponentId::Spinner => component_spinner_case(smoke),
-            registry::ComponentId::Button => component_button_case(smoke),
-            registry::ComponentId::Toggle => component_toggle_case(smoke),
-            registry::ComponentId::Slider => component_slider_case(smoke),
-            registry::ComponentId::ImageView => component_image_case(smoke),
-            registry::ComponentId::NineSliceImage => component_nine_slice_case(smoke),
-            registry::ComponentId::CollectionView => component_collection_case(smoke),
-        };
-        cases.push(case);
-    }
+)
+{
+   for spec in registry::components()
+   {
+      let (case_id, build): (&str, fn(bool) -> PerfCaseResult) = match spec.id
+      {
+         registry::ComponentId::Label => ("cpu.component.label.encode", component_label_case),
+         registry::ComponentId::ProgressBar => {
+            ("cpu.component.progress_bar.encode", component_progress_case)
+         }
+         registry::ComponentId::Spinner => {
+            ("cpu.component.spinner.encode", component_spinner_case)
+         }
+         registry::ComponentId::Button => ("cpu.component.button.encode", component_button_case),
+         registry::ComponentId::Toggle => ("cpu.component.toggle.encode", component_toggle_case),
+         registry::ComponentId::Slider => ("cpu.component.slider.encode", component_slider_case),
+         registry::ComponentId::ImageView => {
+            ("cpu.component.image_view.encode", component_image_case)
+         }
+         registry::ComponentId::NineSliceImage => {
+            ("cpu.component.nine_slice_image.encode", component_nine_slice_case)
+         }
+         registry::ComponentId::CollectionView => {
+            ("cpu.component.collection_view.encode", component_collection_case)
+         }
+      };
+      if !perf_case_allowed(case_id)
+      {
+         continue;
+      }
+      covered.insert(spec.name.to_string());
+      cases.push(build(smoke));
+   }
 }
 
 fn push_animation_cases(
     cases: &mut Vec<PerfCaseResult>,
     smoke: bool,
     covered: &mut BTreeSet<String>,
-) {
-    for spec in registry::animations() {
-        covered.insert(spec.name.to_string());
-        let case = match spec.id {
-            registry::AnimationId::SpinnerSpin => animation_spinner_case(smoke),
-            registry::AnimationId::ProgressIndeterminate => animation_progress_case(smoke),
-            registry::AnimationId::ButtonPressScale => animation_button_case(smoke),
-            registry::AnimationId::ToggleThumbSpring => animation_toggle_case(smoke),
-            registry::AnimationId::SliderThumbMove => animation_slider_case(smoke),
-            registry::AnimationId::ImageZoomPan => animation_image_zoom_case(smoke),
-            registry::AnimationId::AnimTimelineBars => animation_timeline_case(smoke),
-        };
-        cases.push(case);
-    }
+)
+{
+   for spec in registry::animations()
+   {
+      let (case_id, build): (&str, fn(bool) -> PerfCaseResult) = match spec.id
+      {
+         registry::AnimationId::SpinnerSpin => {
+            ("cpu.animation.spinner_spin", animation_spinner_case)
+         }
+         registry::AnimationId::ProgressIndeterminate => {
+            ("cpu.animation.progress_indeterminate", animation_progress_case)
+         }
+         registry::AnimationId::ButtonPressScale => {
+            ("cpu.animation.button_press_scale", animation_button_case)
+         }
+         registry::AnimationId::ToggleThumbSpring => {
+            ("cpu.animation.toggle_thumb_spring", animation_toggle_case)
+         }
+         registry::AnimationId::SliderThumbMove => {
+            ("cpu.animation.slider_thumb_move", animation_slider_case)
+         }
+         registry::AnimationId::ImageZoomPan => {
+            ("cpu.animation.image_zoom_pan", animation_image_zoom_case)
+         }
+         registry::AnimationId::AnimTimelineBars => {
+            ("cpu.animation.anim_timeline_bars", animation_timeline_case)
+         }
+      };
+      if !perf_case_allowed(case_id)
+      {
+         continue;
+      }
+      covered.insert(spec.name.to_string());
+      cases.push(build(smoke));
+   }
 }
 
 fn push_gpu_animation_cases(cases: &mut Vec<PerfCaseResult>, smoke: bool) -> Result<()> {
@@ -3298,6 +3557,9 @@ fn push_gpu_scene_cases(
     covered: &mut BTreeSet<String>,
 ) -> Result<()> {
     for spec in PERF_SCENE_SPECS {
+        if spec.slug == GPU_SCENE_OWNED_BY_ANIMATION_BATTERY {
+            continue;
+        }
         let case_id = format!("gpu.scene.{}.frame", spec.slug);
         if !perf_case_allowed(&case_id) {
             continue;
@@ -3324,6 +3586,7 @@ fn push_journey_cases(
             "cpu.journey.collection_navigation" => journey_collection_navigation_case(smoke),
             "cpu.journey.zoom_image_gesture_cycle" => journey_zoom_image_case(smoke),
             "cpu.journey.orchestration_transition_modal" => journey_orchestration_case(smoke),
+            "cpu.journey.feed_raw_touch_fling" => journey_feed_raw_touch_fling_case(smoke),
             "cpu.journey.feed_scroll_matrix" => journey_feed_scroll_case(smoke),
             "cpu.journey.thumbnail_grid_scroll_matrix" => journey_thumbnail_grid_scroll_case(smoke),
             "cpu.journey.chat_thread_scroll_matrix" => journey_chat_thread_scroll_case(smoke),
@@ -3362,9 +3625,6 @@ fn push_authoring_cases(
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.authoring.text_fields.edit_cycle" => authoring_text_fields_case(smoke),
-            "cpu.authoring.font.variable_instance_construct" => {
-                authoring_variable_font_instance_case(smoke)
-            }
             POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
@@ -3374,13 +3634,10 @@ fn push_authoring_cases(
             "cpu.authoring.surface_retained.dirty_leaf_encode" => {
                 authoring_surface_retained_dirty_leaf_encode_case(smoke)
             }
-            "cpu.authoring.surface_retained.text_atlas_context" => {
-                authoring_surface_retained_text_atlas_context_case(smoke)
-            }
             "cpu.authoring.surface_retained.cache_policy" => {
                 authoring_surface_retained_cache_policy_case(smoke)
             }
-            "cpu.authoring.animation.dynamic_properties_300" => {
+            "cpu.authoring.animation.dynamic_properties_hit_test_300" => {
                 architecture_matrix::authoring_dynamic_property_surface_case(smoke)
             }
             "cpu.authoring.retained_snapshot.spatial_query_10000" => {
@@ -3407,8 +3664,18 @@ fn push_authoring_cases(
             "cpu.authoring.collection_prefix_update.full_scan" => {
                 authoring_collection_prefix_update_case(smoke, false)
             }
+            "cpu.authoring.vertical_scroll_surface.input_advance" => {
+                authoring_vertical_scroll_surface_case(smoke)
+            }
+            "cpu.authoring.app.prepared_frame" => authoring_app_prepared_frame_case(smoke),
+            "cpu.authoring.webgpu_pipeline_profile.compose" => {
+                authoring_webgpu_pipeline_profile_case(smoke)
+            }
             "gpu.authoring.retained_snapshot.clean_mixed" => {
                 architecture_matrix::metal_prepared_chunk_case(spec.id, smoke, false)?
+            }
+            "gpu.authoring.retained_snapshot.prepared_layers_clean_100x100" => {
+                architecture_matrix::metal_prepared_layer_case(spec.id, smoke, false)?
             }
             "gpu.authoring.retained_snapshot.spatial_damage_10000" => {
                 architecture_matrix::metal_spatial_damage_case(spec.id, smoke, false)?
@@ -3449,8 +3716,8 @@ fn push_layout_cases(
             "cpu.layout.node_content_dirty.retained_replay" => {
                 layout_node_content_dirty_retained_replay_case(smoke)
             }
-            "cpu.layout.non_draw_dirty.retained_reuse" => {
-                layout_non_draw_dirty_retained_reuse_case(smoke)
+            "cpu.layout.hit_test_dirty.retained_reuse" => {
+                layout_hit_test_dirty_retained_reuse_case(smoke)
             }
             "cpu.layout.scoped_tree_mutation.add_remove" => {
                 layout_scoped_tree_mutation_add_remove_case(smoke)
@@ -3513,7 +3780,18 @@ fn push_image_pipeline_cases(
         let case = match spec.id {
             "cpu.image_pipeline.png.decode" => image_pipeline_png_decode_case(smoke)?,
             "gpu.image_pipeline.png.upload" => image_pipeline_png_upload_case(smoke)?,
-            "gpu.image_pipeline.png.first_visible" => image_pipeline_png_first_visible_case(smoke)?,
+            "gpu.image_pipeline.png.first_visible" => image_pipeline_first_visible_case(
+                smoke,
+                spec.id,
+                api::ImageSampling::Linear,
+                "Dedicated first-visible render phase over a freshly uploaded linear-sampled RGBA checker texture and a prebuilt ImageView draw list: begin, encode, and submit its first Metal frame.",
+            )?,
+            "gpu.image_pipeline.rgba.nearest_first_visible" => image_pipeline_first_visible_case(
+                smoke,
+                spec.id,
+                api::ImageSampling::Nearest,
+                "Dedicated first-visible render phase over a freshly uploaded nearest-sampled RGBA checker texture and a prebuilt ImageView draw list: begin, encode, and submit its first Metal frame.",
+            )?,
             other => bail!("unknown image-pipeline perf case `{}`", other),
         };
         cases.push(case);
@@ -3846,7 +4124,7 @@ fn primitive_flat_rects_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Resu
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle => {
             let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(viewport_w));
             let mut nodes = populate_flat_rect_surface(&mut surface, count, 0);
             surface.layout(viewport_w, viewport_h.max((count_f / 10.0).ceil() * 28.0));
@@ -3962,7 +4240,7 @@ fn primitive_labels_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<P
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported label primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4015,7 +4293,7 @@ fn primitive_cards_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<Pe
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported card primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4075,7 +4353,7 @@ fn primitive_images_case(spec: &PrimitiveLifecycleSpec, smoke: bool) -> Result<P
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported image primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -4139,7 +4417,7 @@ fn primitive_control_set_case(
                 },
             ))
         }
-        PrimitiveLifecycleOp::RemoveAll | PrimitiveLifecycleOp::Remount => {
+        PrimitiveLifecycleOp::RemoveRebuildCycle | PrimitiveLifecycleOp::Remount => {
             bail!("unsupported control-set primitive lifecycle op `{}`", spec.id)
         }
     }
@@ -5280,36 +5558,79 @@ fn authoring_text_fields_case(smoke: bool) -> PerfCaseResult {
     )
 }
 
-fn authoring_variable_font_instance_case(smoke: bool) -> PerfCaseResult
+fn authoring_webgpu_pipeline_profile_case(smoke: bool) -> PerfCaseResult
 {
+   let loops = if smoke { 256 } else { 1_024 };
+   let full_pipeline_count = web::BrowserRendererPipelineProfile::full()
+      .declared_pipeline_count();
+   let minimal_pipeline_count = web::BrowserRendererPipelineProfile::empty()
+      .with_draw(web::BrowserDrawPipeline::Solid)
+      .with_draw(web::BrowserDrawPipeline::RRect)
+      .declared_pipeline_count();
+   let mixed_pipeline_count = web::BrowserRendererPipelineProfile::empty()
+      .with_draw(web::BrowserDrawPipeline::RRect)
+      .with_draw(web::BrowserDrawPipeline::NeonMarker)
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AlphaDepthRead,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AlphaDepthWrite,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_scene3d(
+         web::BrowserScene3dPipeline::AdditiveDepthRead,
+         web::scene3d::CullMode3d::None,
+      )
+      .with_id_mask_compositor()
+      .declared_pipeline_count();
    let mut case = measure_cpu_case(
-      "cpu.authoring.font.variable_instance_construct",
+      "cpu.authoring.webgpu_pipeline_profile.compose",
       "authoring",
       smoke,
       true,
-      0.12,
-      1,
+      0.15,
+      loops,
       vec![String::from(
-         "Font construction over the committed Noto Sans variable font at its pinned manifest coordinates.",
+         "Public construction-time WebGPU profile composition; deterministic metrics record the exact eager pipeline workload selected by representative profiles.",
       )],
-      move || {
-         let font = text::Font::from_bytes_with_variations(
-            COMPARISON_LATIN_VARIABLE_FONT.to_vec(),
-            &[
-               text::FontVariation {tag: *b"wght", value: 400.0},
-               text::FontVariation {tag: *b"wdth", value: 100.0},
-            ],
-         );
-         u64::from(font.supports_cluster("Variable font"))
+      move ||
+      {
+         let minimal = black_box(web::BrowserRendererPipelineProfile::empty())
+            .with_draw(black_box(web::BrowserDrawPipeline::Solid))
+            .with_draw(black_box(web::BrowserDrawPipeline::RRect));
+         let mixed = black_box(web::BrowserRendererPipelineProfile::empty())
+            .with_draw(black_box(web::BrowserDrawPipeline::RRect))
+            .with_draw(black_box(web::BrowserDrawPipeline::NeonMarker))
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AlphaDepthRead),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AlphaDepthWrite),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_scene3d(
+               black_box(web::BrowserScene3dPipeline::AdditiveDepthRead),
+               black_box(web::scene3d::CullMode3d::None),
+            )
+            .with_id_mask_compositor();
+         u64::from(black_box(web::BrowserRendererPipelineProfile::full()).declared_pipeline_count())
+            + u64::from(black_box(minimal).declared_pipeline_count())
+            + u64::from(black_box(mixed).declared_pipeline_count())
       },
    );
-   case.metrics.insert(String::from("font_bytes"), COMPARISON_LATIN_VARIABLE_FONT.len() as f64);
-   case.metrics.insert(String::from("font_instances_per_op"), 1.0);
-   case.metrics.insert(String::from("variation_axes_per_instance"), 2.0);
-   case.metrics.insert(String::from("pinned_weight"), 400.0);
-   case.metrics.insert(String::from("pinned_width"), 100.0);
-   case.metrics.insert(String::from("constructor_validation"), 1.0);
-   case.cache_state = String::from("cold");
+   case.metrics.insert(String::from("full_declared_pipelines"), f64::from(full_pipeline_count));
+   case.metrics.insert(String::from("minimal_declared_pipelines"), f64::from(minimal_pipeline_count));
+   case.metrics.insert(String::from("mixed_declared_pipelines"), f64::from(mixed_pipeline_count));
+   case.metrics.insert(
+      String::from("minimal_pipelines_avoided"),
+      f64::from(full_pipeline_count - minimal_pipeline_count),
+   );
+   case.metrics.insert(
+      String::from("mixed_pipelines_avoided"),
+      f64::from(full_pipeline_count - mixed_pipeline_count),
+   );
    case
 }
 
@@ -5817,6 +6138,175 @@ fn authoring_collection_prefix_update_case(smoke: bool, incremental: bool) -> Pe
     case
 }
 
+fn vertical_scroll_fling_trace() -> [platform::TouchEvent; 4]
+{
+   let id = platform::TouchId(41);
+   let start_ns = PERF_SCROLL_TRACE_START_NS;
+   [
+      touch_at(id, platform::TouchPhase::Start, 180.0, 520.0, start_ns),
+      touch_at(id, platform::TouchPhase::Move, 180.0, 480.0, start_ns + PERF_120_HZ_STEP_NS),
+      touch_at(id, platform::TouchPhase::Move, 180.0, 440.0, start_ns + 2 * PERF_120_HZ_STEP_NS),
+      touch_at(id, platform::TouchPhase::End, 180.0, 400.0, start_ns + 3 * PERF_120_HZ_STEP_NS),
+   ]
+}
+
+fn authoring_vertical_scroll_surface_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 64 } else { 256 };
+   let trace = vertical_scroll_fling_trace();
+   let advance_ns = trace[3].timestamp_ns.saturating_add(PERF_120_HZ_STEP_NS);
+   let mut surface = ui::VerticalScrollSurface::new(40_000.0, 800.0);
+   let mut visible_changes = 0u64;
+   let mut case = measure_cpu_case(
+      "cpu.authoring.vertical_scroll_surface.input_advance",
+      "authoring",
+      smoke,
+      true,
+      0.18,
+      loops,
+      vec![String::from(
+         "Warmed public VerticalScrollSurface input path: one retained stack trace feeds raw drag/release samples, then advances one fixed 120 Hz inertial step.",
+      )],
+      ||
+      {
+         surface.set_offset(0.0);
+         visible_changes = 0;
+         for event in &trace
+         {
+            visible_changes += surface.input_touch(event) as u64;
+         }
+         visible_changes += surface.advance_to(advance_ns) as u64;
+         u64::from(surface.offset().to_bits()).wrapping_add(visible_changes)
+      },
+   );
+   case.metrics.insert(String::from("raw_touch_events_per_op"), trace.len() as f64);
+   case.metrics.insert(String::from("inertial_steps_per_op"), 1.0);
+   case.metrics.insert(String::from("visible_changes_per_op"), visible_changes as f64);
+   case.metrics.insert(String::from("surface_offset_after_step"), surface.offset() as f64);
+   case.metrics.insert(
+      String::from("inertia_active_after_step"),
+      if surface.wants_next_frame() { 1.0 } else { 0.0 },
+   );
+   case
+}
+
+struct AuthoringPreparedFrameApp
+{
+   builder: ui::DrawListBuilder,
+   damage: [api::RectI; 1],
+}
+
+impl AuthoringPreparedFrameApp
+{
+   fn new() -> Self
+   {
+      Self {
+         builder: ui::DrawListBuilder::new(),
+         damage: [api::RectI::new(0, 0, 390, 844)],
+      }
+   }
+}
+
+impl platform::App for AuthoringPreparedFrameApp
+{
+   fn init(&mut self, _context: &mut platform::InitContext)
+   {
+   }
+
+   fn event(&mut self, _event: platform::AppEvent, _context: &mut platform::UpdateContext)
+   {
+   }
+
+   fn prepare_frame(
+      &mut self,
+      _context: platform::FrameContext,
+      _uploader: &mut dyn api::RuntimeImageUploader,
+   ) -> platform::FrameDemand
+   {
+      self.builder.clear();
+      for row in 0..24
+      {
+         self.builder.drawlist_mut().items.push(api::DrawCmd::RRect {
+            rect: api::RectF::new(12.0, 8.0 + row as f32 * 34.0, 366.0, 28.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.16, 0.19, 0.24, 1.0),
+         });
+      }
+      platform::FrameDemand::Idle
+   }
+
+   fn prepared_frame(&self) -> Option<platform::PreparedFrame<'_>>
+   {
+      Some(platform::PreparedFrame {
+         draw_list: self.builder.drawlist(),
+         damage: &self.damage,
+      })
+   }
+}
+
+struct AuthoringPreparedFrameUploader;
+
+impl api::RuntimeImageUploader for AuthoringPreparedFrameUploader
+{
+   fn create_a8(&mut self, _width: u32, _height: u32, _data: &[u8], _row_bytes: usize) -> api::ImageHandle
+   {
+      api::ImageHandle(1)
+   }
+
+   fn update_a8(
+      &mut self,
+      _handle: api::ImageHandle,
+      _x: u32,
+      _y: u32,
+      _width: u32,
+      _height: u32,
+      _data: &[u8],
+      _row_bytes: usize,
+   )
+   {
+   }
+}
+
+fn authoring_app_prepared_frame_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 256 } else { 1_024 };
+   let mut app: Box<dyn platform::App> = Box::new(AuthoringPreparedFrameApp::new());
+   let mut uploader = AuthoringPreparedFrameUploader;
+   let context = platform::FrameContext {
+      frame_id: 1,
+      timestamp_ns: PERF_SCROLL_TRACE_START_NS,
+      target_timestamp_ns: PERF_SCROLL_TRACE_START_NS + PERF_120_HZ_STEP_NS,
+      dt_ns: PERF_120_HZ_STEP_NS,
+      viewport: api::RectF::new(0.0, 0.0, 390.0, 844.0),
+      scale: 3.0,
+   };
+   let _ = app.prepare_frame(context, &mut uploader);
+   let mut case = measure_cpu_case(
+      "cpu.authoring.app.prepared_frame",
+      "authoring",
+      smoke,
+      true,
+      0.18,
+      loops,
+      vec![String::from(
+         "One warmed public App prepare/prepared-frame cycle reuses app-owned draw storage for a representative 24-row viewport; this is the sole host-injection authoring row, not a count/style matrix.",
+      )],
+      ||
+      {
+         let demand = app.prepare_frame(context, &mut uploader);
+         let frame = app.prepared_frame().expect("prepared app frame");
+         (frame.draw_list.items.len() as u64)
+            .wrapping_add(frame.damage.len() as u64)
+            .wrapping_add(u64::from(matches!(demand, platform::FrameDemand::Idle)))
+      },
+   );
+   let frame = app.prepared_frame().expect("prepared app frame");
+   case.metrics.insert(String::from("draw_commands_per_frame"), frame.draw_list.items.len() as f64);
+   case.metrics.insert(String::from("damage_rects_per_frame"), frame.damage.len() as f64);
+   case.metrics.insert(String::from("app_owned_frame_storage"), 1.0);
+   case
+}
+
 fn authoring_surface_retained_clean_encode_case(smoke: bool) -> PerfCaseResult {
     let loops = if smoke { 16 } else { 64 };
     let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
@@ -6035,76 +6525,6 @@ fn authoring_surface_retained_dirty_leaf_encode_case(smoke: bool) -> PerfCaseRes
     case.metrics.insert(String::from("index_bytes_copied_per_op"), index_bytes_copied as f64 / total_ops as f64);
     case.metrics.insert(String::from("retained_chunk_bytes"), retained_bytes as f64);
     case.metrics.insert(String::from("flat_fallback_uses"), 0.0);
-    case
-}
-
-fn authoring_surface_retained_text_atlas_context_case(smoke: bool) -> PerfCaseResult {
-    let loops = if smoke { 16 } else { 64 };
-    let mut surface = ui::UiSurface::new(flat_rect_surface_root_style(420.0));
-    populate_flat_rect_surface(&mut surface, 1_000, 0);
-    surface.layout(420.0, 760.0);
-    let mut text = perf_text_ctx();
-    let mut text_uploader = CpuUploader::default();
-    let mut text_builder = ui::DrawListBuilder::new();
-    let seed_label = ui::elements::Label {
-        text: String::from("Retained text atlas context"),
-        color: api::Color::rgba(0.12, 0.16, 0.20, 1.0),
-        align: ui::elements::Align::Left,
-        wrap: false,
-        font_id: 0,
-        font_px: 14.0,
-    };
-    seed_label.encode(
-        api::RectF::new(0.0, 0.0, 260.0, 32.0),
-        2.0,
-        &mut text,
-        &mut text_uploader,
-        &mut text_builder,
-    );
-    let text_atlas_ready = text.retained_text_atlas_revision().is_some();
-    let mut warm = ui::DrawListBuilder::new();
-    let _ = surface.encode_retained_with_text_ctx(&mut warm, &text);
-    let cached_draws = warm.drawlist().items.len() as u64;
-    let cached_vertices = warm.drawlist().vertices.len() as u64;
-    let cached_indices = warm.drawlist().indices.len() as u64;
-    let mut builder = ui::DrawListBuilder::new();
-    let mut reused = 0u64;
-    let mut rebuilt = 0u64;
-    let mut case = measure_cpu_case(
-        "cpu.authoring.surface_retained.text_atlas_context",
-        "authoring",
-        smoke,
-        true,
-        0.16,
-        loops,
-        vec![String::from(
-            "Clean retained UiSurface encode through the explicit text-atlas revision context path; expected path replays cached surface draws while validating current atlas revisions.",
-        )],
-        || {
-            builder.clear();
-            match surface.encode_retained_with_text_ctx(&mut builder, &text) {
-                ui::RetainedDrawStatus::Reused => {
-                    reused = reused.saturating_add(1);
-                }
-                ui::RetainedDrawStatus::Rebuilt => {
-                    rebuilt = rebuilt.saturating_add(1);
-                }
-            }
-            let dl = builder.drawlist();
-            (dl.items.len() as u64)
-                .saturating_add(dl.vertices.len() as u64)
-                .saturating_add(dl.indices.len() as u64)
-        },
-    );
-    let total = reused.saturating_add(rebuilt).max(1);
-    case.metrics.insert(String::from("retained_reused_ops"), reused as f64);
-    case.metrics.insert(String::from("retained_rebuilt_ops"), rebuilt as f64);
-    case.metrics.insert(String::from("retained_reuse_ratio"), reused as f64 / total as f64);
-    case.metrics
-        .insert(String::from("text_atlases_checked"), if text_atlas_ready { 1.0 } else { 0.0 });
-    case.metrics.insert(String::from("draw_items"), cached_draws as f64);
-    case.metrics.insert(String::from("vertex_count"), cached_vertices as f64);
-    case.metrics.insert(String::from("index_count"), cached_indices as f64);
     case
 }
 
@@ -6964,15 +7384,13 @@ fn layout_node_content_dirty_retained_replay_case(smoke: bool) -> PerfCaseResult
     case
 }
 
-fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
+fn layout_hit_test_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     let loops = layout_case_iterations(smoke);
     let (mut surface, target) = descendant_only_layout_surface();
     let cold = surface.layout(420.0, 160.0);
     let mut builder = ui::DrawListBuilder::new();
     let _ = surface.encode_retained(&mut builder);
-    let mut step = 0usize;
     let mut ops = 0u64;
-    let mut accessibility_ops = 0u64;
     let mut hit_test_ops = 0u64;
     let mut retained_reused_ops = 0u64;
     let mut retained_rebuilt_ops = 0u64;
@@ -6983,25 +7401,18 @@ fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     let mut reused_nodes = 0u64;
     let mut rebuilt_nodes = 0u64;
     let mut case = measure_cpu_case(
-        "cpu.layout.non_draw_dirty.retained_reuse",
+        "cpu.layout.hit_test_dirty.retained_reuse",
         "layout",
         smoke,
         true,
         0.18,
         loops,
         vec![String::from(
-            "Node-scoped accessibility and hit-test dirtying over a retained row; layout and draw caches should stay reusable.",
+            "Node-scoped hit-test dirtying over a retained row; layout and draw caches should stay reusable.",
         )],
         || {
-            let class = if step & 1 == 0 {
-                accessibility_ops = accessibility_ops.saturating_add(1);
-                ui::DirtyClass::Accessibility
-            } else {
-                hit_test_ops = hit_test_ops.saturating_add(1);
-                ui::DirtyClass::HitTest
-            };
-            step = step.wrapping_add(1);
-            let _ = surface.mark_node_dirty(target, class);
+            hit_test_ops = hit_test_ops.saturating_add(1);
+            let _ = surface.mark_node_dirty(target, ui::DirtyClass::HitTest);
             let stats = surface.layout(420.0, 160.0);
             builder.clear();
             let status = surface.encode_retained(&mut builder);
@@ -7032,7 +7443,6 @@ fn layout_non_draw_dirty_retained_reuse_case(smoke: bool) -> PerfCaseResult {
     case.metrics.insert(String::from("dirty_nodes"), 1.0);
     case.metrics.insert(String::from("layout_passes"), 0.0);
     case.metrics.insert(String::from("layout_ops_sampled"), ops as f64);
-    case.metrics.insert(String::from("accessibility_dirty_ops"), accessibility_ops as f64);
     case.metrics.insert(String::from("hit_test_dirty_ops"), hit_test_ops as f64);
     case.metrics.insert(String::from("retained_reused_ops"), retained_reused_ops as f64);
     case.metrics.insert(String::from("retained_rebuilt_ops"), retained_rebuilt_ops as f64);
@@ -7755,7 +8165,8 @@ fn image_pipeline_png_upload_case(smoke: bool) -> Result<PerfCaseResult> {
     })
 }
 
-fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> {
+fn image_pipeline_first_visible_case(smoke: bool, id: &str, sampling: api::ImageSampling, note: &str) -> Result<PerfCaseResult>
+{
     let png_bytes =
         checker_png_bytes(128, 128).with_context(|| "encoding generated checker PNG payload")?;
     let (w, h, rgba) =
@@ -7768,7 +8179,8 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     let warmups = if smoke { 1 } else { 2 };
     let sample_count = if smoke { 6 } else { 10 };
     for _ in 0..warmups {
-        let handle = renderer.image_create_rgba8(w, h, &rgba, (w as usize) * 4);
+        let handle =
+            renderer.image_create_rgba8_sampled(w, h, &rgba, (w as usize) * 4, sampling);
         let mut builder = ui::DrawListBuilder::new();
         let image = ui::elements::ImageView {
             image: handle,
@@ -7790,7 +8202,8 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     let mut gpu_samples = Vec::with_capacity(sample_count);
     let mut draws_sum = 0.0f64;
     for _ in 0..sample_count {
-        let handle = renderer.image_create_rgba8(w, h, &rgba, (w as usize) * 4);
+        let handle =
+            renderer.image_create_rgba8_sampled(w, h, &rgba, (w as usize) * 4, sampling);
         let mut builder = ui::DrawListBuilder::new();
         let image = ui::elements::ImageView {
             image: handle,
@@ -7817,7 +8230,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
 
     let summary = summarize(&frame_samples);
     let (layer, scenario, variant, cache_state, refresh_mode) =
-        perf_case_contract_metadata("gpu.image_pipeline.png.first_visible", "image-pipeline");
+        perf_case_contract_metadata(id, "image-pipeline");
     let mut metrics = BTreeMap::new();
     metrics.insert(String::from("encoded_bytes"), png_bytes.len() as f64);
     metrics.insert(String::from("texture_bytes"), rgba.len() as f64);
@@ -7828,7 +8241,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
     insert_frame_pacing_metrics(&mut metrics, &frame_samples);
 
     Ok(PerfCaseResult {
-        id: String::from("gpu.image_pipeline.png.first_visible"),
+        id: String::from(id),
         family: String::from("image-pipeline"),
         layer: String::from(layer),
         scenario: String::from(scenario),
@@ -7846,9 +8259,7 @@ fn image_pipeline_png_first_visible_case(smoke: bool) -> Result<PerfCaseResult> 
         mean: summary.mean,
         samples: frame_samples.len(),
         ops_per_sample: 1,
-        notes: vec![String::from(
-            "Dedicated first-visible image phase: upload the shared PNG payload, encode one retained image, and submit its first Metal frame.",
-        )],
+        notes: vec![String::from(note)],
         metrics,
     })
 }
@@ -8043,6 +8454,96 @@ fn reconcile_theme_swap_case(smoke: bool) -> Result<PerfCaseResult> {
     Ok(case)
 }
 
+#[derive(Default)]
+struct FeedRawTouchFlingStats
+{
+   checksum: u64,
+   simulated_display_steps: u64,
+   encoded_ui_frames: u64,
+   draw_items: u64,
+   final_offset: f32,
+   settled: bool,
+}
+
+fn render_feed_raw_touch_frame(collection: &mut ui::collection::CollectionView, measure: &mut FeedMeasure, render: &mut FeedRender, builder: &mut ui::DrawListBuilder, surface: &mut ui::VerticalScrollSurface, viewport: api::RectF) -> u64
+{
+   builder.clear();
+   collection.set_scroll(surface.offset());
+   let metrics = collection.layout_and_render(viewport, measure, render, builder);
+   let extent_changed = surface.update_extents(metrics.content_h, viewport.h) as u64;
+   let drawlist = builder.drawlist();
+   (drawlist.items.len() as u64)
+      .wrapping_add(drawlist.vertices.len() as u64)
+      .wrapping_add(drawlist.indices.len() as u64)
+      .wrapping_add(extent_changed)
+}
+
+fn run_feed_raw_touch_fling(collection: &mut ui::collection::CollectionView, measure: &mut FeedMeasure, render: &mut FeedRender, builder: &mut ui::DrawListBuilder, surface: &mut ui::VerticalScrollSurface, trace: &[platform::TouchEvent; 4], viewport: api::RectF) -> FeedRawTouchFlingStats
+{
+   surface.set_offset(0.0);
+   let mut stats = FeedRawTouchFlingStats::default();
+   stats.checksum = render_feed_raw_touch_frame(
+      collection,
+      measure,
+      render,
+      builder,
+      surface,
+      viewport,
+   );
+   stats.encoded_ui_frames = 1;
+   stats.draw_items = builder.drawlist().items.len() as u64;
+
+   for event in trace
+   {
+      if surface.input_touch(event)
+      {
+         stats.checksum = stats.checksum.wrapping_add(render_feed_raw_touch_frame(
+            collection,
+            measure,
+            render,
+            builder,
+            surface,
+            viewport,
+         ));
+         stats.encoded_ui_frames = stats.encoded_ui_frames.saturating_add(1);
+         stats.draw_items =
+            stats.draw_items.saturating_add(builder.drawlist().items.len() as u64);
+      }
+   }
+
+   let mut timestamp_ns = trace[3].timestamp_ns;
+   while surface.wants_next_frame()
+      && stats.simulated_display_steps < FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS
+   {
+      timestamp_ns = timestamp_ns.saturating_add(PERF_120_HZ_STEP_NS);
+      stats.simulated_display_steps = stats.simulated_display_steps.saturating_add(1);
+      if surface.advance_to(timestamp_ns)
+      {
+         stats.checksum = stats.checksum.wrapping_add(render_feed_raw_touch_frame(
+            collection,
+            measure,
+            render,
+            builder,
+            surface,
+            viewport,
+         ));
+         stats.encoded_ui_frames = stats.encoded_ui_frames.saturating_add(1);
+         stats.draw_items =
+            stats.draw_items.saturating_add(builder.drawlist().items.len() as u64);
+      }
+   }
+
+   stats.final_offset = surface.offset();
+   stats.settled = surface.is_settled();
+   stats.checksum = stats
+      .checksum
+      .wrapping_add(u64::from(stats.final_offset.to_bits()))
+      .wrapping_add(stats.simulated_display_steps)
+      .wrapping_add(stats.encoded_ui_frames)
+      .wrapping_add(stats.draw_items);
+   stats
+}
+
 fn collection_flow_case<M, R>(
     id: &str,
     name: &str,
@@ -8071,7 +8572,7 @@ where
         smoke,
         0.18,
         vec![format!(
-            "{} using collection virtualization across slow scroll, medium scroll, hard fling, reverse, and focus movement.",
+            "{} using collection virtualization across six programmatic viewport transitions, including reverse movement, plus focus movement; this case does not simulate raw touch or inertia.",
             name
         )],
         move || {
@@ -8115,6 +8616,91 @@ where
         if has_collection_revision { 1.0 } else { 0.0 },
     );
     Ok(case)
+}
+
+fn journey_feed_raw_touch_fling_case(smoke: bool) -> Result<PerfCaseResult>
+{
+   let viewport = api::RectF::new(0.0, 0.0, 360.0, 640.0);
+   let mut collection =
+      ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {
+         col_width: 320.0,
+         spacing: 14.0,
+      });
+   collection.set_count(2_000);
+   let mut measure = FeedMeasure;
+   let mut render = FeedRender;
+   let mut builder = ui::DrawListBuilder::new();
+   let initial = collection.layout_and_render(viewport, &mut measure, &mut render, &mut builder);
+   let mut surface = ui::VerticalScrollSurface::new(initial.content_h, viewport.h);
+   let trace = vertical_scroll_fling_trace();
+   let mut run_count = 0u64;
+   let mut settled_count = 0u64;
+   let mut simulated_display_step_total = 0u64;
+   let mut encoded_ui_frame_total = 0u64;
+   let mut draw_item_total = 0u64;
+   let mut final_offset = 0.0f32;
+   let mut last_settled = false;
+   let mut case = measure_journey_case(
+      "cpu.journey.feed_raw_touch_fling",
+      smoke,
+      0.18,
+      vec![String::from(
+         "One representative 2000-row feed reuses warmed CollectionView and DrawListBuilder storage while a raw one-finger fling advances at explicit 120 Hz timestamps until the Rust-owned scroll surface settles.",
+      )],
+      ||
+      {
+         let stats = run_feed_raw_touch_fling(
+            &mut collection,
+            &mut measure,
+            &mut render,
+            &mut builder,
+            &mut surface,
+            &trace,
+            viewport,
+         );
+         run_count = run_count.saturating_add(1);
+         settled_count = settled_count.saturating_add(stats.settled as u64);
+         simulated_display_step_total = simulated_display_step_total
+            .saturating_add(stats.simulated_display_steps);
+         encoded_ui_frame_total =
+            encoded_ui_frame_total.saturating_add(stats.encoded_ui_frames);
+         draw_item_total = draw_item_total.saturating_add(stats.draw_items);
+         final_offset = stats.final_offset;
+         last_settled = stats.settled;
+         stats.checksum
+      },
+   )?;
+   if !last_settled
+   {
+      bail!(
+         "cpu.journey.feed_raw_touch_fling exceeded {} simulated display steps before settlement",
+         FEED_RAW_TOUCH_MAX_SIMULATED_DISPLAY_STEPS,
+      );
+   }
+   let measured_runs = run_count.max(1) as f64;
+   case.metrics.insert(String::from("collection_count"), 2_000.0);
+   case.metrics.insert(String::from("raw_touch_events_per_journey"), trace.len() as f64);
+   case.metrics.insert(String::from("simulated_refresh_hz"), 120.0);
+   case.metrics.insert(
+      String::from("simulated_display_steps_to_settle_per_journey"),
+      simulated_display_step_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("encoded_ui_frames_per_journey"),
+      encoded_ui_frame_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("draw_items_per_journey"),
+      draw_item_total as f64 / measured_runs,
+   );
+   case.metrics.insert(
+      String::from("settled_journey_ratio"),
+      settled_count as f64 / measured_runs,
+   );
+   case.metrics.insert(String::from("final_offset_points"), final_offset as f64);
+   case.metrics.insert(String::from("collection_content_extent_points"), initial.content_h as f64);
+   case.metrics.insert(String::from("collection_revision_hint"), 1.0);
+   Ok(case)
 }
 
 fn journey_feed_scroll_case(smoke: bool) -> Result<PerfCaseResult> {
@@ -8945,7 +9531,11 @@ fn perf_case_contract_metadata(
         return ("engine", "text-input", "oxide", "warm", "offscreen");
     }
     if family == "image-pipeline" {
-        let cache_state = if id.contains(".decode") { "cold" } else { "warm" };
+        let cache_state = if id.contains(".decode") || id.contains(".upload") || id.ends_with("first_visible") {
+            "cold"
+        } else {
+            "warm"
+        };
         return ("engine", "image-pipeline", "oxide", cache_state, "offscreen");
     }
     if family == "navigation" {
@@ -9473,99 +10063,6 @@ where
     comparison
 }
 
-pub fn assert_full_coverage(coverage: &CoverageReport) -> Result<()> {
-    let checks = [
-        (
-            coverage.components_total,
-            coverage.components_covered.len(),
-            "component perf coverage is incomplete",
-        ),
-        (
-            coverage.animations_total,
-            coverage.animations_covered.len(),
-            "animation perf coverage is incomplete",
-        ),
-        (
-            coverage.launch_total,
-            coverage.launch_covered.len(),
-            "launch perf coverage is incomplete",
-        ),
-        (
-            coverage.primitive_lifecycle_total,
-            coverage.primitive_lifecycle_covered.len(),
-            "primitive lifecycle perf coverage is incomplete",
-        ),
-        (
-            coverage.scenes_cpu_total,
-            coverage.scenes_cpu_covered.len(),
-            "cpu scene perf coverage is incomplete",
-        ),
-        (
-            coverage.scenes_gpu_total,
-            coverage.scenes_gpu_covered.len(),
-            "gpu scene perf coverage is incomplete",
-        ),
-        (
-            coverage.journeys_total,
-            coverage.journeys_covered.len(),
-            "user journey perf coverage is incomplete",
-        ),
-        (
-            coverage.authoring_total,
-            coverage.authoring_covered.len(),
-            "authoring perf coverage is incomplete",
-        ),
-        (
-            coverage.layout_total,
-            coverage.layout_covered.len(),
-            "layout perf coverage is incomplete",
-        ),
-        (
-            coverage.text_input_total,
-            coverage.text_input_covered.len(),
-            "text-input perf coverage is incomplete",
-        ),
-        (
-            coverage.image_pipeline_total,
-            coverage.image_pipeline_covered.len(),
-            "image-pipeline perf coverage is incomplete",
-        ),
-        (
-            coverage.navigation_total,
-            coverage.navigation_covered.len(),
-            "navigation perf coverage is incomplete",
-        ),
-        (
-            coverage.reconcile_total,
-            coverage.reconcile_covered.len(),
-            "reconcile perf coverage is incomplete",
-        ),
-        (
-            coverage.endurance_total,
-            coverage.endurance_covered.len(),
-            "endurance perf coverage is incomplete",
-        ),
-        (
-            coverage.stress_total,
-            coverage.stress_covered.len(),
-            "stress perf coverage is incomplete",
-        ),
-        (
-            coverage.bridges_total,
-            coverage.bridges_covered.len(),
-            "bridge perf coverage is incomplete",
-        ),
-    ];
-
-    for (total, covered, message) in checks {
-        if total != covered {
-            bail!(message);
-        }
-    }
-
-    Ok(())
-}
-
 pub fn assert_contract_coverage(contract: &ContractCoverageReport) -> Result<()> {
    for entry in contract.layers.iter().chain(contract.battery.iter()) {
       match entry.status.as_str() {
@@ -9702,9 +10199,426 @@ fn push_missing_metric(case: &PerfCaseResult, key: &str, missing: &mut Vec<Strin
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FilePromotionState
+{
+   Installing,
+   Committed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FilePromotionEntry
+{
+   target: PathBuf,
+   staged: PathBuf,
+   backup: PathBuf,
+   target_existed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct FilePromotionJournal
+{
+   schema: u32,
+   transaction: String,
+   state: FilePromotionState,
+   entries: Vec<FilePromotionEntry>,
+}
+
+struct PreparedFilePromotion
+{
+   journal_path: PathBuf,
+   journal: FilePromotionJournal,
+}
+
+/// Replaces a related set of files as one recoverable publication transaction.
+///
+/// Every body is first written and synced beside its destination. Existing
+/// destinations remain recoverable until a synced journal records that the
+/// complete set was installed. A later invocation rolls back an interrupted
+/// install or finishes cleanup after a committed install before starting new
+/// work.
+pub fn promote_files_atomically(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()>
+{
+   prepare_file_promotion(outputs)?.commit()
+}
+
+fn prepare_file_promotion(outputs: &[(PathBuf, Vec<u8>)]) -> Result<PreparedFilePromotion>
+{
+   ensure!(!outputs.is_empty(), "file promotion requires at least one output");
+   let first_parent = promotion_parent(&outputs[0].0)?;
+   let journal_path = first_parent.join(FILE_PROMOTION_JOURNAL);
+   recover_file_promotion(&journal_path)?;
+
+   let transaction = format!(
+      "{}-{}",
+      std::process::id(),
+      FILE_PROMOTION_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+   );
+   let mut targets = BTreeSet::new();
+   let mut entries = Vec::with_capacity(outputs.len());
+   for (index, (path, _)) in outputs.iter().enumerate()
+   {
+      let parent = promotion_parent(path)?;
+      let file_name = path
+         .file_name()
+         .with_context(|| format!("promotion output has no file name: {}", path.display()))?;
+      let target = parent.join(file_name);
+      ensure!(
+         targets.insert(target.clone()),
+         "file promotion contains duplicate output {}",
+         target.display(),
+      );
+      let target_existed = match fs::symlink_metadata(&target)
+      {
+         Ok(metadata) =>
+         {
+            ensure!(
+               metadata.file_type().is_file(),
+               "file promotion target is not a regular file: {}",
+               target.display(),
+            );
+            true
+         }
+         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+         Err(error) => return Err(error).with_context(|| format!("inspecting {}", target.display())),
+      };
+      entries.push(FilePromotionEntry {
+         staged: promotion_artifact_path(&parent, &transaction, index, "staged"),
+         backup: promotion_artifact_path(&parent, &transaction, index, "backup"),
+         target,
+         target_existed,
+      });
+   }
+
+   let promotion = PreparedFilePromotion {
+      journal_path,
+      journal: FilePromotionJournal {
+         schema: 1,
+         transaction,
+         state: FilePromotionState::Installing,
+         entries,
+      },
+   };
+   promotion.write_initial_journal()?;
+   for (entry, (_, body)) in promotion.journal.entries.iter().zip(outputs)
+   {
+      if let Err(error) = write_staged_promotion_file(&entry.staged, body)
+      {
+         return promotion.rollback_after(error);
+      }
+   }
+   if let Err(error) = sync_promotion_parents(&promotion.journal.entries)
+   {
+      return promotion.rollback_after(error);
+   }
+   Ok(promotion)
+}
+
+impl PreparedFilePromotion
+{
+   fn commit(mut self) -> Result<()>
+   {
+      for entry in &self.journal.entries
+      {
+         if let Err(error) = install_promotion_entry(entry)
+         {
+            return self.rollback_after(error);
+         }
+      }
+      if let Err(error) = self.mark_committed()
+      {
+         return self.rollback_after(error);
+      }
+      self.cleanup_committed()
+   }
+
+   fn write_initial_journal(&self) -> Result<()>
+   {
+      validate_file_promotion_journal(&self.journal_path, &self.journal)?;
+      let body = serde_json::to_vec_pretty(&self.journal)
+         .context("serializing file-promotion journal")?;
+      let mut file = OpenOptions::new()
+         .create_new(true)
+         .write(true)
+         .open(&self.journal_path)
+         .with_context(|| format!("creating {}", self.journal_path.display()))?;
+      file.write_all(&body)
+         .with_context(|| format!("writing {}", self.journal_path.display()))?;
+      file.sync_all()
+         .with_context(|| format!("syncing {}", self.journal_path.display()))?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn mark_committed(&mut self) -> Result<()>
+   {
+      self.journal.state = FilePromotionState::Committed;
+      let next_path = self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL);
+      remove_promotion_file_if_exists(&next_path)?;
+      let body = serde_json::to_vec_pretty(&self.journal)
+         .context("serializing committed file-promotion journal")?;
+      let mut file = OpenOptions::new()
+         .create_new(true)
+         .write(true)
+         .open(&next_path)
+         .with_context(|| format!("creating {}", next_path.display()))?;
+      file.write_all(&body)
+         .with_context(|| format!("writing {}", next_path.display()))?;
+      file.sync_all()
+         .with_context(|| format!("syncing {}", next_path.display()))?;
+      fs::rename(&next_path, &self.journal_path).with_context(|| {
+         format!(
+            "committing file-promotion journal {}",
+            self.journal_path.display(),
+         )
+      })?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn rollback_after<T>(self, error: anyhow::Error) -> Result<T>
+   {
+      match self.rollback_installing()
+      {
+         Ok(()) => Err(error),
+         Err(rollback_error) => bail!(
+            "{:#}; file-promotion rollback also failed: {:#}",
+            error,
+            rollback_error,
+         ),
+      }
+   }
+
+   fn rollback_installing(&self) -> Result<()>
+   {
+      for entry in self.journal.entries.iter().rev()
+      {
+         if promotion_path_exists(&entry.backup)?
+         {
+            remove_promotion_file_if_exists(&entry.target)?;
+            fs::rename(&entry.backup, &entry.target).with_context(|| {
+               format!(
+                  "restoring {} from {}",
+                  entry.target.display(),
+                  entry.backup.display(),
+               )
+            })?;
+         }
+         else if !entry.target_existed
+            && !promotion_path_exists(&entry.staged)?
+            && promotion_path_exists(&entry.target)?
+         {
+            remove_promotion_file_if_exists(&entry.target)?;
+         }
+         remove_promotion_file_if_exists(&entry.staged)?;
+      }
+      sync_promotion_parents(&self.journal.entries)?;
+      remove_promotion_file_if_exists(
+         &self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL),
+      )?;
+      remove_promotion_file_if_exists(&self.journal_path)?;
+      sync_parent_directory(&self.journal_path)
+   }
+
+   fn cleanup_committed(&self) -> Result<()>
+   {
+      for entry in &self.journal.entries
+      {
+         remove_promotion_file_if_exists(&entry.staged)?;
+         remove_promotion_file_if_exists(&entry.backup)?;
+      }
+      sync_promotion_parents(&self.journal.entries)?;
+      remove_promotion_file_if_exists(
+         &self.journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL),
+      )?;
+      remove_promotion_file_if_exists(&self.journal_path)?;
+      sync_parent_directory(&self.journal_path)
+   }
+}
+
+fn recover_file_promotion(journal_path: &Path) -> Result<()>
+{
+   let next_path = journal_path.with_file_name(FILE_PROMOTION_NEXT_JOURNAL);
+   if !promotion_path_exists(journal_path)?
+   {
+      remove_promotion_file_if_exists(&next_path)?;
+      return Ok(());
+   }
+   let body = fs::read(journal_path)
+      .with_context(|| format!("reading interrupted promotion {}", journal_path.display()))?;
+   let journal: FilePromotionJournal = serde_json::from_slice(&body)
+      .with_context(|| format!("parsing interrupted promotion {}", journal_path.display()))?;
+   validate_file_promotion_journal(journal_path, &journal)?;
+   let promotion = PreparedFilePromotion {
+      journal_path: journal_path.to_path_buf(),
+      journal,
+   };
+   match promotion.journal.state
+   {
+      FilePromotionState::Installing => promotion.rollback_installing(),
+      FilePromotionState::Committed => promotion.cleanup_committed(),
+   }
+}
+
+fn validate_file_promotion_journal(journal_path: &Path, journal: &FilePromotionJournal) -> Result<()>
+{
+   ensure!(journal.schema == 1, "unsupported file-promotion journal schema {}", journal.schema);
+   ensure!(!journal.entries.is_empty(), "file-promotion journal has no entries");
+   ensure!(
+      journal.transaction.split('-').all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+      "invalid file-promotion transaction `{}`",
+      journal.transaction,
+   );
+   let expected_journal = journal.entries[0]
+      .target
+      .parent()
+      .context("file-promotion target has no parent")?
+      .join(FILE_PROMOTION_JOURNAL);
+   ensure!(
+      journal_path == expected_journal,
+      "file-promotion journal path does not match its first target",
+   );
+   let mut targets = BTreeSet::new();
+   for (index, entry) in journal.entries.iter().enumerate()
+   {
+      let parent = entry.target.parent().context("file-promotion target has no parent")?;
+      ensure!(entry.target.is_absolute(), "file-promotion target is not absolute");
+      ensure!(targets.insert(entry.target.clone()), "file-promotion journal repeats a target");
+      ensure!(
+         entry.staged == promotion_artifact_path(parent, &journal.transaction, index, "staged")
+            && entry.backup == promotion_artifact_path(parent, &journal.transaction, index, "backup"),
+         "file-promotion journal contains invalid artifact paths",
+      );
+   }
+   Ok(())
+}
+
+fn promotion_parent(path: &Path) -> Result<PathBuf>
+{
+   let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or(Path::new("."));
+   fs::create_dir_all(parent)
+      .with_context(|| format!("creating promotion output directory {}", parent.display()))?;
+   fs::canonicalize(parent)
+      .with_context(|| format!("resolving promotion output directory {}", parent.display()))
+}
+
+fn promotion_artifact_path(parent: &Path, transaction: &str, index: usize, suffix: &str) -> PathBuf
+{
+   parent.join(format!(".oxide-report-promotion-{transaction}-{index}.{suffix}"))
+}
+
+fn write_staged_promotion_file(path: &Path, body: &[u8]) -> Result<()>
+{
+   let mut file = OpenOptions::new()
+      .create_new(true)
+      .write(true)
+      .open(path)
+      .with_context(|| format!("creating staged promotion output {}", path.display()))?;
+   file.write_all(body)
+      .with_context(|| format!("writing staged promotion output {}", path.display()))?;
+   file.sync_all()
+      .with_context(|| format!("syncing staged promotion output {}", path.display()))
+}
+
+fn install_promotion_entry(entry: &FilePromotionEntry) -> Result<()>
+{
+   if entry.target_existed
+   {
+      fs::rename(&entry.target, &entry.backup).with_context(|| {
+         format!(
+            "backing up {} to {}",
+            entry.target.display(),
+            entry.backup.display(),
+         )
+      })?;
+   }
+   fs::rename(&entry.staged, &entry.target).with_context(|| {
+      format!(
+         "installing staged output {} at {}",
+         entry.staged.display(),
+         entry.target.display(),
+      )
+   })?;
+   sync_parent_directory(&entry.target)
+}
+
+fn sync_promotion_parents(entries: &[FilePromotionEntry]) -> Result<()>
+{
+   let parents = entries
+      .iter()
+      .filter_map(|entry| entry.target.parent().map(Path::to_path_buf))
+      .collect::<BTreeSet<_>>();
+   for parent in parents
+   {
+      File::open(&parent)
+         .with_context(|| format!("opening promotion directory {}", parent.display()))?
+         .sync_all()
+         .with_context(|| format!("syncing promotion directory {}", parent.display()))?;
+   }
+   Ok(())
+}
+
+fn sync_parent_directory(path: &Path) -> Result<()>
+{
+   let parent = path.parent().context("promotion path has no parent directory")?;
+   File::open(parent)
+      .with_context(|| format!("opening promotion directory {}", parent.display()))?
+      .sync_all()
+      .with_context(|| format!("syncing promotion directory {}", parent.display()))
+}
+
+fn promotion_path_exists(path: &Path) -> Result<bool>
+{
+   match fs::symlink_metadata(path)
+   {
+      Ok(_) => Ok(true),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+      Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+   }
+}
+
+fn remove_promotion_file_if_exists(path: &Path) -> Result<()>
+{
+   let metadata = match fs::symlink_metadata(path)
+   {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+      Err(error) => return Err(error).with_context(|| format!("inspecting {}", path.display())),
+   };
+   ensure!(!metadata.file_type().is_dir(), "refusing to remove promotion directory {}", path.display());
+   fs::remove_file(path).with_context(|| format!("removing promotion file {}", path.display()))
+}
+
+fn workspace_baseline_outputs(json_path: &Path, markdown_path: &Path, report: &PerfReport, comparison: Option<&PerfComparison>) -> Result<Vec<(PathBuf, Vec<u8>)>>
+{
+   assert_report_repository_provenance(report.version, &report.repository)
+      .context("validating perf report repository provenance before baseline promotion")?;
+   let json = serialize_report_json(report)?;
+   let markdown = render_markdown(report, comparison).into_bytes();
+   let mut outputs = vec![
+      (json_path.to_path_buf(), json),
+      (markdown_path.to_path_buf(), markdown.clone()),
+   ];
+   if let Some(label) = report.generated_label.as_deref()
+   {
+      if let Some(parent) = markdown_path.parent()
+      {
+         let dated_path = parent.join(format!("{label}.md"));
+         if dated_path != markdown_path
+         {
+            outputs.push((dated_path, markdown));
+         }
+      }
+   }
+   Ok(outputs)
+}
+
 fn load_report(path: &Path) -> Result<PerfReport> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    let report: PerfReport =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    assert_report_repository_provenance(report.version, &report.repository)
+        .with_context(|| format!("validating {}", path.display()))?;
+    Ok(report)
 }
 
 fn write_report_json(path: &Path, report: &PerfReport) -> Result<()> {
@@ -9734,6 +10648,8 @@ fn write_markdown_outputs(
     report: &PerfReport,
     comparison: Option<&PerfComparison>,
 ) -> Result<()> {
+    assert_report_repository_provenance(report.version, &report.repository)
+        .context("validating perf report repository provenance before markdown write")?;
     ensure_parent(latest_path)?;
     let body = render_markdown(report, comparison);
     fs::write(latest_path, body.as_bytes())
@@ -9756,44 +10672,28 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     if let Some(label) = report.generated_label.as_ref() {
         let _ = std::fmt::Write::write_fmt(&mut out, format_args!("- Label: `{}`\n", label));
     }
-    let _ = std::fmt::Write::write_fmt(
-        &mut out,
-        format_args!(
-            "- Coverage: {}/{} components, {}/{} animations, {}/{} launch cases, {}/{} primitive lifecycle cases, {}/{} CPU scenes, {}/{} GPU scenes, {}/{} journeys, {}/{} authoring APIs, {}/{} layout cases, {}/{} text-input cases, {}/{} image pipeline cases, {}/{} navigation cases, {}/{} reconcile cases, {}/{} endurance cases, {}/{} stress cases, {}/{} bridge paths\n",
-            report.coverage.components_covered.len(),
-            report.coverage.components_total,
-            report.coverage.animations_covered.len(),
-            report.coverage.animations_total,
-            report.coverage.launch_covered.len(),
-            report.coverage.launch_total,
-            report.coverage.primitive_lifecycle_covered.len(),
-            report.coverage.primitive_lifecycle_total,
-            report.coverage.scenes_cpu_covered.len(),
-            report.coverage.scenes_cpu_total,
-            report.coverage.scenes_gpu_covered.len(),
-            report.coverage.scenes_gpu_total,
-            report.coverage.journeys_covered.len(),
-            report.coverage.journeys_total,
-            report.coverage.authoring_covered.len(),
-            report.coverage.authoring_total,
-            report.coverage.layout_covered.len(),
-            report.coverage.layout_total,
-            report.coverage.text_input_covered.len(),
-            report.coverage.text_input_total,
-            report.coverage.image_pipeline_covered.len(),
-            report.coverage.image_pipeline_total,
-            report.coverage.navigation_covered.len(),
-            report.coverage.navigation_total,
-            report.coverage.reconcile_covered.len(),
-            report.coverage.reconcile_total,
-            report.coverage.endurance_covered.len(),
-            report.coverage.endurance_total,
-            report.coverage.stress_covered.len(),
-            report.coverage.stress_total,
-            report.coverage.bridges_covered.len(),
-            report.coverage.bridges_total
-        )
-    );
+    if let (Some(repository_ref), Some(repository_head_commit), Some(repository_tree)) = (
+        report.repository.repository_ref.as_ref(),
+        report.repository.repository_head_commit.as_ref(),
+        report.repository.repository_tree.as_ref(),
+    ) {
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository ref: `{}`\n", repository_ref),
+        );
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository HEAD: `{}`\n", repository_head_commit),
+        );
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("- Repository tree: `{}`\n", repository_tree),
+        );
+    }
+   let _ = std::fmt::Write::write_fmt(
+      &mut out,
+      format_args!("- Cases: `{}`\n", report.cases.len())
+   );
     if let Some(comp) = comparison {
         let _ = std::fmt::Write::write_fmt(
             &mut out,
@@ -9899,7 +10799,7 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     }
 
     out.push_str("\n## Baseline Workflow\n\n");
-    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --bin oxide-perf-runner -- --run-suite --write-baseline`\n");
+    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`\n");
     let _ = std::fmt::Write::write_fmt(
         &mut out,
         format_args!("- Latest JSON baseline: `{}`\n", DEFAULT_BASELINE_JSON)
@@ -10010,43 +10910,7 @@ fn compute_audit_speedups(_report: &PerfReport) -> Vec<(String, f64)> {
 }
 
 fn print_summary(report: &PerfReport, comparison: Option<&PerfComparison>) {
-    println!(
-        "suite={} cases={} components={}/{} animations={}/{} launch={}/{} primitive_lifecycle={}/{} scenes_cpu={}/{} scenes_gpu={}/{} journeys={}/{} authoring={}/{} layout={}/{} text_input={}/{} image_pipeline={}/{} navigation={}/{} reconcile={}/{} endurance={}/{} stress={}/{} bridges={}/{}",
-        report.suite,
-        report.cases.len(),
-        report.coverage.components_covered.len(),
-        report.coverage.components_total,
-        report.coverage.animations_covered.len(),
-        report.coverage.animations_total,
-        report.coverage.launch_covered.len(),
-        report.coverage.launch_total,
-        report.coverage.primitive_lifecycle_covered.len(),
-        report.coverage.primitive_lifecycle_total,
-        report.coverage.scenes_cpu_covered.len(),
-        report.coverage.scenes_cpu_total,
-        report.coverage.scenes_gpu_covered.len(),
-        report.coverage.scenes_gpu_total,
-        report.coverage.journeys_covered.len(),
-        report.coverage.journeys_total,
-        report.coverage.authoring_covered.len(),
-        report.coverage.authoring_total,
-        report.coverage.layout_covered.len(),
-        report.coverage.layout_total,
-        report.coverage.text_input_covered.len(),
-        report.coverage.text_input_total,
-        report.coverage.image_pipeline_covered.len(),
-        report.coverage.image_pipeline_total,
-        report.coverage.navigation_covered.len(),
-        report.coverage.navigation_total,
-        report.coverage.reconcile_covered.len(),
-        report.coverage.reconcile_total,
-        report.coverage.endurance_covered.len(),
-        report.coverage.endurance_total,
-        report.coverage.stress_covered.len(),
-        report.coverage.stress_total,
-        report.coverage.bridges_covered.len(),
-        report.coverage.bridges_total
-    );
+   println!("suite={} cases={}", report.suite, report.cases.len());
     for case in &report.cases {
         println!(
             "case={} layer={} scenario={} variant={} cache={} refresh={} median={:.3} p95={:.3} p99={:.3} unit={}",
@@ -10241,6 +11105,108 @@ fn run_text_shape_bake() -> u64 {
         1.0,
     );
     (run_latin.vb.len + run_cjk.vb.len + indices.len() as u32) as u64
+}
+
+fn text_sdf_bake_case(smoke: bool, text_loops: u64) -> PerfCaseResult
+{
+   let mut bench = TextSdfBakeBench::new();
+   let mut case = measure_cpu_case(
+      "cpu.system.text_sdf_bake",
+      "system",
+      smoke,
+      true,
+      0.12,
+      text_loops,
+      vec![String::from(
+         "Cold glyph-atlas SDF population from pre-shaped representative Latin and CJK outlines at 96 logical pixels, reusing warmed raster and output scratch.",
+      )],
+      move || bench.run().checksum,
+   );
+   case.cache_state = String::from("cold");
+   let stats = TextSdfBakeBench::new().run();
+   case.metrics.insert(String::from("sdf_glyph_runs"), stats.glyph_runs as f64);
+   case.metrics.insert(String::from("sdf_vertices"), stats.vertices as f64);
+   case.metrics.insert(String::from("sdf_indices"), stats.indices as f64);
+   case.metrics.insert(String::from("sdf_dirty_pixels"), stats.dirty_pixels as f64);
+   case
+}
+
+impl TextSdfBakeBench
+{
+   fn new() -> Self
+   {
+      let mut fonts = text::FontDb::default();
+      let latin_id = fonts.add_font(text::Font::from_bytes(LATIN_FONT.to_vec()));
+      let cjk_id = fonts.add_font(text::Font::from_bytes(CJK_FONT.to_vec()));
+      let mut shaper = text::TextShaper::default();
+      let shapes = [
+         (latin_id, "O8BgjMW@"),
+         (cjk_id, "漢字かな"),
+      ]
+      .into_iter()
+      .map(|(font_id, value)| {
+         let font = fonts.font(font_id).expect("embedded SDF benchmark font must exist");
+         let shape = shaper
+            .shape(font, font_id, value, 96.0)
+            .expect("representative SDF benchmark text must shape");
+         (font_id, shape.to_owned_shape())
+      })
+      .collect();
+      Self {
+         fonts,
+         shapes,
+         raster: text::RasterCtx::default(),
+         atlas: text::Atlas::new(768, 384),
+         vertices: Vec::with_capacity(64),
+         indices: Vec::with_capacity(96),
+      }
+   }
+
+   fn run(&mut self) -> TextSdfBakeStats
+   {
+      self.atlas.reset();
+      self.atlas.clear_dirty();
+      self.vertices.clear();
+      self.indices.clear();
+      let mut glyph_runs = 0_u64;
+      let mut checksum = 0_u64;
+      for (index, (font_id, shape)) in self.shapes.iter().enumerate()
+      {
+         let font = self.fonts.font(*font_id)
+            .expect("prepared SDF benchmark font must remain registered");
+         let run = shape.bake_into_with(
+            font,
+            &mut self.raster,
+            &mut self.atlas,
+            &mut self.vertices,
+            &mut self.indices,
+            api::Color::rgba(0.2, 0.3, 0.4, 1.0),
+            api::ImageHandle(1),
+            0.0,
+            index as f32 * 120.0,
+            2.0,
+         );
+         glyph_runs = glyph_runs.saturating_add(u64::from(run.vb.len > 0));
+         checksum = checksum
+            .wrapping_add(*font_id as u64)
+            .wrapping_add(run.vb.len as u64)
+            .wrapping_add(run.ib.len as u64);
+      }
+      let dirty_pixels = self.atlas.dirty_rect().map_or(0, |rect| {
+         u64::from(rect.w).saturating_mul(u64::from(rect.h))
+      });
+      let (pixels, _, _) = self.atlas.image();
+      checksum = pixels.iter().step_by(257).fold(checksum, |sum, value| {
+         sum.wrapping_add(u64::from(*value))
+      });
+      TextSdfBakeStats {
+         checksum: checksum.wrapping_add(dirty_pixels),
+         glyph_runs,
+         vertices: self.vertices.len() as u64,
+         indices: self.indices.len() as u64,
+         dirty_pixels,
+      }
+   }
 }
 
 fn text_prefix_width_map_case(smoke: bool, text_loops: u64) -> PerfCaseResult {
@@ -10734,10 +11700,15 @@ fn touch(
     x: f32,
     y: f32,
 ) -> platform::TouchEvent {
+    touch_at(id, phase, x, y, 0)
+}
+
+fn touch_at(id: platform::TouchId, phase: platform::TouchPhase, x: f32, y: f32, timestamp_ns: u64) -> platform::TouchEvent
+{
     platform::TouchEvent {
         id,
         phase,
-        timestamp_ns: 0,
+        timestamp_ns,
         x,
         y,
         pressure: None,
@@ -10814,4 +11785,138 @@ fn run_legacy_scene(
         renderer.submit(token).context("submitting legacy Metal frame")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod file_promotion_tests
+{
+   use super::*;
+
+   fn temporary_promotion_root(label: &str) -> PathBuf
+   {
+      let nonce = std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)
+         .expect("system clock before epoch")
+         .as_nanos();
+      std::env::temp_dir().join(format!(
+         "oxide-report-promotion-{label}-{}-{nonce}",
+         std::process::id(),
+      ))
+   }
+
+   fn assert_each_output_failure_preserves_sentinels(label: &str, output_count: usize)
+   {
+      for failure_index in 0..output_count
+      {
+         let root = temporary_promotion_root(&format!("{label}-{failure_index}"));
+         fs::create_dir_all(&root).expect("create promotion test root");
+         let mut outputs = Vec::new();
+         let mut sentinels = Vec::new();
+         for index in 0..output_count
+         {
+            let path = root.join(format!("output-{index}"));
+            let sentinel = format!("sentinel-{index}").into_bytes();
+            fs::write(&path, &sentinel).expect("write promotion sentinel");
+            outputs.push((path, format!("replacement-{index}").into_bytes()));
+            sentinels.push(sentinel);
+         }
+
+         let promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+         fs::remove_file(&promotion.journal.entries[failure_index].staged)
+            .expect("inject staged-output failure");
+         let error = promotion.commit().expect_err("injected promotion failure");
+         assert!(error.to_string().contains("installing staged output"));
+         for ((path, _), sentinel) in outputs.iter().zip(&sentinels)
+         {
+            assert_eq!(fs::read(path).expect("read preserved sentinel"), *sentinel);
+         }
+         assert!(!root.join(FILE_PROMOTION_JOURNAL).exists());
+         assert!(!root.join(FILE_PROMOTION_NEXT_JOURNAL).exists());
+         assert!(
+            fs::read_dir(&root)
+               .expect("read promotion test root")
+               .all(|entry| !entry
+                  .expect("read promotion test entry")
+                  .file_name()
+                  .to_string_lossy()
+                  .starts_with(".oxide-report-promotion-")),
+         );
+         fs::remove_dir_all(&root).expect("remove promotion test root");
+      }
+   }
+
+   #[test]
+   fn workspace_promotion_rolls_back_failure_at_each_output()
+   {
+      assert_each_output_failure_preserves_sentinels("workspace", 3);
+   }
+
+   #[test]
+   fn paired_device_promotion_rolls_back_failure_at_each_output()
+   {
+      assert_each_output_failure_preserves_sentinels("paired-device", 6);
+   }
+
+   #[test]
+   fn promotion_recovers_an_interrupted_install_before_replacing_outputs()
+   {
+      let root = temporary_promotion_root("recovery");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let target = root.join("latest.json");
+      fs::write(&target, b"sentinel").expect("write promotion sentinel");
+      let first = vec![(target.clone(), b"interrupted".to_vec())];
+      let promotion = prepare_file_promotion(&first).expect("prepare interrupted promotion");
+      let entry = promotion.journal.entries[0].clone();
+      fs::rename(&entry.target, &entry.backup).expect("simulate target backup");
+      fs::rename(&entry.staged, &entry.target).expect("simulate staged install");
+      drop(promotion);
+
+      let second = vec![(target.clone(), b"recovered".to_vec())];
+      promote_files_atomically(&second).expect("recover and replace output");
+      assert_eq!(fs::read(&target).expect("read recovered output"), b"recovered");
+      assert!(!root.join(FILE_PROMOTION_JOURNAL).exists());
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
+
+   #[test]
+   fn promotion_rollback_removes_newly_created_outputs()
+   {
+      let root = temporary_promotion_root("new-output-rollback");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let new_target = root.join("dated.md");
+      let sentinel_target = root.join("latest.md");
+      fs::write(&sentinel_target, b"sentinel").expect("write promotion sentinel");
+      let outputs = vec![
+         (new_target.clone(), b"new dated report".to_vec()),
+         (sentinel_target.clone(), b"new latest report".to_vec()),
+      ];
+      let promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+      fs::remove_file(&promotion.journal.entries[1].staged)
+         .expect("inject staged-output failure");
+      promotion.commit().expect_err("injected promotion failure");
+
+      assert!(!new_target.exists());
+      assert_eq!(fs::read(&sentinel_target).expect("read sentinel"), b"sentinel");
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
+
+   #[test]
+   fn promotion_recovery_keeps_a_committed_output_set()
+   {
+      let root = temporary_promotion_root("committed-recovery");
+      fs::create_dir_all(&root).expect("create promotion test root");
+      let target = root.join("latest.json");
+      fs::write(&target, b"sentinel").expect("write promotion sentinel");
+      let outputs = vec![(target.clone(), b"committed".to_vec())];
+      let mut promotion = prepare_file_promotion(&outputs).expect("prepare promotion");
+      install_promotion_entry(&promotion.journal.entries[0]).expect("install output");
+      promotion.mark_committed().expect("commit promotion journal");
+      let journal_path = promotion.journal_path.clone();
+      drop(promotion);
+
+      recover_file_promotion(&journal_path).expect("recover committed promotion");
+      assert_eq!(fs::read(&target).expect("read committed output"), b"committed");
+      assert!(!journal_path.exists());
+      fs::remove_dir_all(&root).expect("remove promotion test root");
+   }
 }

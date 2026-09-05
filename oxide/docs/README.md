@@ -4,12 +4,14 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 
 ## Crates
 
+- [oxide-feed-v1 app](oxide-feed-v1-app/lib.md)
+- [oxide-feed-v1 reducer](oxide-feed-v1-reducer/lib.md)
 - [oxide-host-web](oxide-host-web/lib.md)
 - [oxide-host-ios](oxide-host-ios/lib.md)
 - [oxide-host-macos](oxide-host-macos/lib.md)
+- [oxide-input](oxide-input/lib.md)
 - [image-store](image-store/lib.md)
 - [perf-runner](perf-runner/lib.md)
-- [iOS core comparison probe](../host/apple-comparison/README.md)
 - [permissions manager](permissions/lib.md)
 - [permissions sensor bridge](permissions/sensors.md)
 - [platform-android](platform-android/lib.md)
@@ -24,6 +26,7 @@ This directory mirrors Rust source units with design notes, entry points, behavi
 - [renderer-metal](renderer-metal/lib.md)
 - [renderer-metal effects shader](renderer-metal/shaders/effects.md)
 - [renderer-metal ID-mask GPU path](renderer-metal/id_mask_gpu.md)
+- [renderer-metal neon-marker GPU path](renderer-metal/neon_marker_gpu.md)
 - [renderer-metal prepared chunks](renderer-metal/prepared.md)
 - [renderer-web](renderer-web/lib.md)
 - [snapshot-runner](snapshot-runner/main.md)

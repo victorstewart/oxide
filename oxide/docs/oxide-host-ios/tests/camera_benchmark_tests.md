@@ -16,8 +16,12 @@ This integration test suite protects the iOS app-host camera benchmark contract 
 
 The shipping-oriented custom camera preview path must use `AVCaptureVideoDataOutput` plus Oxide-owned Metal composition. `AVCaptureVideoPreviewLayer` is allowed only for the explicit AVFoundation baseline or diagnostic hybrid preview-layer cases.
 
+## Feature flags and cfgs
+
+The suite is compiled only with `test-scenes-entrypoint`; none of its legacy benchmark scene APIs are present in the default production host.
+
 ## Run
 
 ```sh
-cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test camera_benchmark_tests
+cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --features test-scenes-entrypoint --test camera_benchmark_tests
 ```

@@ -13,10 +13,13 @@
   Checks Rust-side sizes and alignments for camera, location, motion, and contact ABI structs.
 - `ios_objc_bridges_keep_abi_static_asserts`
   Checks the iOS Objective-C camera, location, and motion source files retain matching `_Static_assert` size/alignment guards, including camera perf/contract snapshot guards.
+- `camera_preview_publication_callback_is_atomic_and_context_free`
+  Checks the cross-queue camera publication wake uses one atomic function pointer without a separately raced context pointer.
 
 ## Logic narrative
 - The test uses `std::mem::size_of` and `std::mem::align_of` because those values are the Rust-side ABI contract native code must mirror.
 - Source checks are intentionally simple string guards: they make accidental deletion of the native compile-time assertions visible in Rust tests.
+- The publication callback guard prevents capture-queue dispatch from racing scene-lifecycle registration or unregistering.
 
 ## Preconditions and postconditions
 - Passing tests mean the frozen iOS ABI shapes remain unchanged on the 64-bit Apple host contract.
@@ -28,6 +31,7 @@
 
 ## Concurrency and memory behavior
 - Tests are single-threaded and use only compile-time source strings plus `std::mem` layout queries.
+- The runtime callback itself is one acquire/load and one release/store; it needs no lock or allocation on the camera hot path.
 
 ## Performance notes
 - This is measurement harness only. It changes no runtime behavior and prevents future A/B evidence from being invalidated by silent ABI drift.
@@ -39,5 +43,6 @@
 - Run with `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-platform-ios --test abi_layout_tests`.
 
 ## Changelog
+- 2026-08-06: required atomic, context-free camera publication callback ownership.
 - 2026-06-22: expanded iOS camera static-assert retention checks to include perf/contract snapshot ABI guards.
 - 2026-06-22: added iOS Rust and Objective-C ABI layout freeze coverage for architecture densification.

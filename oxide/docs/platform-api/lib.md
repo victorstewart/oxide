@@ -27,6 +27,8 @@
   Issues a redraw through the installed platform when available.
 - `SharedPlatform`
   Adapter that forwards boxed `Platform` calls to a shared `Arc`.
+- `App::prepare_frame`, `App::prepared_frame`, `FrameContext`, and `FrameDemand`
+  Provide two-stage frame composition: build into app-owned reusable storage before a host acquires a drawable, then borrow that prepared frame during late submission. Apps that only implement `draw` continue through the compatibility encoder.
 - `HttpClient::start(request, callback) -> HttpOperation`
   Starts a bounded streaming request and returns an explicit cancellation handle. `HttpEvent` delivers response metadata, body chunks, and exactly one terminal event.
 - `HttpRequest::post(url, body)` and `HttpCredentials`
@@ -38,6 +40,7 @@
 - Callers that still need a boxed trait object wrap the shared instance in `SharedPlatform`, avoiding duplicate host-bridge graphs while preserving existing constructor signatures.
 - Camera consumers use `start_stream` for preview pixels; native compositor preview planes are not a public product path.
 - Raw `TouchEvent` samples carry `timestamp_ns` so input routing and latency measurement use the OS sample time instead of an out-of-band helper value.
+- Prepared apps receive host frame identity, display-link sample and target timestamps, logical viewport, scale, and a real runtime image uploader during composition. Their borrowed draw and damage storage remains immutable through submission. A returned `NextVsync` demand keeps scheduling active; `Idle` lets the host sleep until an event or redraw wake. `AppEvent::RendererStats` is a post-submit observation only: handlers may acknowledge or record it but must not mutate render-producing state because hosts deliberately deliver it without another wake.
 - HTTP operations receive the remaining portion of the caller's absolute budget; request/response sizes, selected response headers, and credentials are explicit, and redirects remain visible so policy stays with the caller.
 
 ## Preconditions and postconditions
@@ -74,6 +77,8 @@ platform.request_redraw();
 ```
 
 ## Changelog
+- 2026-08-06: defined renderer statistics as a non-render-mutating post-submit observation.
+- 2026-08-06: added app-owned prepared frames, display-link timing context, explicit frame demand, and the source-compatible immediate-draw fallback.
 - 2026-07-11: replaced the blocking HTTP response API with bounded streaming events, remaining-timeout budgets, selected headers, and explicit cancellation.
 - 2026-05-31: added `TouchEvent::timestamp_ns` to keep raw input sample time in the platform event contract.
 - 2026-05-31: removed the public native-preview API so product preview rendering stays Oxide-owned.

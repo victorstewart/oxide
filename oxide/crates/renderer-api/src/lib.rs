@@ -200,19 +200,95 @@ pub struct IndexSpan {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageHandle(pub u32);
 
-pub trait RuntimeImageUploader {
-    fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
+/// Immutable texture-filtering behavior owned by a runtime image resource.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageSampling
+{
+   /// Interpolates neighboring texels when image geometry does not map one-to-one to the source.
+   Linear,
+   /// Selects the nearest texel without interpolation.
+   Nearest,
+}
 
-    fn update_a8(
-        &mut self,
-        handle: ImageHandle,
-        x: u32,
-        y: u32,
-        width: u32,
-        height: u32,
-        data: &[u8],
-        row_bytes: usize,
-    );
+impl Default for ImageSampling
+{
+   fn default() -> Self
+   {
+      Self::Linear
+   }
+}
+
+pub trait RuntimeImageUploader
+{
+   fn create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> ImageHandle;
+
+   /// Publishes A8 texels that no previously issued draw can reference.
+   ///
+   /// The compatibility implementation uses a normal update. Backends with
+   /// dependency-aware prepared caches can override this to preserve users of
+   /// all previously published texels.
+   fn append_a8(
+      &mut self,
+      handle: ImageHandle,
+      x: u32,
+      y: u32,
+      width: u32,
+      height: u32,
+      data: &[u8],
+      row_bytes: usize,
+   )
+   {
+      self.update_a8(handle, x, y, width, height, data, row_bytes);
+   }
+
+   /// Releases a runtime A8 resource previously returned by this uploader.
+   ///
+   /// Uploaders without owned runtime resources retain a no-op implementation.
+   fn release_a8(&mut self, _handle: ImageHandle)
+   {
+   }
+
+   /// Attempts to create an sRGB texture from row-major RGBA8 bytes.
+   ///
+   /// Renderers without RGBA runtime uploads return `None`.
+   fn try_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Option<ImageHandle>
+   {
+      let _ = (width, height, data, row_bytes);
+      None
+   }
+
+   /// Attempts to create an sRGB texture with an explicit sampling contract.
+   ///
+   /// Existing uploaders retain linear behavior. Backends must explicitly
+   /// implement non-linear modes rather than silently rendering different
+   /// pixels. The selected mode belongs to the returned resource for the
+   /// lifetime of its handle.
+   fn try_create_rgba8_sampled(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize, sampling: ImageSampling) -> Option<ImageHandle>
+   {
+      match sampling
+      {
+         ImageSampling::Linear => self.try_create_rgba8(width, height, data, row_bytes),
+         ImageSampling::Nearest => None,
+      }
+   }
+
+   /// Releases a runtime RGBA8 resource previously returned by this uploader.
+   ///
+   /// Uploaders without RGBA runtime resources retain a no-op implementation.
+   fn release_rgba8(&mut self, _handle: ImageHandle)
+   {
+   }
+
+   fn update_a8(
+      &mut self,
+      handle: ImageHandle,
+      x: u32,
+      y: u32,
+      width: u32,
+      height: u32,
+      data: &[u8],
+      row_bytes: usize,
+   );
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -382,9 +458,9 @@ pub trait Renderer {
 }
 
 // Exposed here to avoid circular deps (platform-api needs it for App::draw).
-pub struct RenderContext {
+pub struct RenderContext<'a> {
     pub frame_id: u64,
-    pub encoder: alloc::boxed::Box<dyn RenderEncoder>,
+    pub encoder: &'a mut dyn RenderEncoder,
 }
 
 // Minimal device caps subset duplicated here for renderer consumption.

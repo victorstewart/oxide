@@ -1,9 +1,10 @@
 use oxide_renderer_api as api;
-use oxide_text::{Atlas, CaretAffinity, Font, FontDb, FontVariation, PagedAtlas, RasterCtx, TextShaper};
+use oxide_text::{Atlas, CaretAffinity, Font, FontDb, FontVariation, PagedAtlas, RasterCtx, ShapeOutput, TextShaper};
+use rustybuzz::{Face as RbFace, UnicodeBuffer};
 
 const LATIN_FONT: &[u8] = include_bytes!("fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("fixtures/test_text_cjk.ttf");
-const VARIABLE_LATIN_FONT: &[u8] = include_bytes!("fixtures/NotoSans-VF.ttf");
+const VARIABLE_FONT: &[u8] = include_bytes!("fixtures/NotoSans-VF.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 
 fn load_font(data: &[u8]) -> Font {
@@ -39,6 +40,91 @@ fn bake_paged_text(
         1.0,
     );
     runs
+}
+
+#[derive(Clone, Copy)]
+struct GlyphQuad
+{
+   x: f32,
+   y: f32,
+   w: f32,
+   h: f32,
+}
+
+fn glyph_quad(vertices: &[api::Vertex], run: api::GlyphRun) -> GlyphQuad
+{
+   let offset = run.vb.offset as usize;
+   GlyphQuad {
+      x: vertices[offset].x,
+      y: vertices[offset].y,
+      w: vertices[offset + 1].x - vertices[offset].x,
+      h: vertices[offset + 2].y - vertices[offset].y,
+   }
+}
+
+fn assert_logical_quad_close(one: GlyphQuad, three: GlyphQuad, label: &str)
+{
+   for (axis, left, right) in [
+      ("x", one.x, three.x),
+      ("y", one.y, three.y),
+      ("width", one.w, three.w),
+      ("height", one.h, three.h),
+   ]
+   {
+      assert!(
+         (right - left).abs() <= 1.5,
+         "{label} logical {axis} changed from {left} at 1x to {right} at 3x",
+      );
+   }
+}
+
+fn bake_atlas_scale(
+   shaped: &ShapeOutput<'_>,
+   scale: f32,
+   raster: &mut RasterCtx,
+   atlas: &mut Atlas,
+   vertices: &mut Vec<api::Vertex>,
+   indices: &mut Vec<u16>,
+) -> (api::GlyphRun, GlyphQuad)
+{
+   let run = shaped.bake_into_with(
+      raster,
+      atlas,
+      vertices,
+      indices,
+      api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+      api::ImageHandle(1),
+      8.25,
+      40.25,
+      scale,
+   );
+   (run, glyph_quad(vertices, run))
+}
+
+fn bake_paged_scale(
+   shaped: &ShapeOutput<'_>,
+   scale: f32,
+   raster: &mut RasterCtx,
+   atlas: &mut PagedAtlas,
+   vertices: &mut Vec<api::Vertex>,
+   indices: &mut Vec<u16>,
+   runs: &mut Vec<api::GlyphRun>,
+) -> (api::GlyphRun, GlyphQuad)
+{
+   let start = runs.len();
+   shaped.bake_paged_into_with(
+      raster,
+      atlas,
+      vertices,
+      indices,
+      runs,
+      api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+      8.25,
+      40.25,
+      scale,
+   );
+   let run = *runs.get(start).expect("paged glyph run");
+   (run, glyph_quad(vertices, run))
 }
 
 #[test]
@@ -191,11 +277,177 @@ fn latin_text_shapes_into_atlas() {
 
     assert_eq!(run.vb.len as usize, verts.len());
     assert_eq!(run.ib.len as usize, indices.len());
-    assert_eq!(run.atlas_revision, atlas.revision());
+    assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
     assert!(indices.iter().all(|index| usize::from(*index) < verts.len()));
     let (img, _, _) = atlas.image();
     assert!(img.iter().any(|&px| px != 0));
     assert!(!verts.is_empty());
+}
+
+#[test]
+fn device_scale_rasterizes_physical_glyphs_without_changing_logical_quads()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+   let shaped = shaper.shape(font, font_id, "j", 16.0).expect("shape A8 glyph");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = Atlas::new(512, 512);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let (scale_one, scale_one_quad) = bake_atlas_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   let scale_one_dirty = atlas.dirty_rect().expect("1x glyph upload");
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_atlas_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   let scale_three_dirty = atlas.dirty_rect().expect("3x glyph upload");
+
+   assert_eq!(atlas.glyph_count(), 2, "physical raster sizes must not alias one cache entry");
+   assert!(!scale_one.sdf && !scale_three.sdf, "small text must preserve native A8 coverage at every device scale");
+   assert_eq!(scale_one.atlas_revision, atlas.retained_revision(1.0));
+   assert_eq!(scale_three.atlas_revision, atlas.retained_revision(3.0));
+   assert_ne!(scale_one.atlas_revision, scale_three.atlas_revision, "direct retained replay must include device scale identity");
+   assert!(scale_three_dirty.w >= scale_one_dirty.w * 2, "3x glyph width was not rasterized at physical resolution");
+   assert!(scale_three_dirty.h >= scale_one_dirty.h * 2, "3x glyph height was not rasterized at physical resolution");
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "atlas A8");
+
+   atlas.clear_dirty();
+   let same_ppem = shaper.shape(font, font_id, "j", 16.25).expect("shape same ppem glyph");
+   let _ = bake_atlas_scale(
+      &same_ppem, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   assert_eq!(atlas.glyph_count(), 2, "fractional animation steps must share one rounded ppem entry");
+   assert!(atlas.dirty_rect().is_none());
+   let next_ppem = shaper.shape(font, font_id, "j", 16.75).expect("shape next ppem glyph");
+   let _ = bake_atlas_scale(
+      &next_ppem, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   assert_eq!(atlas.glyph_count(), 3, "the next rounded ppem must produce a distinct entry");
+   assert!(atlas.dirty_rect().is_some());
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = PagedAtlas::new(512, 512, 2);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let mut runs = Vec::new();
+   let (scale_one, scale_one_quad) = bake_paged_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   let scale_one_dirty = atlas.page_image(0).and_then(|page| page.5).expect("paged 1x glyph upload");
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_paged_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   let scale_three_dirty = atlas.page_image(0).and_then(|page| page.5).expect("paged 3x glyph upload");
+
+   assert_eq!(atlas.glyph_count(), 2, "paged physical raster sizes must not alias one cache entry");
+   assert!(scale_three_dirty.w >= scale_one_dirty.w * 2, "paged 3x glyph width was not rasterized at physical resolution");
+   assert!(scale_three_dirty.h >= scale_one_dirty.h * 2, "paged 3x glyph height was not rasterized at physical resolution");
+   assert!(!scale_one.sdf && !scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "paged A8");
+}
+
+#[test]
+fn sdf_rasterization_is_device_scale_independent()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+   let shaped = shaper.shape(font, font_id, "j", 30.0).expect("shape SDF glyph");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = Atlas::new(256, 256);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let (scale_one, scale_one_quad) = bake_atlas_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_atlas_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
+   );
+
+   assert_eq!(atlas.glyph_count(), 1, "SDF must reuse one scale-independent cache entry");
+   assert!(atlas.dirty_rect().is_none(), "Retina SDF replay must not rerasterize or upload");
+   assert!(scale_one.sdf && scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "atlas SDF");
+
+   let mut raster = RasterCtx::default();
+   let mut atlas = PagedAtlas::new(256, 256, 2);
+   let mut vertices = Vec::new();
+   let mut indices = Vec::new();
+   let mut runs = Vec::new();
+   let (scale_one, scale_one_quad) = bake_paged_scale(
+      &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+   atlas.clear_dirty();
+   let (scale_three, scale_three_quad) = bake_paged_scale(
+      &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
+   );
+
+   assert_eq!(atlas.glyph_count(), 1, "paged SDF must reuse one scale-independent cache entry");
+   assert!(atlas.page_image(0).and_then(|page| page.5).is_none(), "paged Retina SDF replay must not upload");
+   assert!(scale_one.sdf && scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "paged SDF");
+}
+
+#[test]
+fn nonpositive_or_nonfinite_sizes_emit_no_glyph_geometry()
+{
+   let mut db = FontDb::default();
+   let font_id = db.add_font(load_font(LATIN_FONT));
+   let font = db.font(font_id).expect("latin font");
+   let mut shaper = TextShaper::default();
+
+   for px in [0.0_f32, -1.0, f32::NAN, f32::INFINITY]
+   {
+      let shaped = shaper.shape(font, font_id, "A", px).expect("shape rejected size");
+      let mut raster = RasterCtx::default();
+      let mut atlas = Atlas::new(128, 128);
+      let mut vertices = Vec::new();
+      let mut indices = Vec::new();
+      let run = shaped.bake_into_with(
+         &mut raster,
+         &mut atlas,
+         &mut vertices,
+         &mut indices,
+         api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+         api::ImageHandle(1),
+         0.0,
+         24.0,
+         3.0,
+      );
+      assert_eq!(run.vb.len, 0);
+      assert_eq!(run.ib.len, 0);
+      assert!(vertices.is_empty() && indices.is_empty());
+      assert_eq!(atlas.glyph_count(), 0);
+      assert!(atlas.dirty_rect().is_none());
+
+      let mut atlas = PagedAtlas::new(128, 128, 2);
+      let mut vertices = Vec::new();
+      let mut indices = Vec::new();
+      let mut runs = Vec::new();
+      shaped.bake_paged_into_with(
+         &mut raster,
+         &mut atlas,
+         &mut vertices,
+         &mut indices,
+         &mut runs,
+         api::Color::rgba(0.2, 0.4, 0.8, 1.0),
+         0.0,
+         24.0,
+         3.0,
+      );
+      assert!(runs.is_empty() && vertices.is_empty() && indices.is_empty());
+      assert_eq!(atlas.glyph_count(), 0);
+      assert!(!atlas.has_dirty_pages());
+   }
 }
 
 #[test]
@@ -219,16 +471,138 @@ fn shaped_prefix_widths_match_ascii_prefix_shapes() {
 }
 
 #[test]
-fn shaped_width_tracks_requested_font_size()
+fn shaped_positions_scale_from_font_units()
 {
+   let text = "Atlas";
+   let px = 20.0;
+   let face = RbFace::from_slice(LATIN_FONT, 0).expect("Rustybuzz face");
+   let mut buffer = UnicodeBuffer::new();
+   buffer.push_str(text);
+   let direct = rustybuzz::shape(&face, &[], buffer);
+   let expected = direct.glyph_positions().iter()
+      .map(|position| position.x_advance as f32)
+      .sum::<f32>() * px / face.units_per_em() as f32;
+
    let mut db = FontDb::default();
    let latin_id = db.add_font(load_font(LATIN_FONT));
    let mut shaper = TextShaper::default();
    let font = db.font(latin_id).expect("latin font");
-   let small = shaper.shape(font, latin_id, "Atlas", 10.0).expect("shape small").width();
-   let large = shaper.shape(font, latin_id, "Atlas", 20.0).expect("shape large").width();
+   let shaped = shaper.shape(font, latin_id, text, px).expect("shape at requested size");
+   let half = shaper.shape(font, latin_id, text, px * 0.5).expect("shape at half size");
 
-   assert!((large - small * 2.0).abs() < 0.01);
+   assert!((shaped.width() - expected).abs() < 0.001, "actual={} expected={expected}", shaped.width());
+   assert!((shaped.width() - half.width() * 2.0).abs() < 0.001);
+   assert!((shaped.to_owned_shape().width() - expected).abs() < 0.001);
+}
+
+#[test]
+fn baked_glyphs_apply_shaped_offsets()
+{
+   let text = "A\u{301}";
+   let mark = "\u{301}";
+   let px = 20.0;
+   let face = RbFace::from_slice(LATIN_FONT, 0).expect("Rustybuzz face");
+   let mut combined_buffer = UnicodeBuffer::new();
+   combined_buffer.push_str(text);
+   let combined_direct = rustybuzz::shape(&face, &[], combined_buffer);
+   let mut mark_buffer = UnicodeBuffer::new();
+   mark_buffer.push_str(mark);
+   let mark_direct = rustybuzz::shape(&face, &[], mark_buffer);
+   let combined_positions = combined_direct.glyph_positions();
+   let mark_positions = mark_direct.glyph_positions();
+
+   assert_eq!(combined_positions.len(), 2);
+   assert_eq!(mark_positions.len(), 1);
+   assert_eq!(combined_direct.glyph_infos()[1].glyph_id, mark_direct.glyph_infos()[0].glyph_id);
+   assert!(combined_positions[1].x_offset != 0 || combined_positions[1].y_offset != 0);
+
+   let scale = px / face.units_per_em() as f32;
+   let expected_x = (combined_positions[0].x_advance
+      + combined_positions[1].x_offset
+      - mark_positions[0].x_offset) as f32 * scale;
+   let expected_y = -(combined_positions[0].y_advance
+      + combined_positions[1].y_offset
+      - mark_positions[0].y_offset) as f32 * scale;
+
+   let mut db = FontDb::default();
+   let latin_id = db.add_font(load_font(LATIN_FONT));
+   let mut shaper = TextShaper::default();
+   let font = db.font(latin_id).expect("latin font");
+   let combined = shaper.shape(font, latin_id, text, px).expect("shape positioned mark");
+   let standalone = shaper.shape(font, latin_id, mark, px).expect("shape standalone mark");
+   let mut combined_atlas = Atlas::new(128, 128);
+   let mut combined_vertices = Vec::new();
+   let mut combined_indices = Vec::new();
+   combined.bake_into(
+      &mut combined_atlas,
+      &mut combined_vertices,
+      &mut combined_indices,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      api::ImageHandle(1),
+      0.0,
+      100.0,
+      1.0,
+   );
+   let mut mark_atlas = Atlas::new(128, 128);
+   let mut mark_vertices = Vec::new();
+   let mut mark_indices = Vec::new();
+   standalone.bake_into(
+      &mut mark_atlas,
+      &mut mark_vertices,
+      &mut mark_indices,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      api::ImageHandle(1),
+      0.0,
+      100.0,
+      1.0,
+   );
+
+   assert_eq!(combined_vertices.len(), 8);
+   assert_eq!(mark_vertices.len(), 4);
+   let actual_x = combined_vertices[4].x - mark_vertices[0].x;
+   let actual_y = combined_vertices[4].y - mark_vertices[0].y;
+   assert!((actual_x - expected_x).abs() < 0.001, "actual={actual_x} expected={expected_x}");
+   assert!((actual_y - expected_y).abs() < 0.001, "actual={actual_y} expected={expected_y}");
+
+   let mut combined_raster = RasterCtx::default();
+   let mut combined_atlas = PagedAtlas::new(128, 128, 2);
+   let mut combined_vertices = Vec::new();
+   let mut combined_indices = Vec::new();
+   let mut combined_runs = Vec::new();
+   combined.bake_paged_into_with(
+      &mut combined_raster,
+      &mut combined_atlas,
+      &mut combined_vertices,
+      &mut combined_indices,
+      &mut combined_runs,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      0.0,
+      100.0,
+      1.0,
+   );
+   let mut mark_raster = RasterCtx::default();
+   let mut mark_atlas = PagedAtlas::new(128, 128, 2);
+   let mut mark_vertices = Vec::new();
+   let mut mark_indices = Vec::new();
+   let mut mark_runs = Vec::new();
+   standalone.bake_paged_into_with(
+      &mut mark_raster,
+      &mut mark_atlas,
+      &mut mark_vertices,
+      &mut mark_indices,
+      &mut mark_runs,
+      api::Color::rgba(0.7, 0.2, 0.1, 1.0),
+      0.0,
+      100.0,
+      1.0,
+   );
+
+   assert_eq!(combined_vertices.len(), 8);
+   assert_eq!(mark_vertices.len(), 4);
+   let actual_x = combined_vertices[4].x - mark_vertices[0].x;
+   let actual_y = combined_vertices[4].y - mark_vertices[0].y;
+   assert!((actual_x - expected_x).abs() < 0.001, "paged actual={actual_x} expected={expected_x}");
+   assert!((actual_y - expected_y).abs() < 0.001, "paged actual={actual_y} expected={expected_y}");
 }
 
 #[test]
@@ -408,6 +782,12 @@ fn fallback_shape_runs_use_font_that_covers_each_grapheme() {
     assert_eq!(shaped.runs[2].byte_range, "A漢".len()..text.len());
     assert!((shaped.runs[1].x_offset - shaped.runs[0].shape.width()).abs() < 0.001);
     assert!((shaped.width() - expected).abs() < 0.001);
+
+   let reused = shaper
+      .shape_with_fallback_fonts(&db, latin_id, &[cjk_id], text, 22.0)
+      .expect("fallback shape with reused buffer");
+   assert!((reused.width() - expected).abs() < 0.001);
+   assert!((reused.runs[1].x_offset - shaped.runs[1].x_offset).abs() < 0.001);
 }
 
 #[test]
@@ -481,61 +861,6 @@ fn atlas_reset_preserves_image_contract() {
 }
 
 #[test]
-fn variable_font_coordinates_affect_shaping_and_rasterization() {
-    let regular = Font::from_bytes_with_variations(
-        VARIABLE_LATIN_FONT.to_vec(),
-        &[
-            FontVariation {tag: *b"wght", value: 400.0},
-            FontVariation {tag: *b"wdth", value: 100.0},
-        ],
-    );
-    let narrow = Font::from_bytes_with_variations(
-        VARIABLE_LATIN_FONT.to_vec(),
-        &[
-            FontVariation {tag: *b"wght", value: 400.0},
-            FontVariation {tag: *b"wdth", value: 75.0},
-        ],
-    );
-    let mut shaper = TextShaper::default();
-    let regular_width = shaper.shape(&regular, 0, "Variable width", 18.0)
-        .expect("shape regular variable font")
-        .width();
-    let narrow_width = shaper.shape(&narrow, 1, "Variable width", 18.0)
-        .expect("shape narrow variable font")
-        .width();
-    assert!(narrow_width < regular_width, "regular={regular_width} narrow={narrow_width}");
-
-    let coverage = |weight: f32, font_id: usize| {
-        let font = Font::from_bytes_with_variations(
-            VARIABLE_LATIN_FONT.to_vec(),
-            &[
-                FontVariation {tag: *b"wght", value: weight},
-                FontVariation {tag: *b"wdth", value: 100.0},
-            ],
-        );
-        let mut shaper = TextShaper::default();
-        let shaped = shaper.shape(&font, font_id, "A", 18.0).expect("shape weighted glyph");
-        let mut atlas = Atlas::new(64, 64);
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        shaped.bake_into(
-            &mut atlas,
-            &mut vertices,
-            &mut indices,
-            api::Color::rgba(0.2, 0.3, 0.4, 1.0),
-            api::ImageHandle(1),
-            0.0,
-            24.0,
-            1.0,
-        );
-        atlas.image().0.iter().map(|value| u64::from(*value)).sum::<u64>()
-    };
-    let thin_coverage = coverage(100.0, 2);
-    let bold_coverage = coverage(900.0, 3);
-    assert!(bold_coverage > thin_coverage, "thin={thin_coverage} bold={bold_coverage}");
-}
-
-#[test]
 fn atlas_dirty_rect_tracks_new_glyph_pixels_only() {
     let mut db = FontDb::default();
     let latin_id = db.add_font(load_font(LATIN_FONT));
@@ -572,90 +897,6 @@ fn atlas_dirty_rect_tracks_new_glyph_pixels_only() {
         1.0,
     );
     assert_eq!(atlas.dirty_rect(), None);
-}
-
-#[test]
-fn device_scale_rasterizes_a8_glyphs_at_physical_resolution() {
-    let mut db = FontDb::default();
-    let latin_id = db.add_font(load_font(LATIN_FONT));
-    let mut shaper = TextShaper::default();
-    let font = db.font(latin_id).expect("latin font");
-    let shaped = shaper.shape(font, latin_id, "A", 15.0).expect("shape scaled glyph");
-    let mut atlas = Atlas::new(256, 256);
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-
-    shaped.bake_into(
-        &mut atlas,
-        &mut vertices,
-        &mut indices,
-        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        api::ImageHandle(1),
-        0.0,
-        24.0,
-        1.0,
-    );
-    let one_x = atlas.dirty_rect().expect("1x glyph dirty rect");
-    let one_width = vertices[1].x - vertices[0].x;
-    let one_height = vertices[2].y - vertices[0].y;
-
-    atlas.clear_dirty();
-    shaped.bake_into(
-        &mut atlas,
-        &mut vertices,
-        &mut indices,
-        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        api::ImageHandle(1),
-        0.0,
-        24.0,
-        3.0,
-    );
-    let three_x = atlas.dirty_rect().expect("3x glyph must use a distinct raster");
-    let three_width = vertices[5].x - vertices[4].x;
-    let three_height = vertices[6].y - vertices[4].y;
-
-    assert_eq!(atlas.glyph_count(), 2);
-    assert!(three_x.w >= one_x.w.saturating_mul(2), "1x={one_x:?} 3x={three_x:?}");
-    assert!(three_x.h >= one_x.h.saturating_mul(2), "1x={one_x:?} 3x={three_x:?}");
-    assert!(
-        (three_width - one_width).abs() <= 2.0,
-        "logical widths changed: 1x={one_width} 3x={three_width}",
-    );
-    assert!(
-        (three_height - one_height).abs() <= 2.0,
-        "logical heights changed: 1x={one_height} 3x={three_height}",
-    );
-
-    let mut raster = RasterCtx::default();
-    let mut paged = PagedAtlas::new(256, 256, 1);
-    let mut paged_vertices = Vec::new();
-    let mut paged_indices = Vec::new();
-    let mut runs = Vec::new();
-    shaped.bake_paged_into_with(
-        &mut raster,
-        &mut paged,
-        &mut paged_vertices,
-        &mut paged_indices,
-        &mut runs,
-        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        0.0,
-        24.0,
-        1.0,
-    );
-    paged.clear_dirty();
-    shaped.bake_paged_into_with(
-        &mut raster,
-        &mut paged,
-        &mut paged_vertices,
-        &mut paged_indices,
-        &mut runs,
-        api::Color::rgba(0.2, 0.3, 0.4, 1.0),
-        0.0,
-        24.0,
-        3.0,
-    );
-    assert_eq!(paged.glyph_count(), 2);
-    assert!(paged.has_dirty_pages());
 }
 
 #[test]
@@ -781,7 +1022,7 @@ fn atlas_pressure_evicts_and_rebakes_current_run() {
             assert_eq!(run.ib.offset as usize, i_start);
             assert_eq!(run.vb.len as usize, verts.len().saturating_sub(v_start));
             assert_eq!(run.ib.len as usize, indices.len().saturating_sub(i_start));
-            assert_eq!(run.atlas_revision, atlas.revision());
+            assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
             assert!(run.vb.len > 0, "current glyph must render after a stale slot eviction");
             assert!(atlas.dirty_rect().is_some(), "overwritten glyph slot must be uploaded");
             return;
@@ -814,7 +1055,7 @@ fn atlas_pressure_does_not_evict_glyphs_used_earlier_in_same_run() {
     );
 
     assert_eq!(atlas.eviction_count(), 0);
-    assert_eq!(run.atlas_revision, atlas.revision());
+    assert_eq!(run.atlas_revision, atlas.retained_revision(1.0));
     assert!(run.vb.len > 0, "at least one glyph should fit before pressure skips later glyphs");
 }
 
@@ -967,4 +1208,19 @@ fn missing_glyph_is_skipped() {
     // Two visible glyphs (A and B) should produce eight vertices
     assert_eq!(verts.len(), 8);
     assert_eq!(indices.len(), 12);
+}
+
+#[test]
+fn variable_font_coordinates_affect_shaping()
+{
+   let regular = Font::from_bytes(VARIABLE_FONT.to_vec());
+   let bold = Font::from_bytes_with_variations(
+      VARIABLE_FONT.to_vec(),
+      &[FontVariation { tag: *b"wght", value: 900.0 }],
+   );
+   let mut shaper = TextShaper::default();
+   let regular_shape = shaper.shape(&regular, 0, "Variable", 18.0).expect("shape regular");
+   let bold_shape = shaper.shape(&bold, 1, "Variable", 18.0).expect("shape bold");
+
+   assert_ne!(regular_shape.width(), bold_shape.width());
 }

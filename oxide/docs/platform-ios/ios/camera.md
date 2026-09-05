@@ -16,12 +16,15 @@
   Start, stop, and control native AVFoundation session behavior behind the shared Apple camera ABI.
 - `OxideCameraFrameCallback`, `OxideCameraAudioCallback`, `OxideCameraRecordCallback`, and `OxideCameraPhotoCallback`
   Callback typedefs whose payload structs are mirrored by Rust `#[repr(C)]` types.
+- `oxide_cam_set_preview_publish_callback`
+  Atomically installs or clears the context-free notification used to wake an Oxide host when a newer preview generation is published.
 
 ## Logic narrative
 - AVFoundation sample buffers are translated into compact C structs before Rust callback delivery, keeping Rust responsible for visible preview composition and pacing.
 - Recording and photo events preserve status, timing, byte, and error fields so Rust can report failures without decoding Objective-C objects.
 - `_Static_assert` guards freeze `OxideCamFrame`, `OxideCamAudio`, `OxideCamRecordEvent`, and `OxideCamPhotoEvent` size/alignment beside the C definitions.
 - Additional `_Static_assert` guards freeze `OxideCamPerfSnapshot` and `OxideCamContractSnapshot`, because those host-private camera benchmark snapshots feed the iOS host stats ABI used for device A/B evidence.
+- Preview publication loads one atomic callback pointer on the capture queue. The owning host clears it when its foreground scene resigns or disconnects.
 
 ## Preconditions and postconditions
 - Native callbacks must remain ABI-compatible with the Rust declarations in `oxide-platform-ios` and `oxide-platform-apple`.
@@ -34,12 +37,14 @@
 
 ## Concurrency and memory behavior
 - AVFoundation callbacks arrive on native queues and are translated before crossing the C ABI.
+- Preview-wake registration uses acquire/release atomic function-pointer access. It carries no separately mutable context pointer, so registration cannot publish a mismatched callback/context pair.
 - The frozen callback structs carry pointers and lengths; ownership remains with native buffers unless Rust copies during callback handling.
 - The ABI guard change adds no runtime memory traffic.
 
 ## Performance notes
 - The 2026-06-22 static assertions are measurement harness only and do not change camera frame acquisition, texture bridge, command encoding, present, or host tick timings.
 - Camera-preview performance changes still require device A/B proof with the fine-grained pure-custom path attribution required by the repo contract.
+- Preview publication adds one lock-free atomic load per published generation and no allocation or main-thread synchronization.
 
 ## Feature flags and cfgs
 - Compiled through the iOS native camera bridge path; host/device availability controls live camera behavior.
@@ -49,5 +54,6 @@
 - Host-private camera snapshot guard retention is also covered by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
 
 ## Changelog
+- 2026-08-06: made preview-publication callback registration context-free and atomic across capture and lifecycle queues.
 - 2026-06-22: added native camera perf/contract snapshot ABI layout guards.
 - 2026-06-22: added and documented native camera callback ABI layout guards.

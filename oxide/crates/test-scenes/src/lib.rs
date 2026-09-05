@@ -135,7 +135,6 @@ pub struct Router<U: elements::ImageUploader> {
     pub counters: Counters,
     fps: FpsCounter,
     overlay_visible: bool,
-    reduce_motion_on: bool,
     // Accumulated damage rects for the last draw (dp units)
     last_damage: alloc::vec::Vec<gfx::RectI>,
     force_full_damage_next_frame: bool,
@@ -175,7 +174,6 @@ impl<U: elements::ImageUploader> Router<U> {
             counters: Counters::default(),
             fps: FpsCounter::default(),
             overlay_visible: true,
-            reduce_motion_on: false,
             last_damage: alloc::vec::Vec::new(),
             force_full_damage_next_frame: true,
             touch_surface: TouchSurfaceRecognizer::new(),
@@ -364,11 +362,6 @@ impl<U: elements::ImageUploader> Router<U> {
 
     pub fn toggle_overlay(&mut self) {
         self.overlay_visible = !self.overlay_visible;
-    }
-
-    pub fn set_reduce_motion(&mut self, on: bool) {
-        self.reduce_motion_on = on;
-        self.anim_timeline.animator.set_reduce_motion(on);
     }
 
     // Set the image used by the Zoom Image scene.
@@ -718,7 +711,7 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn draw(&mut self, viewport: gfx::RectF, device_scale: f32, b: &mut DrawListBuilder) {
-        self.text.begin_frame();
+        self.text.begin_frame_at_scale(device_scale);
         // Reset damage for this frame
         self.last_damage.clear();
         b.clip_push(gfx::RectI::new(0, 0, viewport.w.ceil() as i32, viewport.h.ceil() as i32));
@@ -902,7 +895,6 @@ impl<U: elements::ImageUploader> Router<U> {
         }
         // Overlay (toggleable)
         if self.overlay_visible {
-            let rm = if self.reduce_motion_on { "RM:on" } else { "RM:off" };
             self.overlay_extra.clear();
             match self.current {
                 SceneKind::AnimTimeline => {
@@ -953,12 +945,11 @@ impl<U: elements::ImageUploader> Router<U> {
             self.overlay_text.clear();
             let _ = write!(
                 self.overlay_text,
-                "{} | {:.0} fps | draws={} | anims={} | {}",
+                "{} | {:.0} fps | draws={} | anims={}",
                 Self::scene_names()[self.current as usize],
                 self.counters.fps,
                 self.counters.draws,
                 self.counters.anims,
-                rm,
             );
             self.overlay_text.push_str(&self.overlay_extra);
             let bg = gfx::Color::rgba(1.0, 1.0, 1.0, 0.85);

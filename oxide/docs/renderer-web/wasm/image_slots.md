@@ -34,7 +34,7 @@ The type is crate-private and introduces no author-facing API.
 - `GenerationSlots::remove(&mut self, handle: u32) -> Option<T>`: removes one exact live value,
   invalidates its handle, and recycles or retires the slot.
 - `GenerationSlots::storage_capacity_bytes(&self) -> usize`: reports allocated vector payload capacity.
-- `GenerationSlots::values(&self)`: iterates live values for exact resource-memory accounting.
+- `GenerationSlots::values(&self)`: iterates live values for exact resource-memory accounting when `diagnostic-instrumentation` is enabled.
 
 ## Logic narrative
 
@@ -77,8 +77,10 @@ CPU scratch metric convention.
 
 ## Feature flags and cfgs
 
-The production consumer is the `wasm32` WebGPU backend. The same source is included directly by a
-native external test so the lifecycle algorithm executes without requiring a browser GPU.
+The production consumer is the `wasm32` WebGPU backend. The `values` scan is compiled only with
+`diagnostic-instrumentation`; default product lookup, insertion, removal, and capacity accounting
+remain unchanged. The same source is included directly by a native external test so the lifecycle
+algorithm executes without requiring a browser GPU.
 
 ## Testing and benchmarks
 
@@ -99,5 +101,6 @@ let bytes = slots.remove(handle).ok_or("image missing")?;
 
 ## Changelog
 
+- 2026-08-05: compiled the live-value iterator only for diagnostic resource-memory scans.
 - 2026-07-15: generalized the table name and added generation-checked WebGPU Scene3D mesh ownership.
 - 2026-07-10: introduced bounded generation-checked slot reuse for WebGPU images.

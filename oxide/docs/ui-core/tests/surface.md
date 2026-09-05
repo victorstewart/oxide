@@ -1,11 +1,11 @@
 # ui-core `tests/surface.rs`
 
 ## Intention and purpose
-This integration test suite verifies retained `UiSurface` behavior: dirty-class classification, incremental layout, retained draw-list replay, router composition, hit testing, and scoped tree mutation. It exists so performance fixes in `NodeTree` and `UiSurface` cannot silently degrade correctness or fall back to full-tree work.
+This integration test suite verifies retained `UiSurface` behavior: dirty-class classification, incremental layout, retained chunk replay, router composition, hit testing, and scoped tree mutation. It exists so performance fixes in `NodeTree` and `UiSurface` cannot silently degrade correctness or fall back to full-tree work.
 
 ## Relation to the rest of the code
-- `oxide_ui_core::UiSurface` wraps `NodeTree`, animation overrides, retained draw caches, and layout stats.
-- `oxide_ui_core::NodeTree` owns node identity, layout dirtiness, retained per-node draw lists, and hit testing.
+- `oxide_ui_core::UiSurface` wraps `NodeTree`, animation overrides, retained snapshot composition, and layout stats.
+- `oxide_ui_core::NodeTree` owns node identity, layout dirtiness, retained per-node chunks/sequences, and hit testing.
 - `oxide_renderer_api::DrawList` is the output boundary used to verify retained replay and draw-cache safety.
 
 Call flow:
@@ -13,15 +13,17 @@ Call flow:
 - test setup -> `UiSurface::add_node` or `UiSurface::tree_mut`
 - mutation -> `UiSurface::edit_style`, `mark_dirty`, or `mark_node_dirty`
 - layout -> `UiSurface::layout` -> `NodeTree::layout`
-- encode -> `UiSurface::encode_retained` -> `NodeTree::encode_draws_retained`
+- encode -> `UiSurface::encode_retained` -> `NodeTree::render_sequence` -> compatibility flattening
 
 ## Entry points list
 - `retained_encode_reuses_clean_drawlist_and_rebuilds_after_dirty()`
   Verifies whole-surface retained replay and rebuild after paint dirtiness.
+- `released_text_context_aliases_match_plain_surface_encoding()`
+  Verifies all four released surface/router text-context overloads produce the same commands as their plain encoding methods.
 - `retained_dirty_leaf_reuses_clean_sibling_subtree()`
   Verifies dirty leaf rebuilds do not force clean sibling subtree redraw.
-- `text_ctx_retained_snapshot_requires_clean_uploaded_atlas()`
-  Verifies retained text atlas snapshots are exposed only after dirty atlas uploads are cleared.
+- `text_ctx_manual_retained_snapshot_tracks_storage_and_device_scale()`
+  Verifies the released manual atlas-handle token changes on device-scale transitions and atlas reset while remaining stable for a repeated scale.
 - `layout_dirty_subtree_skips_clean_sibling_subtree()`
   Verifies a layout-dirty leaf skips unrelated sibling branches.
 - `descendant_only_layout_dirty_skips_parent_measurement()`
@@ -38,9 +40,11 @@ Call flow:
   Verifies recent hit history influences eviction without changing the in-flight immutable snapshot.
 - `retained_cache_budget_never_evicts_caller_owned_text_or_image_chunks()`
   Verifies a zero node-cache budget preserves independent caller-owned chunk identity and exact mixed output.
-- Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, non-draw dirty classes, router retained composition, and hit-test identity.
+- `mixed_surface_snapshot_invalidates_only_dependent_chunks()`
+  Verifies caller-owned glyph chunks retain exact atlas-generation invalidation independently of primitive-only surface chunks.
+- Additional tests in the file cover transform-only motion, opacity/clip dirty classes, content dirty classes, hit-test dirtiness, router retained composition, and hit-test identity.
 - `transform_and_opacity_animation_reuses_all_warm_geometry()` drives 300 nodes and requires zero warm chunk/sequence rebuild and zero command/vertex/index copies while properties continue changing.
-- `nested_animation_keeps_clip_hit_test_and_accessibility_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, transformed hit coordinates, and accessibility frames.
+- `nested_animation_keeps_clip_and_hit_test_geometry_synchronized()` covers nested scale/rotation/translation, cumulative opacity, retained clip metadata, and transformed hit coordinates.
 - `removed_node_property_slots_reuse_dense_indices_with_new_generations()` proves logical slot indices are recycled only under a new generation.
 
 ## Logic narrative
@@ -48,18 +52,18 @@ The tests construct small retained trees with known geometry, run a cold layout 
 
 ## Preconditions and postconditions
 - Tests use public `UiSurface` and crate-root types, not private node internals.
-- Passing means clean sibling subtrees remain skippable, dirty descendants are reached, and retained draw-list reuse stays bounded by dirty classes and atlas safety.
+- Passing means clean sibling subtrees remain skippable, dirty descendants are reached, and retained chunk reuse stays bounded by dirty classes while caller-owned resource dependencies remain exact.
 
 ## Edge cases and failure modes
 - A paint-only mutation must rebuild draw caches without setting layout dirtiness.
-- Accessibility and hit-test metadata dirtiness must not rebuild renderer-facing draws.
+- Hit-test metadata dirtiness must not rebuild renderer-facing draws.
 - A stable child rect is not enough to skip layout if `descendant_layout_dirty` is still set.
 - Missing node ids must return false instead of dirtying the surface.
 - Budget eviction must invalidate ancestor sequence references so no supposedly evicted descendant remains indirectly retained.
 - A zero-byte policy must retain no node chunks or sequence metadata while still producing exact draw order and external resource dependencies.
 
 ## Concurrency and memory behavior
-The tests are synchronous and allocate only local surfaces/builders. Production retained draw-list caches move `DrawList` values into nodes or surfaces and replay them by appending; the tests verify that clean replay does not require mutation of unrelated subtrees.
+The tests are synchronous and allocate only local surfaces/builders. Production node caches retain immutable chunks and persistent sequences; the tests verify that clean replay does not require mutation of unrelated subtrees.
 
 ## Performance notes
 The suite uses `LayoutStats` and `RetainedNodeStats` as explanatory counters. The target behavior is fewer visited nodes, fewer measured children, and retained subtree reuse when dirty classes do not require a full rebuild.
@@ -74,7 +78,7 @@ Run with:
 cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-ui-core --test surface
 ```
 
-Related perf rows live in `oxide-perf-runner`: `cpu.layout.dirty_subtree.incremental_relayout`, `cpu.layout.descendant_only.incremental_relayout`, `cpu.layout.node_content_dirty.retained_replay`, `cpu.layout.non_draw_dirty.retained_reuse`, `cpu.architecture.retained.cache_pressure.hot_reuse`, and `cpu.architecture.retained.cache_pressure.one_use_churn`.
+Related perf rows live in `oxide-perf-runner`: `cpu.layout.dirty_subtree.incremental_relayout`, `cpu.layout.descendant_only.incremental_relayout`, `cpu.layout.node_content_dirty.retained_replay`, `cpu.layout.hit_test_dirty.retained_reuse`, `cpu.architecture.retained.cache_pressure.hot_reuse`, and `cpu.architecture.retained.cache_pressure.one_use_churn`.
 
 ## Examples
 ```rust
@@ -84,9 +88,9 @@ assert!(dirty.visited_nodes < cold.visited_nodes);
 ```
 
 ## Changelog
-
-- 2026-07-18: updated retained square-image fixtures to carry explicit zero radii.
-- 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit/accessibility, and slot-generation reuse coverage.
+- 2026-08-07: replaced three setup-heavy atlas-routing tests with one equivalence regression covering every released compatibility alias.
+- 2026-08-06: extended the manual text-atlas snapshot regression to cover stable same-scale identity plus 1x/3x and storage-reset invalidation.
+- 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit-test, and slot-generation reuse coverage.
 - 2026-07-13: Added C23 hard-budget, LRU/hot protection, churn suppression/readmission, external identity, and exact zero-budget fallback coverage.
 - 2026-06-01: Added coverage that dirty text atlases are not retained-replay-safe until the dirty upload is cleared.
 - 2026-06-01: Added coverage for ancestor relayout combined with dirty descendants under a stable child rect.

@@ -213,6 +213,16 @@ static NSString *OxidePerfCaseName(void) {
   return caseName;
 }
 
+static BOOL OxidePerfParkedBenchmarkLaunchEnabled(void) {
+  NSDictionary<NSString *, NSString *> *environment =
+      NSProcessInfo.processInfo.environment;
+  NSString *parked = [environment objectForKey:@"OXIDE_PERF_PARKED"];
+  NSString *uikitLaunch =
+      [environment objectForKey:@"OXIDE_PERF_UIKIT_LAUNCH"];
+  return (parked != nil && parked.intValue != 0) ||
+         (uikitLaunch != nil && uikitLaunch.intValue != 0);
+}
+
 static BOOL OxidePerfActualAppCustomCameraBenchmarkEnabled(void) {
   return OxidePerfCameraRealAppHostEnabled() &&
          [OxidePerfCaseName()
@@ -498,6 +508,9 @@ int32_t oxide_host_camera_preview_plan_reason(uint32_t w, uint32_t h,
 int32_t oxide_host_app_frame_with_drawable(uint32_t w, uint32_t h, float scale,
                                            void *drawable_ptr);
 int32_t oxide_host_app_prepare_frame(uint32_t w, uint32_t h, float scale);
+int32_t oxide_host_app_prepare_frame_timed(uint32_t w, uint32_t h, float scale,
+                                           uint64_t timestamp_ns,
+                                           uint64_t target_timestamp_ns);
 int32_t oxide_host_app_submit_prepared_frame_with_drawable(void *drawable_ptr);
 void oxide_host_app_cancel_prepared_frame(void);
 int32_t oxide_host_app_stats(void *stats_out);
@@ -507,8 +520,6 @@ uint32_t oxide_host_current_scene(void);
 int32_t oxide_host_set_scene(uint32_t idx);
 uint8_t oxide_host_is_overlay_visible(void);
 int32_t oxide_host_set_overlay_visible(uint8_t on);
-uint8_t oxide_host_is_reduce_motion(void);
-int32_t oxide_host_set_reduce_motion(uint8_t on);
 void oxide_host_app_did_enter_background(void);
 void oxide_host_app_will_enter_foreground(void);
 void oxide_host_app_will_terminate(void);
@@ -583,10 +594,9 @@ uint64_t oxide_cam_peek_latest_generation(void);
 uint64_t oxide_cam_peek_latest_timestamp_ns(void);
 void oxide_cam_release_acquired(uint32_t slot, uint64_t generation);
 typedef void (*OxideCameraPreviewPublishCallback)(uint64_t generation,
-                                                  uint64_t timestamp_ns,
-                                                  void *context);
+                                                  uint64_t timestamp_ns);
 void oxide_cam_set_preview_publish_callback(
-    OxideCameraPreviewPublishCallback callback, void *context);
+    OxideCameraPreviewPublishCallback callback);
 int32_t oxide_host_power_lowpower(void);
 int32_t oxide_host_thermal_state(void);
 int32_t oxide_host_set_camera_options(uint8_t blur, float sigma,
@@ -779,6 +789,8 @@ static __weak UIView *gMetalView = nil;
 static __weak RustSceneDelegate *gActiveRustSceneDelegate = nil;
 static _Atomic(uint64_t) gDisplayLinkWakeGeneration = 0;
 static _Atomic(uint8_t) gDisplayLinkWakeDispatchPending = 0;
+static _Atomic(uint8_t) gHighRefreshEnabled = 1;
+static _Atomic(uint32_t) gDisplayLinkRangeHz = 0;
 static BOOL gHostAppReady = NO;
 static id<MTLDevice> gMetalDevice = nil;
 static UILabel *gUILogLabel = nil;
@@ -875,7 +887,18 @@ static BOOL IsRunningPerfBenchmarkHost(void) {
   static BOOL checked = NO;
   static BOOL cached = NO;
   if (!checked) {
-    cached = OxidePerfCameraRealAppHostEnabled();
+    NSDictionary<NSString *, NSString *> *env =
+        NSProcessInfo.processInfo.environment;
+    NSString *bundlePath = [env objectForKey:@"XCTestBundlePath"];
+    NSString *injectPath = [env objectForKey:@"XCInjectBundleInto"];
+    cached =
+        (bundlePath != nil &&
+         [bundlePath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
+         NSNotFound) ||
+        (injectPath != nil &&
+         [injectPath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
+         NSNotFound) ||
+        OxidePerfCameraRealAppHostEnabled();
     if (!cached) {
       cached = OxidePerfStaticIdleRealAppHostEnabled();
     }
@@ -1248,6 +1271,14 @@ static inline uint64_t ts_now_ns(void) {
   return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static inline uint64_t seconds_to_ns(CFTimeInterval seconds) {
+  if (!isfinite(seconds) || seconds <= 0.0) {
+    return 0;
+  }
+  double ns = seconds * 1000000000.0;
+  return ns >= (double)UINT64_MAX ? UINT64_MAX : (uint64_t)llround(ns);
+}
+
 static int DeviceMaxFPS(void) {
   CADisplayLink *dl =
       [CADisplayLink displayLinkWithTarget:[NSNull null]
@@ -1263,7 +1294,10 @@ static int DeviceMaxFPS(void) {
 }
 
 static int CurrentTargetFPS(void) {
-  return oxide_host_is_reduce_motion() ? 60 : DeviceMaxFPS();
+  int maximum = DeviceMaxFPS();
+  return atomic_load_explicit(&gHighRefreshEnabled, memory_order_acquire) != 0
+             ? maximum
+             : MIN(maximum, 60);
 }
 
 static void dispatch_on_main(void (^block)(void)) {
@@ -2955,9 +2989,6 @@ int32_t oxide_host_thermal_state(void) {
   self.multipleTouchEnabled = YES;
   self.opaque = YES;
   self.backgroundColor = [UIColor whiteColor];
-  self.isAccessibilityElement = YES;
-  self.accessibilityIdentifier = @"metalView";
-  self.accessibilityLabel = @"Oxide Metal View";
   self.keyboardType = UIKeyboardTypeDefault;
   self.textContentType = nil;
   self.autocorrectionType = UITextAutocorrectionTypeDefault;
@@ -3143,9 +3174,6 @@ int32_t oxide_host_thermal_state(void) {
 - (BOOL)canBecomeFirstResponder {
   return YES;
 }
-- (NSString *)accessibilityValue {
-  return @"";
-}
 - (BOOL)hasText {
   return NO;
 }
@@ -3214,8 +3242,13 @@ int32_t oxide_host_thermal_state(void) {
   }
   uint32_t device = 0;
   if (@available(iOS 9.1, *)) {
-    if (touch.type == UITouchTypePencil)
+    if (touch.type == UITouchTypePencil) {
       device = 1;
+    } else if (@available(iOS 13.4, *)) {
+      if (touch.type == UITouchTypeIndirectPointer) {
+        device = 2;
+      }
+    }
   }
   NSNumber *idNum = [self ensureIdForTouch:touch];
   uint64_t id = idNum.unsignedLongLongValue;
@@ -3224,7 +3257,7 @@ int32_t oxide_host_thermal_state(void) {
           (unsigned long long)id, phase, OxideTouchSummary(touch, self));
   }
   oxide_host_emit_touch(id, phase, p.x, p.y, pressure, hasP, alt, azi, hasT,
-                        device, ts_now_ns());
+                        device, seconds_to_ns(touch.timestamp));
   if (phase == 2 || phase == 3) {
     [self removeIdForTouch:touch];
   }
@@ -3466,7 +3499,6 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) NSUInteger fpsCount;
 @property(nonatomic, strong) UISegmentedControl *sceneControl;
 @property(nonatomic, strong) UISwitch *overlaySwitch;
-@property(nonatomic, strong) UISwitch *reduceSwitch;
 @property(nonatomic, strong) UISwitch *camBlurSwitch;
 @property(nonatomic, strong) UISwitch *camGraySwitch;
 @property(nonatomic, strong) UISwitch *camAnimSwitch;
@@ -3524,9 +3556,9 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) uint8_t perfStaticIdleEndHostFrameDirty;
 @property(nonatomic) uint8_t perfStaticIdleEndHostSettleFramesRemaining;
 @property(nonatomic) BOOL hasRealScenes;
+@property(nonatomic, strong) id<UIWindowSceneDelegate> parkedPerfSceneDelegate;
 - (IBAction)sceneChanged:(UISegmentedControl *)control;
 - (IBAction)onOverlaySwitch:(UISwitch *)sw;
-- (IBAction)onReduceMotionSwitch:(UISwitch *)sw;
 - (void)updateDisplayLinkRange;
 - (IBAction)onCamBlur:(UISwitch *)sw;
 - (IBAction)onCamGray:(UISwitch *)sw;
@@ -3543,6 +3575,7 @@ int32_t oxide_host_thermal_state(void) {
 - (void)requestDisplayLinkWake:(uint64_t)generation;
 - (void)installCameraDrivenSchedulingCallbackIfNeeded;
 - (void)handleActualAppBenchmarkStart;
+- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded;
 @end
 
 void oxide_host_request_display_link_wake(uint64_t generation) {
@@ -3578,12 +3611,37 @@ void oxide_host_request_display_link_wake(uint64_t generation) {
   });
 }
 
+void oxide_host_set_high_refresh(uint8_t enable) {
+  atomic_store_explicit(&gHighRefreshEnabled, enable != 0, memory_order_release);
+  dispatch_on_main(^{
+    [gActiveRustSceneDelegate updateDisplayLinkRange];
+  });
+}
+
+int32_t oxide_host_display_link_frame_rate_range(float *minimum,
+                                                 float *maximum,
+                                                 float *preferred) {
+  if (minimum == NULL || maximum == NULL || preferred == NULL) {
+    return 0;
+  }
+  *minimum = 0.0f;
+  *maximum = 0.0f;
+  *preferred = 0.0f;
+  uint32_t hertz =
+      atomic_load_explicit(&gDisplayLinkRangeHz, memory_order_acquire);
+  if (hertz == 0) {
+    return 0;
+  }
+  *minimum = (float)hertz;
+  *maximum = (float)hertz;
+  *preferred = (float)hertz;
+  return 1;
+}
+
 static void OxideCameraPreviewPublishDidAdvance(uint64_t generation,
-                                                uint64_t timestamp_ns,
-                                                void *context) {
+                                                uint64_t timestamp_ns) {
   (void)generation;
   (void)timestamp_ns;
-  (void)context;
   atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
   if (!OxidePerfCameraFrameDrivenSchedulingEnabled()) {
     return;
@@ -3601,8 +3659,6 @@ static NSString *const kOxidePerfReadyNotification = @"com.oxide.perf.ready";
 static NSString *const kOxidePerfCompleteNotification =
     @"com.oxide.perf.complete";
 static NSString *const kOxidePerfFailedNotification = @"com.oxide.perf.failed";
-static NSString *const kOxidePerfBenchmarkStateLabelIdentifier =
-    @"perfCameraBenchmarkStateLabel";
 static NSString *const kOxidePerfCameraContractSummaryPrefix =
     @"OXIDE_CAMERA_CONTRACT_SUMMARY ";
 static NSString *const kOxidePerfAppHostDebugSummaryPrefix =
@@ -3667,6 +3723,23 @@ static void OxidePerfCameraBenchmarkStartCallback(
 }
 
 @implementation RustSceneDelegate
+- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded {
+  if (!OxidePerfParkedBenchmarkLaunchEnabled()) {
+    return nil;
+  }
+  if (self.parkedPerfSceneDelegate != nil) {
+    return self.parkedPerfSceneDelegate;
+  }
+  Class delegateClass = NSClassFromString(@"OxidePerfParkedSceneDelegate");
+  if (delegateClass == nil) {
+    @throw [NSException exceptionWithName:NSInternalInconsistencyException
+                                   reason:@"missing OxidePerfParkedSceneDelegate"
+                                 userInfo:nil];
+  }
+  self.parkedPerfSceneDelegate = [[delegateClass alloc] init];
+  return self.parkedPerfSceneDelegate;
+}
+
 - (void)updateActualAppCameraBenchmarkIterationStartObserver {
   CFNotificationCenterRef center = CFNotificationCenterGetDarwinNotifyCenter();
   if (self.perfBenchmarkIterationStartNotificationName.length > 0) {
@@ -3771,10 +3844,9 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   gActiveRustSceneDelegate = self;
   if (OxidePerfCameraFrameDrivenSchedulingEnabled()) {
     atomic_store_explicit(&gCameraPreviewNeedsPresent, 1, memory_order_release);
-    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance,
-                                           NULL);
+    oxide_cam_set_preview_publish_callback(OxideCameraPreviewPublishDidAdvance);
   } else {
-    oxide_cam_set_preview_publish_callback(NULL, NULL);
+    oxide_cam_set_preview_publish_callback(NULL);
   }
 }
 
@@ -3784,8 +3856,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     return;
   }
   label.text = state ?: @"";
-  label.accessibilityLabel = state ?: @"";
-  label.accessibilityValue = state ?: @"";
 }
 
 - (void)installPerfBenchmarkStateLabelIfNeededInView:(UIView *)parentView {
@@ -3798,9 +3868,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   }
   UILabel *benchmarkLabel = [UILabel new];
   benchmarkLabel.translatesAutoresizingMaskIntoConstraints = NO;
-  benchmarkLabel.accessibilityIdentifier =
-      kOxidePerfBenchmarkStateLabelIdentifier;
-  benchmarkLabel.isAccessibilityElement = YES;
   benchmarkLabel.hidden = NO;
   benchmarkLabel.alpha = 1.0;
   benchmarkLabel.textColor = [UIColor blackColor];
@@ -4595,14 +4662,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   }
 }
 
-- (IBAction)onReduceMotionSwitch:(UISwitch *)sw {
-  uint8_t desired = sw.isOn ? 1 : 0;
-  if (oxide_host_set_reduce_motion(desired) != 0) {
-    [sw setOn:!sw.isOn animated:NO];
-  }
-  [self updateDisplayLinkRange];
-}
-
 - (void)pushImeStatus:(NSString *)message {
   if (!message) {
     return;
@@ -4924,6 +4983,16 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
                  options:(UISceneConnectionOptions *)connectionOptions {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate scene:scene
+       willConnectToSession:session
+                    options:connectionOptions];
+    }
+    return;
+  }
   (void)session;
   (void)connectionOptions;
   if (![scene isKindOfClass:[UIWindowScene class]]) {
@@ -5120,7 +5189,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
                   action:@selector(sceneChanged:)
         forControlEvents:UIControlEventValueChanged];
   }
-  seg.accessibilityIdentifier = @"sceneControl";
   self.sceneControl = seg;
 
   UILabel *overlayLabel = [UILabel new];
@@ -5131,29 +5199,12 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [overlaySwitch addTarget:self
                     action:@selector(onOverlaySwitch:)
           forControlEvents:UIControlEventValueChanged];
-  overlaySwitch.accessibilityIdentifier = @"overlaySwitch";
   self.overlaySwitch = overlaySwitch;
-
-  UILabel *reduceLabel = [UILabel new];
-  reduceLabel.text = @"Reduce Motion";
-  reduceLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
-  UISwitch *reduceSwitch = [UISwitch new];
-  reduceSwitch.on = NO;
-  [reduceSwitch addTarget:self
-                   action:@selector(onReduceMotionSwitch:)
-         forControlEvents:UIControlEventValueChanged];
-  reduceSwitch.accessibilityIdentifier = @"reduceMotionSwitch";
-  self.reduceSwitch = reduceSwitch;
 
   UIStackView *overlayRow = [[UIStackView alloc]
       initWithArrangedSubviews:@[ overlayLabel, overlaySwitch ]];
   overlayRow.axis = UILayoutConstraintAxisHorizontal;
   overlayRow.spacing = 6.0;
-
-  UIStackView *reduceRow = [[UIStackView alloc]
-      initWithArrangedSubviews:@[ reduceLabel, reduceSwitch ]];
-  reduceRow.axis = UILayoutConstraintAxisHorizontal;
-  reduceRow.spacing = 6.0;
 
   UILabel *inputLabel = [UILabel new];
   inputLabel.text = @"IME Text";
@@ -5164,7 +5215,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   imeView.layer.borderWidth = 1.0;
   imeView.layer.borderColor = [UIColor colorWithWhite:0.8 alpha:1.0].CGColor;
   imeView.layer.cornerRadius = 4.0;
-  imeView.accessibilityIdentifier = @"imeTextView";
   imeView.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.95];
   imeView.text = @"";
   imeView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -5173,35 +5223,30 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
   UIButton *imeFocus = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeFocus setTitle:@"Focus" forState:UIControlStateNormal];
-  imeFocus.accessibilityIdentifier = @"imeFocusButton";
   [imeFocus addTarget:self
                 action:@selector(onImeFocus:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeBlur = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeBlur setTitle:@"Blur" forState:UIControlStateNormal];
-  imeBlur.accessibilityIdentifier = @"imeBlurButton";
   [imeBlur addTarget:self
                 action:@selector(onImeBlur:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeCopy = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeCopy setTitle:@"Copy" forState:UIControlStateNormal];
-  imeCopy.accessibilityIdentifier = @"imeCopyButton";
   [imeCopy addTarget:self
                 action:@selector(onImeCopy:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imePaste = [UIButton buttonWithType:UIButtonTypeSystem];
   [imePaste setTitle:@"Paste" forState:UIControlStateNormal];
-  imePaste.accessibilityIdentifier = @"imePasteButton";
   [imePaste addTarget:self
                 action:@selector(onImePaste:)
       forControlEvents:UIControlEventTouchUpInside];
 
   UIButton *imeHaptic = [UIButton buttonWithType:UIButtonTypeSystem];
   [imeHaptic setTitle:@"Haptic" forState:UIControlStateNormal];
-  imeHaptic.accessibilityIdentifier = @"imeHapticButton";
   [imeHaptic addTarget:self
                 action:@selector(onImeHaptic:)
       forControlEvents:UIControlEventTouchUpInside];
@@ -5226,7 +5271,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [animPlay addTarget:self
                 action:@selector(onAnimPlay:)
       forControlEvents:UIControlEventValueChanged];
-  animPlay.accessibilityIdentifier = @"animationPlaySwitch";
   self.animPlaySwitch = animPlay;
 
   UILabel *animPhaseLabel = [UILabel new];
@@ -5239,7 +5283,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [animPhase addTarget:self
                 action:@selector(onAnimPhase:)
       forControlEvents:UIControlEventValueChanged];
-  animPhase.accessibilityIdentifier = @"animationPhaseSlider";
   self.animPhaseSlider = animPhase;
 
   UIStackView *animRow1 = [[UIStackView alloc]
@@ -5260,7 +5303,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damageSwitch addTarget:self
                    action:@selector(onDamageEnable:)
          forControlEvents:UIControlEventValueChanged];
-  damageSwitch.accessibilityIdentifier = @"damageEnableSwitch";
   self.damageEnableSwitch = damageSwitch;
 
   UILabel *damageUseLabel = [UILabel new];
@@ -5273,7 +5315,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damageUse addTarget:self
                 action:@selector(onDamageUse:)
       forControlEvents:UIControlEventValueChanged];
-  damageUse.accessibilityIdentifier = @"damageUseSlider";
   self.damageUseSlider = damageUse;
 
   UILabel *damagePrefLabel = [UILabel new];
@@ -5287,7 +5328,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [damagePref addTarget:self
                  action:@selector(onDamagePref:)
        forControlEvents:UIControlEventValueChanged];
-  damagePref.accessibilityIdentifier = @"damagePrefSlider";
   self.damagePrefSlider = damagePref;
 
   UIStackView *damageRow0 = [[UIStackView alloc]
@@ -5315,7 +5355,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [nineSlice addTarget:self
                 action:@selector(onNineSlice:)
       forControlEvents:UIControlEventValueChanged];
-  nineSlice.accessibilityIdentifier = @"nineSliceSlider";
   self.nineSliceSlider = nineSlice;
 
   UILabel *nineAlphaLabel = [UILabel new];
@@ -5328,7 +5367,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [nineAlpha addTarget:self
                 action:@selector(onNineAlpha:)
       forControlEvents:UIControlEventValueChanged];
-  nineAlpha.accessibilityIdentifier = @"nineAlphaSlider";
   self.nineAlphaSlider = nineAlpha;
 
   UIStackView *nineRow1 =
@@ -5351,7 +5389,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [sdfSlider addTarget:self
                 action:@selector(onSdfFont:)
       forControlEvents:UIControlEventValueChanged];
-  sdfSlider.accessibilityIdentifier = @"sdfFontSlider";
   self.sdfSlider = sdfSlider;
 
   UIStackView *sdfRow =
@@ -5361,7 +5398,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
   UIButton *snapshotButton = [UIButton buttonWithType:UIButtonTypeSystem];
   [snapshotButton setTitle:@"Capture Snapshot" forState:UIControlStateNormal];
-  snapshotButton.accessibilityIdentifier = @"snapshotButton";
   [snapshotButton addTarget:self
                      action:@selector(onSnapshotButton:)
            forControlEvents:UIControlEventTouchUpInside];
@@ -5381,28 +5417,24 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [camBlur addTarget:self
                 action:@selector(onCamBlur:)
       forControlEvents:UIControlEventValueChanged];
-  camBlur.accessibilityIdentifier = @"cameraBlurSwitch";
   self.camBlurSwitch = camBlur;
   UISwitch *camGray = [UISwitch new];
   camGray.on = NO;
   [camGray addTarget:self
                 action:@selector(onCamGray:)
       forControlEvents:UIControlEventValueChanged];
-  camGray.accessibilityIdentifier = @"cameraGraySwitch";
   self.camGraySwitch = camGray;
   UISwitch *camAnim = [UISwitch new];
   camAnim.on = YES;
   [camAnim addTarget:self
                 action:@selector(onCamAnim:)
       forControlEvents:UIControlEventValueChanged];
-  camAnim.accessibilityIdentifier = @"cameraAnimateSwitch";
   self.camAnimSwitch = camAnim;
   UISwitch *camCapture = [UISwitch new];
   camCapture.on = YES;
   [camCapture addTarget:self
                  action:@selector(onCamCapture:)
        forControlEvents:UIControlEventValueChanged];
-  camCapture.accessibilityIdentifier = @"cameraCaptureSwitch";
   self.camCaptureSwitch = camCapture;
   UILabel *sigmaLbl = [UILabel new];
   sigmaLbl.text = @"Sigma";
@@ -5414,7 +5446,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   [sigma addTarget:self
                 action:@selector(onCamSigma:)
       forControlEvents:UIControlEventValueChanged];
-  sigma.accessibilityIdentifier = @"cameraSigmaSlider";
   self.camSigmaSlider = sigma;
 
   UIStackView *camRow1 = [[UIStackView alloc] initWithArrangedSubviews:@[
@@ -5432,7 +5463,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   camMetrics.textColor = [UIColor colorWithWhite:0.15 alpha:1.0];
   camMetrics.numberOfLines = 2;
   camMetrics.text = @"Cam 0x0 bd=0 mx=709 rng=full cov=0% fps=0.0 paused=yes";
-  camMetrics.accessibilityIdentifier = @"cameraMetricsLabel";
   self.camMetricsLabel = camMetrics;
   UIStackView *camMetricsRow =
       [[UIStackView alloc] initWithArrangedSubviews:@[ camMetrics ]];
@@ -5440,7 +5470,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   camMetricsRow.spacing = 0.0;
 
   UIStackView *controls = [[UIStackView alloc] initWithArrangedSubviews:@[
-    seg, overlayRow, reduceRow, inputGroup, animRow1, animRow2, damageRow0,
+    seg, overlayRow, inputGroup, animRow1, animRow2, damageRow0,
     damageRow1, damageRow2, nineRow1, nineRow2, sdfRow, snapshotRow, camRow1,
     camRow2, camMetricsRow
   ]];
@@ -5466,7 +5496,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   status.textColor = [UIColor colorWithWhite:0.15 alpha:1.0];
   status.text = @"";
   status.numberOfLines = 2;
-  status.accessibilityIdentifier = @"statusLabel";
   [vc.view addSubview:status];
   [NSLayoutConstraint activateConstraints:@[
     [status.topAnchor constraintEqualToAnchor:controls.bottomAnchor
@@ -5522,6 +5551,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
 - (void)updateDisplayLinkRange {
   if (!self.displayLink) {
+    atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
     return;
   }
   int fps = CurrentTargetFPS();
@@ -5531,6 +5561,8 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   } else {
     self.displayLink.preferredFramesPerSecond = fps;
   }
+  atomic_store_explicit(&gDisplayLinkRangeHz, (uint32_t)fps,
+                        memory_order_release);
 }
 
 - (void)onPowerStateChanged:(NSNotification *)note {
@@ -5539,6 +5571,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidBecomeActive:scene];
+    }
+    return;
+  }
   (void)scene;
   gAppDebugPerf.scene_did_become_active_calls += 1;
   self.displayLinkForegroundActive = YES;
@@ -5551,7 +5591,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     EnsureHostInitialized(gMetalView);
     [self configureActualAppCameraBenchmarkIfNeeded];
     self.overlaySwitch.on = oxide_host_is_overlay_visible() != 0;
-    self.reduceSwitch.on = oxide_host_is_reduce_motion() != 0;
     [self updateDisplayLinkRange];
     [self updateDisplayLinkDemandState];
   } else {
@@ -5561,6 +5600,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneWillResignActive:scene];
+    }
+    return;
+  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;
@@ -5571,6 +5618,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidEnterBackground:scene];
+    }
+    return;
+  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;
@@ -5582,6 +5637,14 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneWillEnterForeground:scene];
+    }
+    return;
+  }
   (void)scene;
   gAppDebugPerf.scene_will_enter_foreground_calls += 1;
   self.displayLinkForegroundActive = YES;
@@ -5598,6 +5661,15 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidDisconnect:(UIScene *)scene {
+  id<UIWindowSceneDelegate> parkedDelegate =
+      [self parkedPerfSceneDelegateIfNeeded];
+  if (parkedDelegate != nil) {
+    if ([parkedDelegate respondsToSelector:_cmd]) {
+      [parkedDelegate sceneDidDisconnect:scene];
+    }
+    self.parkedPerfSceneDelegate = nil;
+    return;
+  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;
@@ -5607,7 +5679,10 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   if (gActiveRustSceneDelegate == self) {
     gActiveRustSceneDelegate = nil;
   }
-  oxide_cam_set_preview_publish_callback(NULL, NULL);
+  if (gActiveRustSceneDelegate == nil) {
+    atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
+  }
+  oxide_cam_set_preview_publish_callback(NULL);
   self.perfCameraPreviewView.previewLayer.session = nil;
   if (self.perfBenchmarkAVFoundationSession != nil) {
     AVCaptureSession *session = self.perfBenchmarkAVFoundationSession;
@@ -5674,7 +5749,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
   if (IsRunningUITest() && !IsRunningPerfBenchmarkHost()) {
     return;
   }
-  (void)link;
   gAppDebugPerf.on_tick_calls += 1;
   uint64_t wakeGeneration = oxide_host_app_wake_generation();
   if (self.displayLinkSuspendedForIdle &&
@@ -5785,9 +5859,10 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
     return;
   }
   double frameCallT0Ms = OxidePerfNowMs();
-  int32_t rc_prepare = oxide_host_app_prepare_frame(
+  int32_t rc_prepare = oxide_host_app_prepare_frame_timed(
       (uint32_t)lrintf((float)size.width), (uint32_t)lrintf((float)size.height),
-      (float)scale);
+      (float)scale, seconds_to_ns(link.timestamp),
+      seconds_to_ns(link.targetTimestamp));
   if (rc_prepare != 0) {
     tickPerf.frame_call_ms = (float)(OxidePerfNowMs() - frameCallT0Ms);
     tickPerf.tick_total_ms = (float)(OxidePerfNowMs() - tickT0Ms);
@@ -5899,6 +5974,7 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 
 - (void)applicationWillTerminate:(UIApplication *)application {
   (void)application;
+  atomic_store_explicit(&gDisplayLinkRangeHz, 0, memory_order_release);
   oxide_host_app_will_terminate();
 }
 

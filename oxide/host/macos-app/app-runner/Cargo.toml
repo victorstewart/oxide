@@ -2,6 +2,7 @@
 name = "oxide-macos-app"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 
 [dependencies]
 oxide_host_macos = { package = "oxide-host-macos", path = "../oxide-host-macos" }

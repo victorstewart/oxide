@@ -309,7 +309,10 @@ impl TouchSurfaceRecognizer {
 
     pub fn on_touch(&mut self, ev: &api::TouchEvent) -> alloc::vec::Vec<TouchSurfaceEvent> {
         let mut out = alloc::vec::Vec::new();
-        if !ev.x.is_finite() || !ev.y.is_finite() {
+        let coordinates_valid = ev.x.is_finite() && ev.y.is_finite();
+        if !coordinates_valid
+            && !matches!(ev.phase, api::TouchPhase::End | api::TouchPhase::Cancel)
+        {
             return out;
         }
 
@@ -339,7 +342,7 @@ impl TouchSurfaceRecognizer {
                 y: after.y,
             });
         }
-        if !matches!(ev.phase, api::TouchPhase::Move) {
+        if !coordinates_valid || !matches!(ev.phase, api::TouchPhase::Move) {
             return out;
         }
 

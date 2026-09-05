@@ -196,7 +196,7 @@ impl OverlayStack {
     pub fn encode_retained(
         &mut self,
         builder: &mut DrawListBuilder,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+        _text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
     ) -> RetainedOverlayStats {
         let mut stats = RetainedOverlayStats::default();
         for entry in &mut self.entries {
@@ -206,11 +206,7 @@ impl OverlayStack {
                 entry.visual.tint,
                 entry.visual.alpha,
             );
-            let status = if let Some(atlases) = text_atlases {
-                entry.surface.encode_retained_with_text_atlas_revisions(builder, atlases)
-            } else {
-                entry.surface.encode_retained(builder)
-            };
+            let status = entry.surface.encode_retained(builder);
             stats.record(status);
         }
         stats
@@ -479,7 +475,7 @@ impl PopupManager {
     pub fn encode_retained(
         &mut self,
         builder: &mut DrawListBuilder,
-        text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
+        _text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
     ) -> RetainedOverlayStats {
         let mut stats = RetainedOverlayStats::default();
         for entry in &mut self.entries {
@@ -489,11 +485,7 @@ impl PopupManager {
                 entry.visual.tint,
                 entry.visual.alpha,
             );
-            let status = if let Some(atlases) = text_atlases {
-                entry.surface.encode_retained_with_text_atlas_revisions(builder, atlases)
-            } else {
-                entry.surface.encode_retained(builder)
-            };
+            let status = entry.surface.encode_retained(builder);
             stats.record(status);
         }
         stats

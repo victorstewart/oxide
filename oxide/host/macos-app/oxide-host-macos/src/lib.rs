@@ -95,7 +95,6 @@ struct AppState {
     inited: bool,
     space_down: bool,
     high_refresh_on: bool,
-    reduce_motion_on: bool,
     idle_disabled: bool,
     telemetry: Option<Arc<TelemetryHub>>,
     telemetry_ops: Option<Arc<TelemetryOperations>>,
@@ -237,7 +236,6 @@ pub extern "C" fn macos_app_init(w: u32, h: u32, scale: f32) -> ::libc::c_int {
     app.last_ms = timing::now_ms();
     app.inited = true;
     app.high_refresh_on = true;
-    app.reduce_motion_on = false;
     app.idle_disabled = true;
     app.builder.clear();
     mark_frame_dirty(&mut app);
@@ -302,7 +300,6 @@ pub fn host_harness_reset() {
     app.telemetry_ops = None;
     app.inited = false;
     app.high_refresh_on = true;
-    app.reduce_motion_on = false;
     app.idle_disabled = false;
     app.last_ms = 0;
     app.touch = PrimaryTouchTracker::default();
@@ -810,15 +807,6 @@ extern "C" fn key_cb(
                         app.high_refresh_on = !app.high_refresh_on;
                         unsafe {
                             macos_set_high_refresh(if app.high_refresh_on { 1 } else { 0 });
-                        }
-                    }
-                }
-                'm' | 'M' => {
-                    if !is_up {
-                        app.reduce_motion_on = !app.reduce_motion_on;
-                        let rm = app.reduce_motion_on;
-                        if let Some(router) = app.router.as_mut() {
-                            router.set_reduce_motion(rm);
                         }
                     }
                 }

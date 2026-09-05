@@ -44,7 +44,6 @@ The router owns one state object per scene and switches between them by `SceneKi
 
 Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, one-finger pan events are replayed through the existing pointer-drag entry point, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Two-touch center pan events emitted by the recognizer are not replayed as one-finger drags because pinch surfaces cancel drag ownership while two touches are active. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
 
-
 ## Preconditions and postconditions
 
 - Preconditions:
@@ -81,7 +80,6 @@ The headline cases deliberately avoid new benchmark-only abstractions. Reusing e
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
 - `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, caller-owned damage storage reuse, and warmed overlay draw allocation reuse.
 - Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
-- The same suite proves the identity-only capture path accepts all five release candidates without requiring or inventing runnable scenario manifests and rejects unknown identities.
 
 ## Examples
 
@@ -95,6 +93,7 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 - 2026-07-14: bracketed each complete router draw with one C43 text-preparation frame and one pre-render atlas publication.
 - 2026-07-13: moved scene animation overrides onto the animator-owned dense C26 slot store instead of copying a per-frame map.
 
+- 2026-08-06: removed the platform motion-preference setter plus its per-frame overlay state and formatting.
 - 2026-06-02: Added router-owned overlay text scratch and warmed overlay draw allocation coverage.
 - 2026-06-02: Added `take_damage_into` so allocation-audited hosts can reuse caller-owned damage storage.
 - 2026-06-02: Removed per-frame static label/button string allocations from the Controls scene draw path.

@@ -20,50 +20,213 @@ pub mod id_mask_compositor;
 pub mod neon_marker;
 pub mod scene3d;
 
-/// Static 2D pipeline families declared by a browser host.
+/// Static 2D pipeline families a browser renderer may construct.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BrowserDrawPipeline { Solid, RRect, ImageRgba, ImageA8, NineSliceRgba, NineSliceA8, Spinner, NeonMarker, GlyphRgba, GlyphA8, GlyphSdf, Rgba, A8, Sdf, Effect }
+pub enum BrowserDrawPipeline
+{
+   Solid,
+   RRect,
+   ImageRgba,
+   ImageA8,
+   NineSliceRgba,
+   NineSliceA8,
+   Spinner,
+   NeonMarker,
+   GlyphRgba,
+   GlyphA8,
+   GlyphSdf,
+   Rgba,
+   A8,
+   Sdf,
+   Effect,
+}
 
-/// Static Scene3D blend/depth pipeline families declared by a browser host.
+/// Static Scene3D blend/depth pipeline families a browser renderer may construct.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BrowserScene3dPipeline { AlphaDepthRead, AlphaDepthWrite, AlphaNoTestDepthWrite, AlphaNoDepth, AdditiveDepthRead, AdditiveDepthWrite, AdditiveNoTestDepthWrite, AdditiveNoDepth }
-
-impl BrowserScene3dPipeline {
-    #[must_use]
-    pub const fn from_state(blend: scene3d::BlendMode3d, depth_test: bool, depth_write: bool) -> Self {
-        match (blend, depth_test, depth_write) {
-            (scene3d::BlendMode3d::Additive, true, true) => Self::AdditiveDepthWrite,
-            (scene3d::BlendMode3d::Additive, false, true) => Self::AdditiveNoTestDepthWrite,
-            (scene3d::BlendMode3d::Additive, true, false) => Self::AdditiveDepthRead,
-            (scene3d::BlendMode3d::Additive, false, false) => Self::AdditiveNoDepth,
-            (scene3d::BlendMode3d::Alpha, true, true) => Self::AlphaDepthWrite,
-            (scene3d::BlendMode3d::Alpha, false, true) => Self::AlphaNoTestDepthWrite,
-            (scene3d::BlendMode3d::Alpha, true, false) => Self::AlphaDepthRead,
-            (scene3d::BlendMode3d::Alpha, false, false) => Self::AlphaNoDepth,
-        }
-    }
+pub enum BrowserScene3dPipeline
+{
+   AlphaDepthRead,
+   AlphaDepthWrite,
+   AlphaNoTestDepthWrite,
+   AlphaNoDepth,
+   AdditiveDepthRead,
+   AdditiveDepthWrite,
+   AdditiveNoTestDepthWrite,
+   AdditiveNoDepth,
 }
 
-/// Construction-time declaration retained for WebAssembly hosts. Pipeline construction is owned
-/// by the shared browser renderer; this value remains the host's stable capability vocabulary.
+impl BrowserScene3dPipeline
+{
+   /// Resolves the pipeline family used by one Scene3D instance state.
+   #[must_use]
+   pub const fn from_state(
+      blend: scene3d::BlendMode3d,
+      depth_test: bool,
+      depth_write: bool,
+   ) -> Self
+   {
+      match (blend, depth_test, depth_write)
+      {
+         (scene3d::BlendMode3d::Additive, true, true) => Self::AdditiveDepthWrite,
+         (scene3d::BlendMode3d::Additive, false, true) => Self::AdditiveNoTestDepthWrite,
+         (scene3d::BlendMode3d::Additive, true, false) => Self::AdditiveDepthRead,
+         (scene3d::BlendMode3d::Additive, false, false) => Self::AdditiveNoDepth,
+         (scene3d::BlendMode3d::Alpha, true, true) => Self::AlphaDepthWrite,
+         (scene3d::BlendMode3d::Alpha, false, true) => Self::AlphaNoTestDepthWrite,
+         (scene3d::BlendMode3d::Alpha, true, false) => Self::AlphaDepthRead,
+         (scene3d::BlendMode3d::Alpha, false, false) => Self::AlphaNoDepth,
+      }
+   }
+}
+
+const BROWSER_DRAW_PIPELINE_COUNT: u32 = BrowserDrawPipeline::Effect as u32 + 1;
+const BROWSER_SCENE3D_PIPELINE_COUNT: u32 =
+   (BrowserScene3dPipeline::AdditiveNoDepth as u32 + 1) * 3;
+const BROWSER_DRAW_PIPELINES_ALL: u16 = (1_u16 << BROWSER_DRAW_PIPELINE_COUNT) - 1;
+const BROWSER_SCENE3D_PIPELINES_ALL: u32 = (1_u32 << BROWSER_SCENE3D_PIPELINE_COUNT) - 1;
+
+const fn browser_scene3d_cull_index(cull: scene3d::CullMode3d) -> u32
+{
+   match cull
+   {
+      scene3d::CullMode3d::None => 0,
+      scene3d::CullMode3d::Front => 1,
+      scene3d::CullMode3d::Back => 2,
+   }
+}
+
+/// Construction-time declaration of every static WebGPU pipeline a renderer may use.
+///
+/// Declared pipelines are created eagerly by the constructor. Undeclared pipelines are never
+/// created later; attempting to use one fails the frame before GPU work begins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BrowserRendererPipelineProfile { draw: u16, scene3d: u32, id_mask_compositor: bool }
-
-impl BrowserRendererPipelineProfile {
-    #[must_use] pub const fn empty() -> Self { Self { draw: 0, scene3d: 0, id_mask_compositor: false } }
-    #[must_use] pub const fn full() -> Self { Self { draw: (1 << 15) - 1, scene3d: (1 << 24) - 1, id_mask_compositor: true } }
-    #[must_use] pub const fn with_draw(mut self, pipeline: BrowserDrawPipeline) -> Self { self.draw |= 1 << pipeline as u8; self }
-    #[must_use] pub const fn with_scene3d(mut self, pipeline: BrowserScene3dPipeline, cull: scene3d::CullMode3d) -> Self { let cull = match cull { scene3d::CullMode3d::None => 0, scene3d::CullMode3d::Front => 1, scene3d::CullMode3d::Back => 2 }; self.scene3d |= 1 << (pipeline as u32 * 3 + cull); self }
-    #[must_use] pub const fn with_id_mask_compositor(mut self) -> Self { self.id_mask_compositor = true; self }
-    #[must_use] pub const fn contains_draw(self, pipeline: BrowserDrawPipeline) -> bool { self.draw & (1 << pipeline as u8) != 0 }
-    #[must_use] pub const fn contains_scene3d(self, pipeline: BrowserScene3dPipeline, cull: scene3d::CullMode3d) -> bool { let cull = match cull { scene3d::CullMode3d::None => 0, scene3d::CullMode3d::Front => 1, scene3d::CullMode3d::Back => 2 }; self.scene3d & (1 << (pipeline as u32 * 3 + cull)) != 0 }
-    #[must_use] pub const fn includes_id_mask_compositor(self) -> bool { self.id_mask_compositor }
-    #[must_use] pub const fn declared_pipeline_count(self) -> u32 { self.draw.count_ones() + self.scene3d.count_ones() + if self.id_mask_compositor { 4 } else { 0 } }
+pub struct BrowserRendererPipelineProfile
+{
+   draw: u16,
+   scene3d: u32,
+   id_mask_compositor: bool,
 }
 
-impl Default for BrowserRendererPipelineProfile { fn default() -> Self { Self::full() } }
+impl BrowserRendererPipelineProfile
+{
+   /// Declares no pipelines. Add the exact families the renderer will use.
+   #[must_use]
+   pub const fn empty() -> Self
+   {
+      Self { draw: 0, scene3d: 0, id_mask_compositor: false }
+   }
+
+   /// Declares every renderer pipeline while selecting only one supported ID-mask backend.
+   #[must_use]
+   pub const fn full() -> Self
+   {
+      Self {
+         draw: BROWSER_DRAW_PIPELINES_ALL,
+         scene3d: BROWSER_SCENE3D_PIPELINES_ALL,
+         id_mask_compositor: true,
+      }
+   }
+
+   /// Adds one 2D pipeline family.
+   #[must_use]
+   pub const fn with_draw(mut self, pipeline: BrowserDrawPipeline) -> Self
+   {
+      self.draw |= 1_u16 << pipeline as u8;
+      self
+   }
+
+   /// Adds one exact Scene3D blend/depth/cull pipeline.
+   #[must_use]
+   pub const fn with_scene3d(
+      mut self,
+      pipeline: BrowserScene3dPipeline,
+      cull: scene3d::CullMode3d,
+   ) -> Self
+   {
+      let bit = pipeline as u32 * 3 + browser_scene3d_cull_index(cull);
+      self.scene3d |= 1_u32 << bit;
+      self
+   }
+
+   /// Adds the ID-mask raster, field seed/jump, and compositor pipelines.
+   #[must_use]
+   pub const fn with_id_mask_compositor(mut self) -> Self
+   {
+      self.id_mask_compositor = true;
+      self
+   }
+
+   #[must_use]
+   pub const fn contains_draw(self, pipeline: BrowserDrawPipeline) -> bool
+   {
+      self.draw & (1_u16 << pipeline as u8) != 0
+   }
+
+   #[must_use]
+   pub const fn contains_scene3d(
+      self,
+      pipeline: BrowserScene3dPipeline,
+      cull: scene3d::CullMode3d,
+   ) -> bool
+   {
+      let bit = pipeline as u32 * 3 + browser_scene3d_cull_index(cull);
+      self.scene3d & (1_u32 << bit) != 0
+   }
+
+   #[must_use]
+   pub const fn includes_id_mask_compositor(self) -> bool
+   {
+      self.id_mask_compositor
+   }
+
+   #[cfg(target_arch = "wasm32")]
+   pub(crate) const fn has_draw_pipelines(self) -> bool
+   {
+      self.draw != 0
+   }
+
+   /// Exact number of render pipelines the profile constructs on a compatible adapter.
+   #[must_use]
+   pub const fn declared_pipeline_count(self) -> u32
+   {
+      self.draw.count_ones()
+         + self.scene3d.count_ones()
+         + if self.id_mask_compositor { 4 } else { 0 }
+   }
+
+   #[cfg(target_arch = "wasm32")]
+   pub(crate) const fn has_scene3d_pipelines(self) -> bool
+   {
+      self.scene3d != 0
+   }
+}
+
+impl Default for BrowserRendererPipelineProfile
+{
+   fn default() -> Self
+   {
+      Self::full()
+   }
+}
+
+const _: () =
+{
+   assert!(BrowserRendererPipelineProfile::full().declared_pipeline_count() == 43);
+   assert!(BrowserRendererPipelineProfile::empty()
+      .with_draw(BrowserDrawPipeline::Solid)
+      .with_draw(BrowserDrawPipeline::RRect)
+      .declared_pipeline_count() == 2);
+   assert!(BrowserRendererPipelineProfile::empty()
+      .with_draw(BrowserDrawPipeline::RRect)
+      .with_draw(BrowserDrawPipeline::NeonMarker)
+      .with_scene3d(BrowserScene3dPipeline::AlphaDepthRead, scene3d::CullMode3d::None)
+      .with_scene3d(BrowserScene3dPipeline::AlphaDepthWrite, scene3d::CullMode3d::None)
+      .with_scene3d(BrowserScene3dPipeline::AdditiveDepthRead, scene3d::CullMode3d::None)
+      .with_id_mask_compositor()
+      .declared_pipeline_count() == 9);
+};
 
 const MAX_LAYER_DIMENSION: u32 = 16_384;
 
@@ -831,8 +994,10 @@ mod wasm {
     };
     use crate::solid_color::colored_quad;
     use oxide_renderer_api as api;
+    #[cfg(feature = "diagnostic-instrumentation")]
     use oxide_renderer_api::Renderer;
     use std::collections::BTreeMap;
+    #[cfg(feature = "diagnostic-instrumentation")]
     use std::fmt::Write;
     use wasm_bindgen::{Clamped, JsCast, JsValue};
     use web_sys::{CanvasRenderingContext2d, Document, HtmlCanvasElement, ImageData};
@@ -1879,6 +2044,7 @@ mod wasm {
         }
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     struct CanvasAllocationSummary {
         alloc_count: u64,
         alloc_bytes: u64,
@@ -1892,6 +2058,7 @@ mod wasm {
     }
 
     /// Runs the non-default Canvas2D indexed-quad diagnostic workload on the supplied canvas.
+    #[cfg(feature = "diagnostic-instrumentation")]
     pub fn bench_canvas_indexed_quads(
         canvas: HtmlCanvasElement,
         samples: u32,
@@ -1955,6 +2122,18 @@ mod wasm {
         ))
     }
 
+    /// Reports that the Canvas2D benchmark is absent from product builds.
+    #[cfg(not(feature = "diagnostic-instrumentation"))]
+    pub fn bench_canvas_indexed_quads(
+        _canvas: HtmlCanvasElement,
+        _samples: u32,
+        _frames_per_sample: u32,
+        _quads: u32,
+    ) -> Result<String, api::RenderError> {
+        Err(api::RenderError::Unsupported("diagnostic instrumentation unavailable"))
+    }
+
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_checker_rgba(width: u32, height: u32) -> Vec<u8> {
         let mut rgba =
             vec![0_u8; (width as usize).saturating_mul(height as usize).saturating_mul(4)];
@@ -1974,6 +2153,7 @@ mod wasm {
         rgba
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_indexed_quad_draw_list(tex: api::ImageHandle, quads: u32) -> api::DrawList {
         let quad_count = quads.clamp(1, 4096) as usize;
         let mut list = api::DrawList::default();
@@ -2004,6 +2184,7 @@ mod wasm {
         list
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn add_canvas_allocation_frame(
         summary: &mut CanvasAllocationSummary,
         before: oxide_wasm_alloc_counter::AllocationSnapshot,
@@ -2034,6 +2215,7 @@ mod wasm {
         summary.peak_frame_alloc_bytes = summary.peak_frame_alloc_bytes.max(frame_alloc_bytes);
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_allocation_metrics(summary: &CanvasAllocationSummary) -> String {
         format!(
             ";wasm_alloc_count={};wasm_alloc_bytes={};wasm_dealloc_count={};wasm_dealloc_bytes={};wasm_realloc_count={};wasm_realloc_grow_bytes={};wasm_realloc_shrink_bytes={};wasm_allocating_frames={};wasm_peak_frame_alloc_bytes={}",
@@ -2049,6 +2231,7 @@ mod wasm {
         )
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn frame_pacing_metrics(frame_values_ms: &[f64]) -> String {
         let mut out = String::new();
         let denom = frame_values_ms.len().max(1) as f64;
@@ -2068,6 +2251,7 @@ mod wasm {
         out
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn canvas_stats_metrics(stats: WebRendererStats) -> String {
         format!(
             ";draws={};draw_items={};draw_items_coalesced={};draw_pipeline_binds={};draw_bind_group_binds={};draw_scissor_sets={};solid_tris={};rrect_instances={};rrect_triangles={};rrect_instance_bytes={};image_instances={};image_triangles={};image_instance_bytes={};image_draws={};image_mesh_draws={};nine_slice_draws={};nine_slice_instances={};nine_slice_triangles={};nine_slice_instance_bytes={};glyph_quads={};sdf_glyph_quads={};clip_depth_peak={};damage_rects={};render_passes={};clear_passes={};draw_passes={};present_passes={};texture_copies={};command_buffers={};id_mask_uniform_writes={};id_mask_uniform_bytes={};id_mask_uniform_slots={};spinner_instances={};spinner_triangles={};spinner_instance_bytes={};neon_marker_instances={};neon_marker_triangles={};neon_marker_instance_bytes={};buffer_upload_bytes={};property_upload_bytes={};property_records_updated={};property_ring_bytes={};texture_upload_bytes={};buffer_grows={};texture_creates={};bind_group_creates={};pipeline_creates={};sampler_creates={};image_texture_creates={};image_bind_group_creates={};cpu_scratch_bytes={};cpu_scratch_grows={};cpu_scratch_growth_bytes={}",
@@ -2127,6 +2311,7 @@ mod wasm {
         )
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn average(values: &[f64]) -> f64 {
         if values.is_empty() {
             return 0.0;
@@ -2134,6 +2319,7 @@ mod wasm {
         values.iter().copied().sum::<f64>() / values.len() as f64
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn percentile(sorted_values: &[f64], percentile: f64) -> f64 {
         if sorted_values.is_empty() {
             return 0.0;
@@ -2144,6 +2330,7 @@ mod wasm {
         sorted_values[index]
     }
 
+    #[cfg(feature = "diagnostic-instrumentation")]
     fn perf_now() -> f64 {
         web_sys::window()
             .and_then(|window| window.performance())

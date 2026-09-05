@@ -5,14 +5,24 @@ options:
     iOS: 18.0
 settings:
   base:
+    "ARCHS[sdk=iphonesimulator*]": arm64
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
 schemes:
-  OxideHost:
+  OxideUIKitPerf:
     build:
       targets:
-        OxideHost: all
-    run:
-      config: Debug
+        OxideHost:
+          - test
+        OxideHostPerfTests:
+          - test
+        OxideHostUITests:
+          - test
+      buildImplicitDependencies: false
+    test:
+      config: Release
+      targets:
+        - OxideHostPerfTests
+        - OxideHostUITests
 targets:
   OxideHost:
     type: application
@@ -22,7 +32,11 @@ targets:
         excludes:
           - OxideHost.xcodeproj
           - project.yml
+          - OxideHostUITests
+          - OxideHostPerfTests
+          - PerfShared
           - Resources
+      - path: PerfShared
     resources:
       - Info.plist
       - capabilities.toml
@@ -72,7 +86,8 @@ targets:
           set -euo pipefail
           PROJECT_DIR="${PROJECT_DIR}"
           REPO_ROOT="$(cd "${PROJECT_DIR}/../../.." && pwd)"
-          export CARGO_TARGET_DIR="${REPO_ROOT}/target"
+          CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target}"
+          export CARGO_TARGET_DIR
           # Determine Rust target triple from SDK
           case "${PLATFORM_NAME}" in
             iphoneos)
@@ -82,6 +97,8 @@ targets:
               RUST_TARGET="aarch64-apple-ios-sim"
               ;;
           esac
+          RUST_IOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-18.0}"
+          mkdir -p "${CARGO_TARGET_DIR}"
           HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/xcode-host-clang.sh"
           cat > "${HOST_LINKER_WRAPPER}" <<'EOF'
           #!/bin/sh
@@ -91,8 +108,41 @@ targets:
           echo "Building Rust staticlib for ${RUST_TARGET}…"
           (cd "${REPO_ROOT}/host/ios-app/oxide-host-ios" && \
              export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}" && \
-             unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \
-             cargo build -p oxide-host-ios --release --features perf-host-stubs --target "${RUST_TARGET}")
+             export IPHONEOS_DEPLOYMENT_TARGET="${RUST_IOS_DEPLOYMENT_TARGET}" && \
+             unset SDKROOT SDK_DIR SDK_NAME && \
+             cargo build --locked -p oxide-host-ios --release --features perf-host-stubs,test-scenes-entrypoint,tokio-runtime --target "${RUST_TARGET}")
           mkdir -p "${BUILT_PRODUCTS_DIR}"
           SRC="${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_host_ios.a"
           cp -v "${SRC}" "${BUILT_PRODUCTS_DIR}/liboxide_host_ios.a"
+    scheme:
+      testTargets:
+        - OxideHostUITests
+  OxideHostUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: OxideHostUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host.UITests
+        INFOPLIST_FILE: OxideHostUITests/Info.plist
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: 18.0
+    dependencies:
+      - target: OxideHost
+  OxideHostPerfTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PerfShared
+      - path: OxideHostPerfTests
+    dependencies:
+      - target: OxideHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host.PerfTests
+        INFOPLIST_FILE: OxideHostPerfTests/Info.plist
+        SWIFT_VERSION: 5.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: 18.0

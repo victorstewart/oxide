@@ -5,6 +5,7 @@
 #import <CoreMotion/CoreMotion.h>
 #import <Foundation/Foundation.h>
 #import <Photos/Photos.h>
+#import <TargetConditionals.h>
 #import <UIKit/UIKit.h>
 #import <UserNotifications/UserNotifications.h>
 #import <dispatch/dispatch.h>
@@ -16,8 +17,10 @@
 
 extern void oxide_host_emit_perm(uint32_t domain, uint32_t status)
     __attribute__((weak_import));
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 extern void nametag_host_update_permission(int32_t domain, int32_t status)
     __attribute__((weak_import));
+#endif
 extern void oxide_ble_init(void) __attribute__((weak_import));
 
 enum {
@@ -38,15 +41,17 @@ enum {
   kOxPermDomainMediaLibrary = 7,
 };
 
+static _Atomic(uint32_t) g_media_library_cached_oxide_status =
+    ATOMIC_VAR_INIT(kOxPermStatusNotDetermined);
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static const int32_t kNametagPermissionDomainLocation = 1;
 static const int32_t kNametagPermissionDomainCamera = 2;
 static const int32_t kNametagPermissionDomainBluetooth = 4;
 static const int32_t kNametagPermissionDomainMicrophone = 6;
 static const int32_t kNametagPermissionDomainMediaLibrary = 7;
-static _Atomic(uint32_t) g_media_library_cached_oxide_status =
-    ATOMIC_VAR_INIT(kOxPermStatusNotDetermined);
 static _Atomic(int32_t) g_media_library_cached_nametag_status =
     ATOMIC_VAR_INIT(0);
+#endif
 
 static void dispatch_main_async(void (^block)(void)) {
   if ([NSThread isMainThread]) {
@@ -83,6 +88,7 @@ static void emit_oxide_permission_async(uint32_t domain, uint32_t status) {
   });
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static void emit_nametag_permission_async(int32_t domain, int32_t status) {
   if (nametag_host_update_permission == NULL) {
     return;
@@ -91,6 +97,7 @@ static void emit_nametag_permission_async(int32_t domain, int32_t status) {
     nametag_host_update_permission(domain, status);
   });
 }
+#endif
 
 static void emit_location_permission_updates(void);
 
@@ -172,6 +179,7 @@ oxide_status_from_photo_authorization(PHAuthorizationStatus status) {
   }
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t
 nametag_status_from_photo_authorization(PHAuthorizationStatus status) {
   switch (status) {
@@ -189,6 +197,7 @@ nametag_status_from_photo_authorization(PHAuthorizationStatus status) {
     return 0;
   }
 }
+#endif
 
 static uint32_t
 oxide_status_from_contact_authorization(CNAuthorizationStatus status) {
@@ -273,9 +282,11 @@ static uint32_t oxide_bluetooth_permission_status(void) {
   return kOxPermStatusAuthorized;
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t nametag_bluetooth_permission_status(void) {
   return (int32_t)oxide_bluetooth_permission_status();
 }
+#endif
 
 static uint32_t oxide_motion_permission_status(void) {
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 110000
@@ -324,27 +335,33 @@ static uint32_t oxide_location_permission_status(void) {
   }
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t nametag_location_permission_status(void) {
   return (int32_t)oxide_location_permission_status();
 }
+#endif
 
 static uint32_t oxide_camera_permission_status(void) {
   return oxide_status_from_av_authorization(
       [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]);
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t nametag_camera_permission_status(void) {
   return (int32_t)oxide_camera_permission_status();
 }
+#endif
 
 static uint32_t oxide_microphone_permission_status(void) {
   return oxide_status_from_record_permission(
       AVAudioApplication.sharedInstance.recordPermission);
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t nametag_microphone_permission_status(void) {
   return (int32_t)oxide_microphone_permission_status();
 }
+#endif
 
 static PHAuthorizationStatus current_photo_authorization(void) {
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 140000
@@ -360,9 +377,11 @@ static void cache_media_library_permission_status(PHAuthorizationStatus status) 
   atomic_store_explicit(&g_media_library_cached_oxide_status,
                         oxide_status_from_photo_authorization(status),
                         memory_order_relaxed);
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   atomic_store_explicit(&g_media_library_cached_nametag_status,
                         nametag_status_from_photo_authorization(status),
                         memory_order_relaxed);
+#endif
 }
 
 static void refresh_media_library_permission_status(void) {
@@ -375,17 +394,21 @@ static uint32_t oxide_media_library_permission_status(void) {
                               memory_order_relaxed);
 }
 
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
 static int32_t nametag_media_library_permission_status(void) {
   refresh_media_library_permission_status();
   return atomic_load_explicit(&g_media_library_cached_nametag_status,
                               memory_order_relaxed);
 }
+#endif
 
 static void emit_location_permission_updates(void) {
   emit_oxide_permission_async(kOxPermDomainLocation,
                               oxide_location_permission_status());
+#ifndef OXIDE_PLATFORM_IOS_DISABLE_NAMETAG_BRIDGE
   emit_nametag_permission_async(kNametagPermissionDomainLocation,
                                 nametag_location_permission_status());
+#endif
 }
 
 void oxide_host_clipboard_set(const char *utf8, size_t len) {
@@ -432,6 +455,128 @@ void oxide_host_string_free(char *p) {
   if (p != NULL) {
     free(p);
   }
+}
+
+static UIScreen *oxide_host_active_screen(void) {
+  __block UIScreen *active = nil;
+  dispatch_main_sync(^{
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+      if (![scene isKindOfClass:UIWindowScene.class]) {
+        continue;
+      }
+      UIWindowScene *window_scene = (UIWindowScene *)scene;
+      if (active == nil) {
+        active = window_scene.screen;
+      }
+      if (scene.activationState == UISceneActivationStateForegroundActive) {
+        active = window_scene.screen;
+        break;
+      }
+    }
+  });
+  return active;
+}
+
+void oxide_host_set_idle_timer_disabled(uint8_t disabled) {
+  dispatch_main_async(^{
+    UIApplication.sharedApplication.idleTimerDisabled = disabled != 0;
+  });
+}
+
+void oxide_host_open_system_settings(void) {
+  dispatch_main_async(^{
+    NSURL *url = [NSURL URLWithString:UIApplicationOpenSettingsURLString];
+    if (url != nil) {
+      [UIApplication.sharedApplication openURL:url
+                                       options:@{}
+                             completionHandler:nil];
+    }
+  });
+}
+
+int32_t oxide_host_open_external_url(const uint8_t *url_ptr, size_t url_len) {
+  if (url_ptr == NULL || url_len == 0) {
+    return 0;
+  }
+  NSString *value = [[NSString alloc] initWithBytes:url_ptr
+                                             length:url_len
+                                           encoding:NSUTF8StringEncoding];
+  NSURL *url = value.length > 0 ? [NSURL URLWithString:value] : nil;
+  if (url == nil || url.scheme.length == 0) {
+    return 0;
+  }
+  __block int32_t opened = 0;
+  dispatch_main_sync(^{
+    UIApplication *application = UIApplication.sharedApplication;
+    if (application == nil || ![application canOpenURL:url]) {
+      return;
+    }
+    [application openURL:url options:@{} completionHandler:nil];
+    opened = 1;
+  });
+  return opened;
+}
+
+uint32_t oxide_host_max_framerate_hz(void) {
+  UIScreen *screen = oxide_host_active_screen();
+  return screen != nil ? (uint32_t)MAX(screen.maximumFramesPerSecond, 1) : 60;
+}
+
+float oxide_host_native_scale(void) {
+  UIScreen *screen = oxide_host_active_screen();
+  return screen != nil ? (float)MAX(screen.nativeScale, 1.0) : 1.0f;
+}
+
+uint8_t oxide_host_supports_edr(void) {
+  UIScreen *screen = oxide_host_active_screen();
+  return screen != nil && screen.potentialEDRHeadroom > 1.0 ? 1 : 0;
+}
+
+uint8_t oxide_host_is_simulation(void) {
+#if TARGET_OS_SIMULATOR
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+int32_t oxide_host_standard_path(uint32_t kind, uint8_t **out_ptr,
+                                 size_t *out_len) {
+  if (out_ptr == NULL || out_len == NULL) {
+    return 0;
+  }
+  *out_ptr = NULL;
+  *out_len = 0;
+  NSURL *url = nil;
+  NSFileManager *files = NSFileManager.defaultManager;
+  if (kind == 0 || kind == 1) {
+    NSSearchPathDirectory directory =
+        kind == 0 ? NSApplicationSupportDirectory : NSCachesDirectory;
+    url = [[files URLsForDirectory:directory inDomains:NSUserDomainMask]
+        lastObject];
+  } else if (kind == 2) {
+    NSString *temporary = NSTemporaryDirectory();
+    url = temporary.length > 0
+              ? [NSURL fileURLWithPath:temporary isDirectory:YES]
+              : nil;
+  }
+  url = [url URLByAppendingPathComponent:@"Oxide" isDirectory:YES];
+  if (url == nil ||
+      ![files createDirectoryAtURL:url
+       withIntermediateDirectories:YES
+                        attributes:nil
+                             error:nil]) {
+    return 0;
+  }
+  NSData *bytes = [url.path dataUsingEncoding:NSUTF8StringEncoding];
+  uint8_t *copy = bytes.length > 0 ? malloc(bytes.length) : NULL;
+  if (copy == NULL) {
+    return 0;
+  }
+  memcpy(copy, bytes.bytes, bytes.length);
+  *out_ptr = copy;
+  *out_len = bytes.length;
+  return 1;
 }
 
 static UIImpactFeedbackGenerator *
@@ -731,7 +876,6 @@ int32_t nametag_ios_permission_status(int32_t domain) {
     return 0;
   }
 }
-#endif
 
 void nametag_ios_clipboard_set(const char *utf8, size_t len) {
   oxide_host_clipboard_set(utf8, len);
@@ -769,3 +913,4 @@ int32_t nametag_ios_open_external_url(const char *utf8, size_t len) {
 void nametag_ios_haptics_play(int32_t pattern) {
   oxide_host_haptics_play((uint32_t)MAX(pattern, 0));
 }
+#endif
