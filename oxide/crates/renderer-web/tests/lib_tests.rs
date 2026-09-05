@@ -225,18 +225,13 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
    ));
-   assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
-   assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
-   assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
-   assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
-   assert!(javascript.contains("generation.devicePromise"));
-   assert!(javascript.contains("state.generations.add(generation)"));
-   assert!(javascript.contains("state.adapterLeases.set(adapter, lease)"));
+   assert!(!javascript.contains("requestAdapter"));
+   assert!(!javascript.contains("requestDevice"));
+   assert!(!javascript.contains("device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
-   assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
+   assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
    assert!(javascript.contains("if (!event.persisted)"));
-   assert!(javascript.contains("generation.device.destroy()"));
    assert!(javascript.contains("return Object.freeze({"));
    assert!(!javascript.contains("console."));
 
@@ -244,7 +239,8 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       .split("export function releaseOxideWebGpuDeviceSession")
       .nth(1)
       .expect("device-session release");
-   assert!(release.contains("destroyGeneration"));
+   assert!(release.contains("rendererLeaseCount"));
+   assert!(!release.contains("destroy"));
 }
 
 #[test]
