@@ -1,0 +1,9 @@
+[
+  {
+    "at_us": 0,
+    "op": "mutate",
+    "target": "feed:item:0300:favorite",
+    "value": true,
+    "state_id": "feed:item:0300:favorited"
+  }
+]

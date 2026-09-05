@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "feed.variable-scroll",
+  "scale": "two_x",
+  "dimension": "dataset_cardinality",
+  "transform": "namespaced_dataset_shards",
+  "base_cardinality": 2000,
+  "effective_cardinality": 4000,
+  "fixture": {
+    "path": "fixtures/feed.variable-scroll.json",
+    "sha256": "e96e75c68268cc188fee5ab0c5ae84b6be23fea17c05636a8769976c705d2e04"
+  }
+}

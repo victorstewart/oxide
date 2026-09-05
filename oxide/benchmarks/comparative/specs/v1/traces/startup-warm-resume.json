@@ -1,0 +1,14 @@
+[
+  {
+    "at_us": 0,
+    "op": "background",
+    "target": "warm-resume",
+    "state_id": "startup:backgrounded"
+  },
+  {
+    "at_us": 1,
+    "op": "foreground",
+    "target": "warm-resume",
+    "state_id": "startup:resume-requested"
+  }
+]

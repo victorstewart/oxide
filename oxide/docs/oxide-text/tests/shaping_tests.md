@@ -11,6 +11,8 @@
 ## Entry points list
 - `latin_text_shapes_into_atlas`
   Shapes Latin text and verifies glyph vertices, indices, and atlas pixels.
+- `shaped_width_tracks_requested_font_size`
+  Verifies Rustybuzz design-unit advances scale proportionally with the requested pixel size.
 - `shaped_prefix_widths_match_ascii_prefix_shapes`
   Verifies one shaped-run prefix widths match repeated prefix shaping for simple ASCII text.
 - `shaped_prefix_widths_follow_combining_grapheme_boundaries`
@@ -41,11 +43,16 @@
   Verifies whitespace or missing visible glyphs do not create geometry.
 - `fallback_decisions_invalidate_for_font_database_and_chain_changes`
   Verifies a newly added fallback font and a changed fallback chain cannot reuse stale cached coverage or font decisions.
+- `variable_font_coordinates_affect_shaping_and_rasterization`
+  Verifies a pinned width coordinate changes Rustybuzz advances and a pinned weight coordinate changes Swash bitmap coverage.
+- `device_scale_rasterizes_a8_glyphs_at_physical_resolution`
+  Verifies 3x A8 baking uses a distinct larger physical raster while preserving logical quad geometry in both `Atlas` and `PagedAtlas`.
 
 ## Logic narrative
 - Tests load fixed Latin and CJK fixture fonts to avoid platform font differences.
 - The library's test-only SDF oracle compares the exact EDT with the retired 17x17 search at a predeclared zero-byte tolerance for synthetic holes/thin strokes and the Latin/CJK 2x/3x by 48/96 px glyph matrix.
 - Prefix-width tests derive caret positions from one shaped run, compare the result against repeated prefix shaping where that is a valid ASCII oracle, and verify owned-run cache reuse does not change the cursor map.
+- The font-size test compares two requested sizes for the same pinned face, rejecting an implementation that mistakes Rustybuzz design units for 26.6 pixel units.
 - Cursor-map tests validate both the shaped width table and UTF-8 byte ranges, so text input code cannot split combining or ZWJ clusters while mapping pointer x positions.
 - Atlas-pressure coverage uses a deliberately small atlas and feeds unique glyphs until a stale slot must be reused.
 - The pressure tests check the current glyph-run spans, atlas revision, resident dirty rectangle, and eviction counter rather than depending on private atlas coordinates.
@@ -89,6 +96,8 @@ cargo test --locked -p oxide-text --test shaping_tests
 ```
 
 ## Changelog
+- 2026-07-26: covered immutable variable-axis shaping/rasterization and physical-resolution A8 glyph baking with logical-geometry preservation.
+- 2026-07-26: added requested-font-size width scaling coverage for the units-per-em shaping correction.
 - 2026-07-14: added fallback cache invalidation coverage and documented the exact zero-tolerance SDF reference matrix.
 - 2026-07-14: added whole-frame pin coverage for pre-existing visible glyph slots.
 - 2026-06-01: added full-slot clear/dirty coverage for smaller replacement glyphs reusing larger evicted atlas slots.

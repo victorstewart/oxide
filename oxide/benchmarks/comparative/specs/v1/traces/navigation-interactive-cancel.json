@@ -1,0 +1,36 @@
+[
+  {
+    "at_us": 0,
+    "op": "pointer-down",
+    "pointer": 1,
+    "x_millionths": 950000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 250000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 750000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 500000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 500000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 750000,
+    "op": "pointer-cancel",
+    "pointer": 1,
+    "x_millionths": 500000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1000000,
+    "op": "navigate",
+    "target": "navigation:cancel",
+    "state_id": "navigation:list-restored"
+  }
+]

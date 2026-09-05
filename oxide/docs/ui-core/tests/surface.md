@@ -84,6 +84,8 @@ assert!(dirty.visited_nodes < cold.visited_nodes);
 ```
 
 ## Changelog
+
+- 2026-07-18: updated retained square-image fixtures to carry explicit zero radii.
 - 2026-07-13: added C26 zero-geometry animation, nested transform/clip/hit/accessibility, and slot-generation reuse coverage.
 - 2026-07-13: Added C23 hard-budget, LRU/hot protection, churn suppression/readmission, external identity, and exact zero-budget fallback coverage.
 - 2026-06-01: Added coverage that dirty text atlases are not retained-replay-safe until the dirty upload is cleared.

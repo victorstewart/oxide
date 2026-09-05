@@ -1,0 +1,18 @@
+{
+  "checkpoint_id": "reversed",
+  "model": {
+    "detail_tile_id": null,
+    "route": "grid",
+    "scroll_position_millionths": 250000,
+    "thumbnail_count": 256,
+    "tile_count": 10000
+  },
+  "scenario_id": "grid.large-scroll",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {"count": 1, "role": "thumbnail-grid"},
+    {"count": 18, "role": "grid-tile"},
+    {"count": 18, "role": "thumbnail"},
+    {"count": 18, "role": "tile-label"}
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "coordinate_space": "logical-points",
+  "interactive_cancel_fraction": 0.5,
+  "list": {
+    "inset": 16,
+    "row_gap": 8,
+    "row_height": 54
+  },
+  "modal": {
+    "corner_radius": 16,
+    "height": 580,
+    "width": 342,
+    "x": 24,
+    "y": 132
+  },
+  "root": {
+    "height": 844,
+    "width": 390,
+    "x": 0,
+    "y": 0
+  },
+  "schema_version": 1,
+  "text_masks": [
+    [
+      16,
+      18,
+      358,
+      22
+    ],
+    [
+      26,
+      56,
+      338,
+      744
+    ],
+    [
+      24,
+      132,
+      366,
+      580
+    ]
+  ],
+  "transition": {
+    "checkpoints": [
+      0,
+      0.25,
+      0.5,
+      0.75,
+      1.0
+    ],
+    "curve": "ease-in-out",
+    "duration_ms": 300
+  }
+}

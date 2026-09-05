@@ -1,0 +1,116 @@
+{
+  "checkpoint_id": "fresh-install-ready",
+  "nodes": [
+    {
+      "actions": [],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        16,
+        20,
+        358,
+        48
+      ],
+      "name": "header",
+      "order": 0,
+      "role": "header",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        16,
+        76,
+        358,
+        44
+      ],
+      "name": "navigation",
+      "order": 1,
+      "role": "navigation",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 6,
+      "focused": false,
+      "frame": [
+        16,
+        132,
+        358,
+        552
+      ],
+      "name": "card",
+      "order": 2,
+      "role": "card",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "6",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 6,
+      "focused": false,
+      "frame": [
+        16,
+        132,
+        358,
+        552
+      ],
+      "name": "initial-image",
+      "order": 3,
+      "role": "initial-image",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "6",
+      "visible": true
+    },
+    {
+      "actions": [
+        "activate"
+      ],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        16,
+        776,
+        358,
+        48
+      ],
+      "name": "primary-control",
+      "order": 4,
+      "role": "primary-control",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    }
+  ],
+  "raw_tree_source": "runtime-semantic-tree",
+  "root_frame": [
+    0,
+    0,
+    390,
+    844
+  ],
+  "scenario_id": "startup.first-screen",
+  "schema_version": 2
+}

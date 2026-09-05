@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-07-17T23:06:11-06:00",
+  "repository_commit": "07ba2866476342c42b35f74fedf0b5003f0ceafb",
+  "spec_sha256": "5e5449e8c27ddf892767e13054f1624c75e87115d02dbe3cceb4ec7d9d33adf5",
+  "status": "partial",
+  "device": {
+    "name": "Victor’s iPhone",
+    "model": "iPhone18,2",
+    "os": "iOS 26.5.1 (23F81)",
+    "udid": "00008150-001529C434F8401C",
+    "connection": "usb",
+    "passcode_required": false,
+    "unlocked_since_boot": true
+  },
+  "toolchain": {
+    "host_macos": "26.5.2",
+    "xcode": "26.6 (17F113)",
+    "xcodegen": "2.44.1"
+  },
+  "target_graph": {
+    "project_yml_sha256": "dcbe3ca42c6147095310ded1146a4ed7afa77634b1dddb1eda95bf326ba3c9eb",
+    "project_pbxproj_sha256": "e02a1c85c076c7f755194891b7b5a287b87c731445761e068925f72e04e634ff",
+    "phase0_plan_sha256": "cfe778be584ff3b27bbfd23cc8f9640a57577c5fcacdd956695e03eec7ca4a53",
+    "built_xctestrun_sha256": "fdd82c5ccd4e51ccf3fbd065f60fe278f1267cc3fae2a534a530d5836a237b6e",
+    "public_ui_test_methods": 2,
+    "scenario_named_ui_test_methods": 0,
+    "successful_build_for_testing_count": 1
+  },
+  "signing": {
+    "team_identifier": "6GQ7T2VDQ5",
+    "identity": "Apple Development: Victor Stewart (V9NL9Y9HC3)",
+    "oxide_bundle_identifier": "com.oxide.comparison.oxidebenchios",
+    "uikit_bundle_identifier": "com.oxide.comparison.uikitbenchios",
+    "runner_bundle_identifier": "com.oxide.comparison.controlleruitests.xctrunner",
+    "same_team_all_targets": true,
+    "app_group_profile_available": false,
+    "profile_application_identifier": "6GQ7T2VDQ5.*",
+    "preferred_app_group_failure": "Installed wildcard profiles omit App Groups and Xcode has no usable developer-account token to mint updated profiles."
+  },
+  "transport": {
+    "selected_mode": "per-app-container",
+    "oxide_artifact_sha256": "fb4dca8b488c54b3d92978f12a9ad8de8903132e4c6772aa5cc1851cc0ddb395",
+    "oxide_ack_sha256": "6975c0f6fa1f64490070fb310cf85e5bc2e2a5b7457d38a045cf34b92a8c95f8",
+    "native_artifact_sha256": "987784db2a969f3ea65b82912987a48e69a1a2871da98fe89ded07f2386de3b3",
+    "native_ack_sha256": "47dd21fadffb22228bc96ec575c8016e46f6e8d301232992c4c6de1ae00b660c",
+    "pair_checkpoint_sha256": "45ff1b9e61fe71a6b256e9d51fa2fc3cf7fecb983ecd2647c2f32467c0f39a56",
+    "native_predecessor_matches_oxide": true,
+    "durable_ack_both_sides": true,
+    "host_recovery_both_sides": true,
+    "stale_generation_rejected_without_checkpoint": true,
+    "artifact_persisted_after_runner_termination": true,
+    "post_termination_artifact_sha256": "7174b9bb09c8655cfa86b36cf15d1c9d7eb241888489b0aa47919f3317d4f910",
+    "post_termination_ack_sha256": "96561c04ca24cd52fd5128b2b0dffab06e0db5a980418fca1725c045ccb1a9e1"
+  },
+  "verification": {
+    "host_transport_unit_tests_passed": 3,
+    "host_finalizer_tests_passed": 2,
+    "controller_test_body_executed": false,
+    "controller_attempts": 4,
+    "latest_controller_retry_at": "2026-07-17T23:44:02-06:00",
+    "latest_controller_retry_xctestrun_sha256": "f4f29223b1f8f10ca44aa7961be5127716ca2f4c47ff9c97d74dff37085c535f",
+    "latest_controller_retry_result": "The unlocked USB device launched the signed runner, then XCTest timed out after 62.070 seconds while enabling automation mode before the test body.",
+    "controller_blocker": "Generated runner signed and launched, but XCTest failed before the test body while enabling automation mode: three timeouts and one canceled local-authentication request.",
+    "telemetry_bypass_used": false
+  }
+}

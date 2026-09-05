@@ -1,0 +1,50 @@
+[
+  {
+    "at_us": 0,
+    "op": "pointer-down",
+    "pointer": 1,
+    "state_id": "grid:tile:07500:pressed",
+    "target": "grid:tile:07500",
+    "x_millionths": 500000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 50000,
+    "op": "pointer-up",
+    "pointer": 1,
+    "state_id": "grid:tile:07500:activated",
+    "target": "grid:tile:07500",
+    "x_millionths": 500000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 100000,
+    "op": "navigate",
+    "state_id": "grid:detail:07500",
+    "target": "grid:detail:07500"
+  },
+  {
+    "at_us": 600000,
+    "op": "pointer-down",
+    "pointer": 1,
+    "state_id": "grid:back:pressed",
+    "target": "grid:back",
+    "x_millionths": 100000,
+    "y_millionths": 30000
+  },
+  {
+    "at_us": 650000,
+    "op": "pointer-up",
+    "pointer": 1,
+    "state_id": "grid:back:activated",
+    "target": "grid:back",
+    "x_millionths": 100000,
+    "y_millionths": 30000
+  },
+  {
+    "at_us": 700000,
+    "op": "navigate",
+    "state_id": "grid:collection:restored",
+    "target": "grid:collection"
+  }
+]

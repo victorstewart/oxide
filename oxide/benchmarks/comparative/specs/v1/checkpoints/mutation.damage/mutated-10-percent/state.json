@@ -1,0 +1,15 @@
+{
+  "checkpoint_id": "mutated-10-percent",
+  "model": {
+    "changed_node_count": 1000,
+    "generation": 5,
+    "mutation_class": "10-percent",
+    "node_count": 10000
+  },
+  "scenario_id": "mutation.damage",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {"count": 1, "role": "mutation-surface"},
+    {"count": 10000, "role": "simple-node"}
+  ]
+}

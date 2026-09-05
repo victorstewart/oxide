@@ -1,0 +1,136 @@
+{
+  "checkpoint_id": "recovered",
+  "nodes": [
+    {
+      "actions": [],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        0,
+        0,
+        390,
+        844
+      ],
+      "name": "endurance",
+      "order": 0,
+      "role": "endurance",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 176,
+      "focused": false,
+      "frame": [
+        16,
+        48,
+        358,
+        728
+      ],
+      "name": "label",
+      "order": 1,
+      "role": "label",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "176",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 64,
+      "focused": false,
+      "frame": [
+        16,
+        48,
+        358,
+        728
+      ],
+      "name": "icon-image",
+      "order": 2,
+      "role": "icon-image",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "64",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 32,
+      "focused": false,
+      "frame": [
+        16,
+        48,
+        358,
+        728
+      ],
+      "name": "rounded-card",
+      "order": 3,
+      "role": "rounded-card",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "32",
+      "visible": true
+    },
+    {
+      "actions": [
+        "activate"
+      ],
+      "count": 24,
+      "focused": false,
+      "frame": [
+        16,
+        48,
+        358,
+        728
+      ],
+      "name": "control",
+      "order": 4,
+      "role": "control",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "24",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 4,
+      "focused": false,
+      "frame": [
+        12,
+        42,
+        366,
+        586
+      ],
+      "name": "backdrop-region",
+      "order": 5,
+      "role": "backdrop-region",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "4",
+      "visible": true
+    }
+  ],
+  "raw_tree_source": "runtime-semantic-tree",
+  "root_frame": [
+    0,
+    0,
+    390,
+    844
+  ],
+  "scenario_id": "endurance.churn",
+  "schema_version": 2
+}

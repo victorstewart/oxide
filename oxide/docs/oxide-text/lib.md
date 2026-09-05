@@ -11,6 +11,8 @@
 ## Entry points list
 - `oxide_text::Font::from_bytes(data: Vec<u8>) -> Font`
   Creates an owned font payload for shaping and rasterization.
+- `oxide_text::Font::from_bytes_with_variations(data: Vec<u8>, variations: &[FontVariation]) -> Font`
+  Creates an immutable variable-font instance whose ordered OpenType coordinates are shared by shaping and rasterization.
 - `oxide_text::FontDb::add_font(&mut self, f: Font) -> usize`
   Stores a font and returns its stable font id.
 - `oxide_text::FontDb::font(&self, id: usize) -> Option<&Font>`
@@ -71,8 +73,11 @@
   Reuses owned shaped glyphs and caller-owned raster state to append glyph geometry without cloning cached glyph storage on the common LTR path.
 
 ## Logic narrative
-- `TextShaper` uses `rustybuzz` to shape text and keeps glyph ids plus advances separate from rasterization.
+- `TextShaper` uses `rustybuzz` to shape text, scales design-unit advances and offsets by the requested pixel size divided by the face units-per-em, and keeps that positioned glyph stream separate from rasterization.
+- Borrowed LTR shaping reads the Rustybuzz buffers directly for prefix widths and baking. Owned shapes retain scaled positions in a 24-byte glyph record whose cluster remains the native Rustybuzz `u32`, avoiding a larger cache footprint while preserving UTF-8 boundary conversion at the cursor-map boundary.
 - `RasterCtx` wraps `swash` scaling state, one reusable glyph image, and exact squared-distance-transform scratch so repeated baking reuses raster infrastructure without per-glyph SDF allocation.
+- A8 glyphs rasterize at `logical_px × device_scale` while their emitted quads remain in logical coordinates. SDF glyphs retain logical-resolution rasterization because the shader owns their scale-independent edge reconstruction.
+- Variable-font coordinates are installed on both the Rustybuzz face and Swash scaler, so advance geometry and bitmap coverage come from the same immutable font instance.
 - `Atlas` first attempts monotonic row packing. If there is no free tail space and the new glyph can fit in the atlas, it reuses the least-recently-used resident slot that is large enough for the glyph.
 - Slot-level eviction avoids clearing the whole atlas, which would invalidate unrelated glyph UVs already held by retained draw lists.
 - Eviction is generation-tracked: retained glyph geometry records the atlas revision it was baked against, and the revision changes on eviction or reset.
@@ -81,6 +86,7 @@
 - Evicting into a larger stale slot clears and dirties the full old slot before writing the replacement glyph, so dirty-rect uploads cannot leave stale glyph pixels around smaller replacements.
 - New glyph pixels are unioned into the dirty slot region, so `TextCtx::ensure_gpu` can upload a dirty rectangle instead of the full atlas.
 - Zero-bitmap glyphs such as spaces are cached as no-geometry atlas entries. Warm replay advances the pen without rebuilding raster state or dirtying the atlas.
+- Glyph cache identity packs font, glyph id, logical size, physical raster size, and SDF mode. Cached entries retain both physical atlas bounds and logical placement, avoiding per-hit physical-to-logical rescaling.
 - `ShapeOutput::prefix_widths_for_boundaries` and `OwnedShape::prefix_widths_for_boundaries` map glyph-cluster advances onto caller-provided boundaries, then prefix-sum those advances so UI text inputs can build caret and selection positions without reshaping every prefix.
 - `ShapedCursorMap` combines Unicode grapheme byte boundaries with shaped caret positions, so callers use one artifact for byte ranges, caret positions, and O(log n) x-to-cursor lookup for both ascending LTR and descending pure RTL runs. Mixed LTR/RTL maps keep upstream and downstream x positions at ambiguous run boundaries while preserving the single-position fast path for ordinary text.
 - `TextShaper::cursor_map_with_fallback_fonts` walks grapheme clusters, groups adjacent clusters by the selected font, shapes each run once, and stitches the run prefix widths into one global `ShapedCursorMap`.
@@ -110,6 +116,9 @@
 
 ## Performance notes
 - Cache hits update glyph LRU state without rasterizing or uploading.
+- Retina A8 misses rasterize directly at physical resolution with high-resolution outline hinting disabled; warm hits reuse cached logical placement without division. This avoids bilinear magnification blur without adding warm-frame work.
+- Common LTR prefix and bake paths avoid materializing a temporary positioned-glyph vector.
+- The 24-byte owned shaped-glyph record is a compile-time invariant. A 24-run mirrored A/B against the pre-correction implementation improved all seven affected text cases at p50, p95, and p99; the largest gain was 7.32% for fallback-label encoding.
 - Warm cached `OwnedShape` replay for already-resident LTR glyphs is allocation-free when caller-owned vertex and index buffers have capacity.
 - LRU slot eviction clears and replaces a stale glyph rectangle in place, avoiding full-atlas uploads, stale global atlas resets, and stale edge pixels after smaller replacement glyphs reuse a larger slot.
 - The dirty rectangle is unioned across new or overwritten glyph slots until the caller uploads it.
@@ -126,6 +135,8 @@
 
 ## Testing and benchmarks
 - `crates/text/tests/shaping_tests.rs` covers shaping, reset behavior, atlas revisions, dirty rectangles, full-slot dirtying/clearing after atlas eviction, atlas pressure eviction, same-run and whole-frame eviction protection, and oversize glyph skipping.
+- `crates/text/tests/shaping_tests.rs` verifies requested font size changes shaped width proportionally, guarding the units-per-em position conversion.
+- `crates/text/tests/shaping_tests.rs` verifies immutable variable coordinates affect both width-axis shaping and weight-axis raster coverage, and that 3x A8 rasterization grows physical atlas coverage while preserving logical quad size for both atlas implementations.
 - `crates/text/tests/shaping_tests.rs` also covers shaped-run prefix width maps and cursor maps for ASCII prefixes, combining-grapheme boundaries, ZWJ clusters, pure RTL visual order, mixed-bidi caret affinity, configured fallback-font cursor widths and shape runs, and owned-run reuse parity.
 - The `sdf_tests` unit module retains the retired brute-force SDF implementation as a test-only oracle and requires zero byte delta for holes, thin strokes, edges, Latin/CJK glyphs, 2x/3x scale pressure, and 48/96 px raster sizes. It also verifies scale invalidation and hard fallback-cache capacity enforcement.
 - `crates/text/tests/shaping_tests.rs` verifies fallback decisions invalidate when the font database generation or fallback chain changes.
@@ -140,6 +151,8 @@ assert_eq!(atlas.eviction_count(), 0);
 ```
 
 ## Changelog
+- 2026-07-26: added immutable variable-font coordinates shared by Rustybuzz and Swash, and rasterized A8 glyphs at physical device scale while caching logical placement for allocation-free warm replay.
+- 2026-07-26: corrected Rustybuzz design-unit scaling and glyph offsets, removed common LTR temporary glyph vectors, and retained a compile-time 24-byte owned-glyph footprint after a 24-run mirrored A/B improved all affected p50/p95/p99 cells.
 - 2026-07-14: replaced the per-pixel 17x17 SDF search with an exact separable EDT, reused raster/EDT scratch, cached stable parsed Swash font identity, and added bounded context-invalidated fallback preparation caches.
 - 2026-07-14: added frame-wide atlas eviction locking and opt-in cache/raster counters for C43 frame-scoped text preparation.
 - 2026-06-02: removed cached `OwnedShape` glyph-vector clones on the common replay path, cached zero-bitmap glyphs as no-geometry entries, and added allocation-free warm replay coverage.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "endurance.churn",
+  "scale": "one_x",
+  "dimension": "operation_cardinality",
+  "transform": "isolated_operation_shadow",
+  "base_cardinality": 1300,
+  "effective_cardinality": 1300,
+  "fixture": {
+    "path": "fixtures/endurance.churn.json",
+    "sha256": "b83e223c09881a068581cf831a6f124b3bc146ecce216d1e58d44db0367708ab"
+  }
+}

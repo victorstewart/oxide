@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "navigation.modal",
+  "scale": "one_x",
+  "dimension": "operation_cardinality",
+  "transform": "isolated_operation_shadow",
+  "base_cardinality": 4,
+  "effective_cardinality": 4,
+  "fixture": {
+    "path": "fixtures/navigation.modal.json",
+    "sha256": "0490ef34ec47dfc1d56377283596ec7034af71bd62e005163bad5fecb027730b"
+  }
+}

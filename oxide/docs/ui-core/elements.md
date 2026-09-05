@@ -2,7 +2,7 @@
 
 ## Intention and purpose
 
-`elements` provides Oxide's author-facing UI element state and encoding primitives. C60 extends its image family with `ImageRegionView`, which draws a resolved subregion of a larger texture without losing contain, cover, stretch, alpha, or crop semantics.
+`elements` provides Oxide's author-facing UI element state and encoding primitives. C60 extends the image family with `ImageRegionView`, which draws a resolved subregion of a larger texture without losing contain, cover, stretch, alpha, or crop semantics.
 
 ## Relation to the rest of the code
 
@@ -14,7 +14,7 @@ The source unit groups buttons, labels/text input, images/camera, overlays/popup
 
 ## Logic narrative
 
-`ImageRegionView::encode` and the unzoomed `ImageView` path share one inlined region-fit encoder. It derives width and height from the supplied texture region and emits one image draw whose source crop is offset into that region. Cover therefore crops the logical image, not the full atlas page, without duplicating fit semantics between standalone and atlas-backed views.
+Width measurement calls the cached unwrapped label layout and returns `None` for an unknown font, so callers cannot silently guess an advance. `ImageRegionView::encode` and the unzoomed `ImageView` path share one inlined region-fit encoder. It derives width and height from the supplied texture region and emits one image draw whose source crop is offset into that region. Cover therefore crops the logical image, not the full atlas page, without duplicating fit semantics between standalone and atlas-backed views.
 
 ## Preconditions and postconditions; invariants maintained; unsafe invariants if any
 
@@ -38,7 +38,7 @@ No C60-specific feature flag or target cfg is used.
 
 ## Testing and benchmarks
 
-`tests/elements_tests.rs` freezes atlas-region cover cropping. C60's `gpu.authoring.image_store.atlas_grid_1000` case exercises the public resolved-region path with scrolling, release/reuse, and exact invalidation.
+`tests/elements_tests.rs` freezes deterministic cached unwrapped width measurement and atlas-region cover cropping. C60's `gpu.authoring.image_store.atlas_grid_1000` case exercises the public resolved-region path with scrolling, release/reuse, and exact invalidation.
 
 ## Examples
 
@@ -53,4 +53,5 @@ ImageRegionView {
 
 ## Changelog
 
+- 2026-07-18: exposed hidden cached unwrapped label measurement for retained comparison image-run placement.
 - 2026-07-15: added `ImageRegionView` for contain/cover/stretch rendering inside generation-checked atlas regions.

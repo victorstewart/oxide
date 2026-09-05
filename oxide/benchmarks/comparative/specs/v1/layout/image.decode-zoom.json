@@ -1,0 +1,46 @@
+{
+  "canvas": {
+    "clip": true,
+    "height": 740,
+    "width": 390,
+    "x": 0,
+    "y": 52
+  },
+  "coordinate_space": "logical-points",
+  "pan_distance_millionths": 450000,
+  "pinch_scale_millionths": 2000000,
+  "root": {
+    "height": 844,
+    "width": 390,
+    "x": 0,
+    "y": 0
+  },
+  "schema_version": 1,
+  "source_aspect_ratio": "4:3",
+  "text_masks": [
+    [
+      18,
+      18,
+      250,
+      22
+    ],
+    [
+      28,
+      805,
+      334,
+      18
+    ]
+  ],
+  "thumbnail": {
+    "height": 72,
+    "width": 96,
+    "x": 16,
+    "y": 68
+  },
+  "zoom_control": {
+    "height": 28,
+    "width": 358,
+    "x": 16,
+    "y": 800
+  }
+}

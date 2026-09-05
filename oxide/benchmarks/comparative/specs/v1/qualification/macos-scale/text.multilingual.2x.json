@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "text.multilingual",
+  "scale": "two_x",
+  "dimension": "dataset_cardinality",
+  "transform": "namespaced_dataset_shards",
+  "base_cardinality": 1000,
+  "effective_cardinality": 2000,
+  "fixture": {
+    "path": "fixtures/text.multilingual.json",
+    "sha256": "cc8c1a00baed0b1c4f0400c5f83c572125df581cdeee71485bc2a00ecff12560"
+  }
+}

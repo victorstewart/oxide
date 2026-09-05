@@ -94,7 +94,7 @@ The non-default C25 page mode builds a deterministic 256-chunk snapshot once, al
 
 The non-default C37 RRect mode runs only the 1/64/1,024-instance and pathological-radius rows, accepts DPR 1/2/3 from the real browser, and retains direct WebGPU timestamp samples beside CPU lowering and backend counters. The `rrect` capture target renders a deterministic 8×8 radius/size matrix for parent/candidate pixel classification without expanding the default committed browser battery.
 
-The non-default C38 image mode runs 100/1,000-image same-texture and mixed-texture rows with fractional destinations, source crops, opacity, and an outer clip. It retains CPU and direct GPU distributions plus upload, draw, bind, and instance counters. The `image` capture target renders two textures, four crop shapes, and four opacity levels for exact DPR 1/2/3 comparison without expanding the default battery.
+The non-default C38 image mode runs 100/1,000-image same-texture and mixed-texture rows with fractional destinations, source crops, opacity, an outer clip, and a repeating zero/uniform/asymmetric corner-radius pattern. Compatible radii remain in one same-texture batch, so the rows retain CPU and direct GPU distributions plus upload, draw, bind, coalescing, pass, and 52-byte instance counters. The `image` capture target renders two textures, four crop shapes, and four opacity levels for exact DPR 1/2/3 comparison without expanding the default battery.
 
 The C39 mode runs 1/64/512/1,024 nine-slices and the `nine-slice` capture target. The C40 mode runs the same spinner counts, then a bounded 600-frame browser-displayed animation population with raw RAF, CPU-submit, direct GPU timestamp, queue-drain, and reference-path evidence. The `spinner` capture target accepts an explicit phase and can select the old CPU-expanded RRect reference for animation parity. The C41 mode isolates 64/1,024 neon markers and reports compact marker instances, triangles, bytes, CPU submit, and direct GPU timestamp distributions; `neon-marker` captures exercise the analytic shader at browser DPR 1 through 3.
 
@@ -174,6 +174,7 @@ console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 
 ## Changelog
 
+- 2026-07-18: extended the opt-in image architecture probe with zero, uniform, and asymmetric rounded-image radii while retaining same-texture batch evidence.
 - 2026-07-15: made C61 browser proof validate the requested canvas CSS and physical CSS×DPR dimensions and restore those dimensions before displayed-frame measurement.
 - 2026-07-15: added explicit C61 CLI routing for the C60 100/1,000/10,000 atlas and standalone image-store browser matrix.
 - 2026-07-15: added the bounded C60 unique-image store browser export and query route with async display-size decode, split cold timing, and atlas/standalone controls.

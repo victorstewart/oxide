@@ -216,27 +216,27 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(!rust.contains("thread_local!"));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
 
-   assert!(javascript.contains(
-      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")"
-   ));
-   assert!(javascript.contains(
-      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.snapshot.v1\")"
-   ));
-   assert!(javascript.contains(
-      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
-   ));
-   assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
-   assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
-   assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
-   assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
-   assert!(javascript.contains("generation.devicePromise"));
-   assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
-   assert!(javascript.contains("state.rendererLeaseCount += 1"));
-   assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
-   assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
-   assert!(javascript.contains("if (!event.persisted)"));
-   assert!(javascript.contains("generation.device.destroy()"));
-   assert!(javascript.contains("return Object.freeze({"));
+   for needle in [
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")",
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.snapshot.v1\")",
+      "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")",
+      "const gpu = globalThis.navigator?.gpu",
+      "const adapterPrototype = Object.getPrototypeOf(adapter)",
+      "adapterPrototype.requestDevice === installed.patched",
+      "gpuPrototype.requestAdapter !== state.patchedRequestAdapter",
+      "generation.devicePromise",
+      "state.adapterPromises.get(key)",
+      "state.adapterDescriptorKeys.get(this)",
+      "state.incompatibleAcquireFailureCount += 1",
+      "state.rendererLeaseCount += 1",
+      "MODULE_STATE.rendererLeaseCount = Math.max(0",
+      "globalThis.addEventListener(\"pagehide\"",
+      "if (!event.persisted)",
+      "generation.device.destroy()",
+      "return Object.freeze({",
+   ] {
+      assert!(javascript.contains(needle), "{needle}");
+   }
    assert!(!javascript.contains("console."));
 
    let release = javascript
@@ -451,6 +451,24 @@ fn wasm_webgpu_timestamp_samples_are_bounded_and_drainable()
 }
 
 #[test]
+fn wasm_webgpu_shared_page_device_never_requests_optional_timestamp_features()
+{
+   let source = include_str!("../src/wasm/webgpu.rs");
+   let constructor = source
+      .split("pub async fn from_canvas(canvas: HtmlCanvasElement)")
+      .nth(1)
+      .expect("WebGPU canvas constructor")
+      .split("let width = canvas.width()")
+      .next()
+      .expect("WebGPU device acquisition");
+
+   assert!(constructor.contains("let required_features = wgpu::Features::empty();"));
+   assert!(constructor.contains("let timestamp_query_supported = false;"));
+   assert!(constructor.contains("let timestamp_encoder_writes_supported = false;"));
+   assert!(!constructor.contains("adapter.features()"));
+}
+
+#[test]
 fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
     let source = include_str!("../src/wasm/webgpu.rs");
     let helper = source
@@ -468,7 +486,10 @@ fn wasm_webgpu_unindexed_quad_vertices_emit_two_triangles() {
 #[test]
 fn wasm_webgpu_solid_vertex_colors_decode_aabbggrr_and_interpolate()
 {
-   let source = include_str!("../src/wasm/webgpu.rs");
+   let source = concat!(
+      include_str!("../src/wasm/webgpu.rs"),
+      include_str!("../../renderer-wgpu/src/ui.wgsl"),
+   );
    let solid = compact_source_block(source, "fn encode_solid(", "fn encode_image(");
    let vertex = compact_source_block(source, "fn gpu_vertex(", "fn append_gpu_vertices(");
    let shader = compact_source_block(source, "struct VertexIn", "@fragment\nfn fs_rgba");
@@ -603,7 +624,10 @@ fn wasm_webgpu_id_mask_vertex_cache_is_content_hash_keyed_and_inflight_safe() {
 
 #[test]
 fn wasm_webgpu_draw_encoding_reuses_scratch_storage() {
-    let source = include_str!("../src/wasm/webgpu.rs");
+    let source = concat!(
+        include_str!("../src/wasm/webgpu.rs"),
+        include_str!("../../renderer-wgpu/src/ui.wgsl"),
+    );
     let encode_solid = source
         .split("fn encode_solid")
         .nth(1)
@@ -752,7 +776,10 @@ fn webgpu_glyphs_use_compact_ordered_instances_in_dynamic_and_prepared_paths()
 #[test]
 fn webgpu_neon_marker_uses_one_compact_analytic_instance_per_marker()
 {
-   let source = include_str!("../src/wasm/webgpu.rs");
+   let source = concat!(
+      include_str!("../src/wasm/webgpu.rs"),
+      include_str!("../../renderer-wgpu/src/ui.wgsl"),
+   );
    let metal = include_str!("../../renderer-metal/shaders/neon_marker.metal");
    let encode_markers = source
       .rsplit("pub fn encode_neon_markers")
@@ -1085,7 +1112,10 @@ fn wasm_webgpu_id_mask_fields_use_exact_packed_targets_with_wide_fallback()
 #[test]
 fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
     let stats = include_str!("../src/lib.rs");
-    let source = include_str!("../src/wasm/webgpu.rs");
+    let source = concat!(
+        include_str!("../src/wasm/webgpu.rs"),
+        include_str!("../../renderer-wgpu/src/ui.wgsl"),
+    );
     let host = include_str!("../../../host/web-app/oxide-host-web/src/lib.rs");
 
     for field in [
@@ -1243,8 +1273,9 @@ fn wasm_webgpu_resource_counters_cover_uploads_and_passes() {
         assert!(stats.contains(field), "missing WebRendererStats field {field}");
     }
 
-    assert!(source.contains("wgpu::Features::TIMESTAMP_QUERY"));
-    assert!(source.contains("wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS"));
+    assert!(source.contains("let required_features = wgpu::Features::empty();"));
+    assert!(!source.contains("wgpu::Features::TIMESTAMP_QUERY"));
+    assert!(!source.contains("wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS"));
     assert!(source.contains("wgpu::QueryType::Timestamp"));
     assert!(source.contains("wgpu::RenderPassTimestampWrites"));
     assert!(source.contains("wgpu::ComputePassTimestampWrites"));
@@ -1671,6 +1702,6 @@ fn wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()
    assert!(compact.contains("letlevels=rgba8_mip_chain(width,height,rgba);"));
    assert!(compact.contains("mip_level_count:levels.len()asu32"));
    assert!(compact.contains("mipmap_filter:wgpu::FilterMode::Linear"));
-   assert!(compact.contains("srgb_channel_to_linear(source.rgba[index+channel])"));
+   assert!(compact.contains("useoxide_renderer_wgpu::image::{rgba8_srgb_mip_chain,RgbaMipLevel};"));
    assert!(compact.contains("NEXT_WEBGPU_DEVICE_GENERATION.fetch_add(1,Ordering::Relaxed)"));
 }

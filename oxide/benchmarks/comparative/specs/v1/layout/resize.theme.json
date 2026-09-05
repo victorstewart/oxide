@@ -1,0 +1,42 @@
+{
+  "coordinate_space": "logical-points",
+  "profiles": [
+    {
+      "backdrop_regions": 4,
+      "columns": 2,
+      "height": 844,
+      "orientation": "portrait",
+      "visible_node_count": 300,
+      "width": 390
+    },
+    {
+      "backdrop_regions": 4,
+      "columns": 4,
+      "height": 390,
+      "orientation": "landscape",
+      "visible_node_count": 300,
+      "width": 844
+    }
+  ],
+  "schema_version": 1,
+  "text_masks": [
+    [
+      16,
+      18,
+      812,
+      348
+    ]
+  ],
+  "theme_tokens": {
+    "dark": {
+      "background": "#181b22ff",
+      "surface": "#252a34ff",
+      "text": "#f3f5f8ff"
+    },
+    "light": {
+      "background": "#f3f5f8ff",
+      "surface": "#ffffffff",
+      "text": "#20242cff"
+    }
+  }
+}

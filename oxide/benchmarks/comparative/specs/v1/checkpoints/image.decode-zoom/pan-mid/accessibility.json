@@ -1,0 +1,83 @@
+{
+  "checkpoint_id": "pan-mid",
+  "nodes": [
+    {
+      "actions": [
+        "pan",
+        "zoom"
+      ],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        740
+      ],
+      "name": "image-canvas",
+      "order": 0,
+      "role": "image-canvas",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [
+        "pan",
+        "zoom"
+      ],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        740
+      ],
+      "name": "image",
+      "order": 1,
+      "role": "image",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [
+        "increment",
+        "decrement"
+      ],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        16,
+        800,
+        358,
+        28
+      ],
+      "name": "zoom-control",
+      "order": 2,
+      "role": "zoom-control",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    }
+  ],
+  "raw_tree_source": "runtime-semantic-tree",
+  "root_frame": [
+    0,
+    0,
+    390,
+    844
+  ],
+  "scenario_id": "image.decode-zoom",
+  "schema_version": 2
+}

@@ -13,6 +13,7 @@
 - `oxide-perf-runner --paired-analyze INPUT --paired-json-out OUTPUT` deterministically reanalyzes already collected raw evidence.
 - `oxide-perf-runner --paired-create-instrumentation-patch OUT --paired-instrumentation-root ROOT --paired-instrumentation-path PATH [...]` creates one binary Git patch from declared benchmark-only paths and prints its SHA-256 so the same patch can be applied to both worktrees.
 - Browser RAF, workspace, Metal, startup, and device adapters remain responsible for acquiring their platform-specific samples; this module owns their common validation and statistics.
+- Direction, ordering, percentile, and bootstrap mechanics are owned by the crate-private [`paired_statistics`](paired_statistics.md) module so the comparative analyzer can reuse them without changing paired schema v1.
 
 Call flow:
 
@@ -41,7 +42,7 @@ Call flow:
 
 The analyzer first verifies schema and build identities. It derives the only valid pair order from the fixed seed, rejects missing warmups/raw samples/artifact hashes, rejects invalid numbers and mixed environments, and enforces workload-specific pair and raw-sample minima. Visible browser/device workloads must identify themselves as production-path measurements.
 
-Each valid pair is reduced to an A and B median only for paired speedup and bootstrap calculations. Reported p50/p95/p99/peak, median absolute deviation, and coefficient of variation are computed from every persisted raw sample, never from batch averages or pair medians. Relative pair speedups feed a deterministic 100,000-resample paired bootstrap. Performance acceptance uses the program-wide speedup, confidence, pair-win, raw-tail, and raw-peak gates; measurement/correctness work may select the explicit no-material-regression policy while retaining the raw-tail gates.
+Each valid pair is reduced to an A and B median only for paired speedup and bootstrap calculations. Reported p50/p95/p99/peak, median absolute deviation, and coefficient of variation are computed from every persisted raw sample, never from batch averages or pair medians. Relative pair speedups feed a deterministic 100,000-resample paired bootstrap. Performance acceptance uses the program-wide speedup, confidence, pair-win, raw-tail, and raw-peak gates; tail and peak regressions follow `lower_is_better`, so throughput cannot be rejected by latency polarity. Measurement/correctness work may select the explicit no-material-regression policy while retaining those direction-aware raw-tail gates.
 
 ## Preconditions and postconditions
 
@@ -81,4 +82,5 @@ Create the seed-derived order before executing any side, persist every raw pair,
 
 ## Changelog
 
+- 2026-07-17: extracted shared statistics and corrected higher-is-better p95, p99, and peak guardrail direction without changing paired schema v1.
 - 2026-07-12: introduced the shared paired evidence schema, manifest-driven five-workflow execution boundary, exact source/artifact validation, raw-distribution summaries, deterministic order/bootstrap analysis, and acceptance guardrails for C00.

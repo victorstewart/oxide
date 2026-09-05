@@ -1,0 +1,12 @@
+{
+  "cycle_count": 4,
+  "id": "navigation.modal",
+  "interactive_cancel_fraction": 0.5,
+  "list_item_count": 12,
+  "schema_version": 1,
+  "selected_item_id": "navigation:item:05",
+  "transition": {
+    "curve": "ease-in-out",
+    "duration_ms": 300
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "checkpoint_id": "mid-forward",
+  "model": {
+    "favorite_id": null,
+    "prepend_count": 0,
+    "row_count": 2000,
+    "scroll_position_millionths": 750000
+  },
+  "scenario_id": "feed.variable-scroll",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {
+      "count": 1,
+      "role": "navigation-bar"
+    },
+    {
+      "count": 1,
+      "role": "feed"
+    },
+    {
+      "count": 10,
+      "role": "feed-card"
+    },
+    {
+      "count": 10,
+      "role": "thumbnail"
+    },
+    {
+      "count": 10,
+      "role": "favorite-control"
+    }
+  ]
+}

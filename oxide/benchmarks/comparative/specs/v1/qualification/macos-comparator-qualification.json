@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "profile_window_seconds": 30,
+  "refresh_interval_ns": 16666667,
+  "variants": [
+    {
+      "scenario_id": "startup.first-screen",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/startup.first-screen.1x.json",
+        "sha256": "5cc1d75978e790a72fe4729b9c5fab7d09776a6ce2a9056d6fa2b4fc859cc2e0"
+      }
+    },
+    {
+      "scenario_id": "startup.first-screen",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/startup.first-screen.2x.json",
+        "sha256": "511dddc9f3cb142fe1ab605a14c9fa6376527d2a299daa1d80eaa288d422c23b"
+      }
+    },
+    {
+      "scenario_id": "dashboard.mixed-static",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/dashboard.mixed-static.1x.json",
+        "sha256": "14852caddc69d5a151a14bac24160bc179aa7c423dee02cfd9e6bda7cd09b023"
+      }
+    },
+    {
+      "scenario_id": "dashboard.mixed-static",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/dashboard.mixed-static.2x.json",
+        "sha256": "3498f2f9c1cbd7e5479af44984ba79960a92a8c7a629f8cf19473f62f6a3f63f"
+      }
+    },
+    {
+      "scenario_id": "feed.variable-scroll",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/feed.variable-scroll.1x.json",
+        "sha256": "01539b531650d78e48959cba74796d8198584258051f1e0382007ff80d203316"
+      }
+    },
+    {
+      "scenario_id": "feed.variable-scroll",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/feed.variable-scroll.2x.json",
+        "sha256": "c489b0956373cdf25868fd51103bd9791e8c793a557fe7994bfa033a355e87d1"
+      }
+    },
+    {
+      "scenario_id": "grid.large-scroll",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/grid.large-scroll.1x.json",
+        "sha256": "38967f1527335b6682e5a900b660ff5d112e39dcad467d900b82bd91f913921b"
+      }
+    },
+    {
+      "scenario_id": "grid.large-scroll",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/grid.large-scroll.2x.json",
+        "sha256": "8d08bafd44d85fc000d605ee0963af757f1df16713d82a5cd5d5fcce95f6b567"
+      }
+    },
+    {
+      "scenario_id": "chat.live-update",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/chat.live-update.1x.json",
+        "sha256": "c3e1fa536daf25717b3281c1f0f631c0d28fdf40a5b2731b2cd19d9a01b62229"
+      }
+    },
+    {
+      "scenario_id": "chat.live-update",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/chat.live-update.2x.json",
+        "sha256": "1dd1ff444800eb5060367253eb9ce50deb1017656240469419bb60210fbc5b72"
+      }
+    },
+    {
+      "scenario_id": "navigation.modal",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/navigation.modal.1x.json",
+        "sha256": "2590f432fa4205e55819e4d108dec89db4c054e8b2439dea283509a139e40028"
+      }
+    },
+    {
+      "scenario_id": "navigation.modal",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/navigation.modal.2x.json",
+        "sha256": "8b83e33496610f05dd41468b375f1129e389911c3fc03b33cfb9c50ed51d954e"
+      }
+    },
+    {
+      "scenario_id": "image.decode-zoom",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/image.decode-zoom.1x.json",
+        "sha256": "f8312f5ffae338fccf5d88c321396cf889f67a17d047ca7f760319c0d2aa67ea"
+      }
+    },
+    {
+      "scenario_id": "image.decode-zoom",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/image.decode-zoom.2x.json",
+        "sha256": "dd0fd52b4123ce9cfa2ae950e39bb7c67e2edf72ee04fc8c83dfb189cf1d3225"
+      }
+    },
+    {
+      "scenario_id": "effects.layers",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/effects.layers.1x.json",
+        "sha256": "2b997a91b8921a5b999a46d8b9f1e76703f77ec66793d4349809beb211669562"
+      }
+    },
+    {
+      "scenario_id": "effects.layers",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/effects.layers.2x.json",
+        "sha256": "57f9f875711d3b7a4b2d75ab954ee18ece32fac7d4b2295303c742d2724f52b1"
+      }
+    },
+    {
+      "scenario_id": "mutation.damage",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/mutation.damage.1x.json",
+        "sha256": "1afcbbb175318b92235dbdaa7b1f96c5ad2fbbb65066012c51feb5418ec6c23e"
+      }
+    },
+    {
+      "scenario_id": "mutation.damage",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/mutation.damage.2x.json",
+        "sha256": "1a010238306c4a5446a19dadc90e846adbc47073b7d6e69e8ef522868c0765e3"
+      }
+    },
+    {
+      "scenario_id": "text.multilingual",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/text.multilingual.1x.json",
+        "sha256": "d0207b6798b69e60fd3df792f7baef0b5a97b88f34957354cd4678288e1e4e00"
+      }
+    },
+    {
+      "scenario_id": "text.multilingual",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/text.multilingual.2x.json",
+        "sha256": "730d0cb290a2bdecca68abbcb32a2863380563fa32e659e0ad8773587f621531"
+      }
+    },
+    {
+      "scenario_id": "resize.theme",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/resize.theme.1x.json",
+        "sha256": "6099731b83937979e3b9b4c707e3bf1a1a98f01980427f88a3b3a92693cd3d28"
+      }
+    },
+    {
+      "scenario_id": "resize.theme",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/resize.theme.2x.json",
+        "sha256": "87dfc3d8d48951ff81f719ee071be267cc36a81f6c10be3817b9c7c150190f56"
+      }
+    },
+    {
+      "scenario_id": "idle.steady",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/idle.steady.1x.json",
+        "sha256": "b348902c471ae5939313e6b3cb7c106c9800d017a4ad019276743113faca87fa"
+      }
+    },
+    {
+      "scenario_id": "idle.steady",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/idle.steady.2x.json",
+        "sha256": "988fdc22df2b268411987c292927ad3172161791bbb9a7a88629d4170c1d1fd1"
+      }
+    },
+    {
+      "scenario_id": "endurance.churn",
+      "scale": "one_x",
+      "overlay": {
+        "path": "qualification/macos-scale/endurance.churn.1x.json",
+        "sha256": "9d22070c1cc89e9f2be5cc3a6778ea6af6d5b99c84e2666ea36bfb21e03a1586"
+      }
+    },
+    {
+      "scenario_id": "endurance.churn",
+      "scale": "two_x",
+      "overlay": {
+        "path": "qualification/macos-scale/endurance.churn.2x.json",
+        "sha256": "d5fb0257a6e796aa91145f6acb1a1c7d4479d70dffc329739c458392180358c5"
+      }
+    }
+  ]
+}

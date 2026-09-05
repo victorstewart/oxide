@@ -1,0 +1,1402 @@
+[
+  {
+    "at_us": 0,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:001"
+  },
+  {
+    "at_us": 600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:001"
+  },
+  {
+    "at_us": 1200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:002"
+  },
+  {
+    "at_us": 1800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:002"
+  },
+  {
+    "at_us": 2400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:003"
+  },
+  {
+    "at_us": 3000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:003"
+  },
+  {
+    "at_us": 3600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:004"
+  },
+  {
+    "at_us": 4200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:004"
+  },
+  {
+    "at_us": 4800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:005"
+  },
+  {
+    "at_us": 5400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:005"
+  },
+  {
+    "at_us": 6000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:006"
+  },
+  {
+    "at_us": 6600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:006"
+  },
+  {
+    "at_us": 7200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:007"
+  },
+  {
+    "at_us": 7800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:007"
+  },
+  {
+    "at_us": 8400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:008"
+  },
+  {
+    "at_us": 9000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:008"
+  },
+  {
+    "at_us": 9600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:009"
+  },
+  {
+    "at_us": 10200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:009"
+  },
+  {
+    "at_us": 10800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:010"
+  },
+  {
+    "at_us": 11400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:010"
+  },
+  {
+    "at_us": 12000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:011"
+  },
+  {
+    "at_us": 12600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:011"
+  },
+  {
+    "at_us": 13200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:012"
+  },
+  {
+    "at_us": 13800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:012"
+  },
+  {
+    "at_us": 14400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:013"
+  },
+  {
+    "at_us": 15000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:013"
+  },
+  {
+    "at_us": 15600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:014"
+  },
+  {
+    "at_us": 16200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:014"
+  },
+  {
+    "at_us": 16800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:015"
+  },
+  {
+    "at_us": 17400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:015"
+  },
+  {
+    "at_us": 18000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:016"
+  },
+  {
+    "at_us": 18600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:016"
+  },
+  {
+    "at_us": 19200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:017"
+  },
+  {
+    "at_us": 19800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:017"
+  },
+  {
+    "at_us": 20400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:018"
+  },
+  {
+    "at_us": 21000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:018"
+  },
+  {
+    "at_us": 21600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:019"
+  },
+  {
+    "at_us": 22200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:019"
+  },
+  {
+    "at_us": 22800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:020"
+  },
+  {
+    "at_us": 23400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:020"
+  },
+  {
+    "at_us": 24000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:021"
+  },
+  {
+    "at_us": 24600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:021"
+  },
+  {
+    "at_us": 25200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:022"
+  },
+  {
+    "at_us": 25800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:022"
+  },
+  {
+    "at_us": 26400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:023"
+  },
+  {
+    "at_us": 27000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:023"
+  },
+  {
+    "at_us": 27600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:024"
+  },
+  {
+    "at_us": 28200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:024"
+  },
+  {
+    "at_us": 28800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:025"
+  },
+  {
+    "at_us": 29400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:025"
+  },
+  {
+    "at_us": 30000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:026"
+  },
+  {
+    "at_us": 30600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:026"
+  },
+  {
+    "at_us": 31200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:027"
+  },
+  {
+    "at_us": 31800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:027"
+  },
+  {
+    "at_us": 32400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:028"
+  },
+  {
+    "at_us": 33000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:028"
+  },
+  {
+    "at_us": 33600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:029"
+  },
+  {
+    "at_us": 34200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:029"
+  },
+  {
+    "at_us": 34800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:030"
+  },
+  {
+    "at_us": 35400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:030"
+  },
+  {
+    "at_us": 36000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:031"
+  },
+  {
+    "at_us": 36600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:031"
+  },
+  {
+    "at_us": 37200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:032"
+  },
+  {
+    "at_us": 37800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:032"
+  },
+  {
+    "at_us": 38400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:033"
+  },
+  {
+    "at_us": 39000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:033"
+  },
+  {
+    "at_us": 39600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:034"
+  },
+  {
+    "at_us": 40200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:034"
+  },
+  {
+    "at_us": 40800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:035"
+  },
+  {
+    "at_us": 41400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:035"
+  },
+  {
+    "at_us": 42000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:036"
+  },
+  {
+    "at_us": 42600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:036"
+  },
+  {
+    "at_us": 43200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:037"
+  },
+  {
+    "at_us": 43800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:037"
+  },
+  {
+    "at_us": 44400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:038"
+  },
+  {
+    "at_us": 45000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:038"
+  },
+  {
+    "at_us": 45600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:039"
+  },
+  {
+    "at_us": 46200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:039"
+  },
+  {
+    "at_us": 46800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:040"
+  },
+  {
+    "at_us": 47400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:040"
+  },
+  {
+    "at_us": 48000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:041"
+  },
+  {
+    "at_us": 48600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:041"
+  },
+  {
+    "at_us": 49200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:042"
+  },
+  {
+    "at_us": 49800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:042"
+  },
+  {
+    "at_us": 50400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:043"
+  },
+  {
+    "at_us": 51000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:043"
+  },
+  {
+    "at_us": 51600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:044"
+  },
+  {
+    "at_us": 52200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:044"
+  },
+  {
+    "at_us": 52800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:045"
+  },
+  {
+    "at_us": 53400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:045"
+  },
+  {
+    "at_us": 54000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:046"
+  },
+  {
+    "at_us": 54600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:046"
+  },
+  {
+    "at_us": 55200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:047"
+  },
+  {
+    "at_us": 55800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:047"
+  },
+  {
+    "at_us": 56400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:048"
+  },
+  {
+    "at_us": 57000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:048"
+  },
+  {
+    "at_us": 57600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:049"
+  },
+  {
+    "at_us": 58200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:049"
+  },
+  {
+    "at_us": 58800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:050"
+  },
+  {
+    "at_us": 59400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:050"
+  },
+  {
+    "at_us": 60000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:051"
+  },
+  {
+    "at_us": 60600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:051"
+  },
+  {
+    "at_us": 61200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:052"
+  },
+  {
+    "at_us": 61800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:052"
+  },
+  {
+    "at_us": 62400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:053"
+  },
+  {
+    "at_us": 63000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:053"
+  },
+  {
+    "at_us": 63600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:054"
+  },
+  {
+    "at_us": 64200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:054"
+  },
+  {
+    "at_us": 64800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:055"
+  },
+  {
+    "at_us": 65400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:055"
+  },
+  {
+    "at_us": 66000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:056"
+  },
+  {
+    "at_us": 66600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:056"
+  },
+  {
+    "at_us": 67200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:057"
+  },
+  {
+    "at_us": 67800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:057"
+  },
+  {
+    "at_us": 68400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:058"
+  },
+  {
+    "at_us": 69000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:058"
+  },
+  {
+    "at_us": 69600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:059"
+  },
+  {
+    "at_us": 70200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:059"
+  },
+  {
+    "at_us": 70800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:060"
+  },
+  {
+    "at_us": 71400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:060"
+  },
+  {
+    "at_us": 72000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:061"
+  },
+  {
+    "at_us": 72600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:061"
+  },
+  {
+    "at_us": 73200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:062"
+  },
+  {
+    "at_us": 73800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:062"
+  },
+  {
+    "at_us": 74400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:063"
+  },
+  {
+    "at_us": 75000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:063"
+  },
+  {
+    "at_us": 75600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:064"
+  },
+  {
+    "at_us": 76200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:064"
+  },
+  {
+    "at_us": 76800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:065"
+  },
+  {
+    "at_us": 77400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:065"
+  },
+  {
+    "at_us": 78000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:066"
+  },
+  {
+    "at_us": 78600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:066"
+  },
+  {
+    "at_us": 79200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:067"
+  },
+  {
+    "at_us": 79800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:067"
+  },
+  {
+    "at_us": 80400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:068"
+  },
+  {
+    "at_us": 81000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:068"
+  },
+  {
+    "at_us": 81600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:069"
+  },
+  {
+    "at_us": 82200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:069"
+  },
+  {
+    "at_us": 82800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:070"
+  },
+  {
+    "at_us": 83400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:070"
+  },
+  {
+    "at_us": 84000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:071"
+  },
+  {
+    "at_us": 84600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:071"
+  },
+  {
+    "at_us": 85200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:072"
+  },
+  {
+    "at_us": 85800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:072"
+  },
+  {
+    "at_us": 86400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:073"
+  },
+  {
+    "at_us": 87000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:073"
+  },
+  {
+    "at_us": 87600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:074"
+  },
+  {
+    "at_us": 88200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:074"
+  },
+  {
+    "at_us": 88800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:075"
+  },
+  {
+    "at_us": 89400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:075"
+  },
+  {
+    "at_us": 90000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:076"
+  },
+  {
+    "at_us": 90600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:076"
+  },
+  {
+    "at_us": 91200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:077"
+  },
+  {
+    "at_us": 91800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:077"
+  },
+  {
+    "at_us": 92400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:078"
+  },
+  {
+    "at_us": 93000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:078"
+  },
+  {
+    "at_us": 93600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:079"
+  },
+  {
+    "at_us": 94200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:079"
+  },
+  {
+    "at_us": 94800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:080"
+  },
+  {
+    "at_us": 95400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:080"
+  },
+  {
+    "at_us": 96000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:081"
+  },
+  {
+    "at_us": 96600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:081"
+  },
+  {
+    "at_us": 97200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:082"
+  },
+  {
+    "at_us": 97800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:082"
+  },
+  {
+    "at_us": 98400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:083"
+  },
+  {
+    "at_us": 99000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:083"
+  },
+  {
+    "at_us": 99600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:084"
+  },
+  {
+    "at_us": 100200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:084"
+  },
+  {
+    "at_us": 100800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:085"
+  },
+  {
+    "at_us": 101400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:085"
+  },
+  {
+    "at_us": 102000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:086"
+  },
+  {
+    "at_us": 102600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:086"
+  },
+  {
+    "at_us": 103200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:087"
+  },
+  {
+    "at_us": 103800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:087"
+  },
+  {
+    "at_us": 104400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:088"
+  },
+  {
+    "at_us": 105000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:088"
+  },
+  {
+    "at_us": 105600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:089"
+  },
+  {
+    "at_us": 106200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:089"
+  },
+  {
+    "at_us": 106800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:090"
+  },
+  {
+    "at_us": 107400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:090"
+  },
+  {
+    "at_us": 108000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:091"
+  },
+  {
+    "at_us": 108600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:091"
+  },
+  {
+    "at_us": 109200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:092"
+  },
+  {
+    "at_us": 109800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:092"
+  },
+  {
+    "at_us": 110400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:093"
+  },
+  {
+    "at_us": 111000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:093"
+  },
+  {
+    "at_us": 111600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:094"
+  },
+  {
+    "at_us": 112200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:094"
+  },
+  {
+    "at_us": 112800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:095"
+  },
+  {
+    "at_us": 113400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:095"
+  },
+  {
+    "at_us": 114000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:096"
+  },
+  {
+    "at_us": 114600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:096"
+  },
+  {
+    "at_us": 115200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:097"
+  },
+  {
+    "at_us": 115800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:097"
+  },
+  {
+    "at_us": 116400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:098"
+  },
+  {
+    "at_us": 117000000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:098"
+  },
+  {
+    "at_us": 117600000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:099"
+  },
+  {
+    "at_us": 118200000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:099"
+  },
+  {
+    "at_us": 118800000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": false,
+    "state_id": "endurance:heavy-screen:closed:100"
+  },
+  {
+    "at_us": 119400000,
+    "op": "mutate",
+    "target": "endurance:heavy-screen-visible",
+    "value": true,
+    "state_id": "endurance:heavy-screen:open:100"
+  }
+]

@@ -35,6 +35,28 @@
 - `oxide_test_scenes::Router<U>::input_touch(&mut self, event: &TouchEvent)`
   - Feeds raw touch contacts into the Oxide-owned surface recognizer and forwards one-finger pans plus pinch deltas to scenes that support them.
   - Main callers: iOS host raw touch callback.
+- `oxide_test_scenes::Router<U>::prepare_comparison_scenario(&mut self, scenario: &ScenarioSpec, fixture: &[u8]) -> Result<(), String>`
+  - Constructs reset-compatible typed state for one validated comparison scenario.
+  - Main callers: comparison hosts and tests.
+- `oxide_test_scenes::Router<U>::prepare_comparison_scenario_id(&mut self, scenario_id: &str, fixture: &[u8]) -> Result<(), String>`
+  - Constructs the same scene from an identity whose blocked release-candidate capture contract was validated by the comparison runtime.
+  - Main callers: `oxide-comparison-runtime` candidate capture only.
+- `oxide_test_scenes::Router<U>::set_comparison_resources(&mut self, thumbnail_atlas: ImageHandle, font_ids: [usize; 3]) -> Result<(), String>`
+  - Binds the pinned shared atlas and Latin/Arabic/CJK font IDs.
+  - Main callers: comparison hosts.
+- `oxide_test_scenes::Router<U>::set_comparison_inline_text_resources(&mut self, images: Vec<ImageHandle>, atlas: InlineTextAtlas) -> Result<(), String>`
+  - Binds every retained raster-variant texture and the frozen metrics used for pinned feed/chat symbol and emoji image runs.
+  - Main callers: comparison hosts.
+- `oxide_test_scenes::Router<U>::set_comparison_image_resources(&mut self, source: ImageHandle, source_sha256: &str, thumbnail: ImageHandle, thumbnail_sha256: &str) -> Result<(), String>`
+  - Binds renderer-uploaded image source/thumbnail handles after exact hash verification.
+  - Main callers: comparison hosts for `image.decode-zoom`.
+- `oxide_test_scenes::Router<U>::set_comparison_image_thumbnail_resource(...)` and `set_comparison_image_source_resource(...)`
+  - Bind the initial thumbnail during setup and the full source at its measured upload boundary while preserving separate hash identities.
+  - Main callers: staged comparison hosts for `image.decode-zoom`.
+- `oxide_test_scenes::Router<U>::apply_comparison_event(&mut self, event: &TraceEvent) -> Result<(), String>` applies one frozen trace event.
+- `oxide_test_scenes::Router<U>::comparison_host_click`, `comparison_host_pointer_delta`, `comparison_host_wheel`, and `comparison_host_text` route comparison-host input into Rust and return whether scene state changed.
+- `oxide_test_scenes::Router<U>::comparison_role_counts(&self) -> Option<Vec<RoleCount>>` reports visible semantic work for checkpoints.
+- `oxide_test_scenes::Router<U>::comparison_checkpoint_json(&self, checkpoint_id: &str) -> Result<(Vec<u8>, Vec<u8>), String>` requests correctness-only live state and semantic accessibility JSON from the prepared scene.
 
 ## Logic narrative
 
@@ -43,6 +65,8 @@ The router owns one state object per scene and switches between them by `SceneKi
 `prepare_onscreen_benchmark` resets state so every measurement pass starts from a known scene. `step_onscreen_benchmark` performs one deterministic mutation, sharing the common button and collection-focus step mechanics while preserving case-specific action labels, then the host renders a real MetalView frame. This keeps product behavior and gesture/control state in Rust while UIKit remains only the host shell.
 
 Raw touch input follows the same ownership rule. The host forwards each `TouchEvent`, the router updates a `TouchSurfaceRecognizer`, one-finger pan events are replayed through the existing pointer-drag entry point, and recognized pinch ratios are applied through the existing scene-level pinch entry points for Zoom Image and Camera. Two-touch center pan events emitted by the recognizer are not replayed as one-finger drags because pinch surfaces cancel drag ownership while two touches are active. Scene switches reset the recognizer so stale contacts cannot leak across benchmark or product scene boundaries.
+
+Manifest comparison mode bypasses demo-scene selection while retaining the same text frame, draw-list, uploader, damage, and host paths. Preparing again resets all comparison state. Shared fonts, the thumbnail atlas, and every inline-text raster-variant handle are bound once. The inline contract selects the closest physical-em variant, splits only declared graphemes into retained image runs, and leaves the original text untouched for semantics. The image scenario accepts only nonzero source/thumbnail handles whose caller-computed SHA-256 values match the typed fixture. Separate bindings let the host install the initial thumbnail during setup and the source only after its decode/upload trace boundaries, keeping PNG decode and RGBA upload in the normal renderer/image-store ownership layer instead of the draw loop. Its full source uses exact 2:1 and 1:1 physical sampling grids, directed cross-language origin snapping, and a one-physical-pixel canonical viewport frame over fractionally covered horizontal boundaries. The AppKit adapter uses the same destination contract with an explicit full-image source rectangle so clipping a panned image cannot change source registration. This preserves the complete 4096x3072 decode/upload and gesture state while making the static image pixels comparable. Live checkpoint serialization is called explicitly by correctness acquisition and is not part of draw or update.
 
 ## Preconditions and postconditions
 
@@ -80,6 +104,8 @@ The headline cases deliberately avoid new benchmark-only abstractions. Reusing e
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
 - `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, caller-owned damage storage reuse, and warmed overlay draw allocation reuse.
 - Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
+- `oxide/crates/test-scenes/tests/comparative_scenario_tests.rs` validates all six PR comparison scenes, bounded visible work, distinct thumbnail/inline image resources, image resource identity, trace state, and reset behavior.
+- The same suite proves the identity-only capture path accepts all five release candidates without requiring or inventing runnable scenario manifests and rejects unknown identities.
 
 ## Examples
 
@@ -90,6 +116,9 @@ assert!(router.step_onscreen_benchmark("component_button_encode", 1));
 ```
 
 ## Changelog
+- 2026-07-21: added the explicit release-candidate identity preparation boundary for screenshot capture after benchmark-spec validation.
+- 2026-07-18: routed the pinned inline-text raster variants and image-run metrics into comparison scenes.
+- 2026-07-18: added complete six-scenario comparison routing and hash-verified standalone image resource binding.
 - 2026-07-14: bracketed each complete router draw with one C43 text-preparation frame and one pre-render atlas publication.
 - 2026-07-13: moved scene animation overrides onto the animator-owned dense C26 slot store instead of copying a per-frame map.
 

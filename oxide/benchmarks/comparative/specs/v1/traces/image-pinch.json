@@ -1,0 +1,128 @@
+[
+  {
+    "at_us": 0,
+    "op": "pointer-down",
+    "pointer": 1,
+    "x_millionths": 375000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 0,
+    "op": "pointer-down",
+    "pointer": 2,
+    "x_millionths": 625000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 250000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 343750,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 250000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 656250,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 500000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 312500,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 500000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 687500,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 750000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 281250,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 750000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 718750,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1000000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 250000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1000000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 750000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1250000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 218750,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1250000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 781250,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1500000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 187500,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1500000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 812500,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1750000,
+    "op": "pointer-move",
+    "pointer": 1,
+    "x_millionths": 156250,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 1750000,
+    "op": "pointer-move",
+    "pointer": 2,
+    "x_millionths": 843750,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 2000000,
+    "op": "pointer-up",
+    "pointer": 1,
+    "x_millionths": 125000,
+    "y_millionths": 500000
+  },
+  {
+    "at_us": 2000000,
+    "op": "pointer-up",
+    "pointer": 2,
+    "x_millionths": 875000,
+    "y_millionths": 500000
+  }
+]

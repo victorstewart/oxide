@@ -6,14 +6,18 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
+oxide-benchmark-spec = { path = "../crates/benchmark-spec" }
+oxide-apple-comparison-controller = { path = "../host/apple-comparison/comparison-controller" }
 oxide-perf-runner = { path = "../crates/perf-runner" }
 roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 plist = "1.6"
 serde_json = "1.0"
+sha2 = "0.10"
 
 [dev-dependencies]
+png = "0.17"
 tempfile = "3"
 
 [[bin]]

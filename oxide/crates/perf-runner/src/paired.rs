@@ -7,16 +7,14 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::paired_statistics::{
+   median, paired_bootstrap_ci, percentile, percentile_sorted, regresses_by_ratio,
+   relative_speedup_pct,
+};
+pub use crate::paired_statistics::{balanced_pair_order, PairOrder};
+
 pub const PAIRED_EXPERIMENT_SCHEMA_VERSION: u32 = 1;
 pub const PAIRED_BOOTSTRAP_RESAMPLES: usize = 100_000;
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum PairOrder
-{
-   Ab,
-   Ba,
-}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -504,27 +502,6 @@ fn sha256_file(path: &Path) -> Result<String>
    Ok(format!("{:x}", digest.finalize()))
 }
 
-pub fn balanced_pair_order(seed: u64, pair_count: usize) -> Vec<PairOrder>
-{
-   let mut state = seed.max(1);
-   let mut orders = Vec::with_capacity(pair_count);
-   while orders.len() < pair_count
-   {
-      state = xorshift64(state);
-      let block = if state & 1 == 0
-      {
-         [PairOrder::Ab, PairOrder::Ba, PairOrder::Ba, PairOrder::Ab]
-      }
-      else
-      {
-         [PairOrder::Ba, PairOrder::Ab, PairOrder::Ab, PairOrder::Ba]
-      };
-      let remaining = pair_count - orders.len();
-      orders.extend_from_slice(&block[..remaining.min(block.len())]);
-   }
-   orders
-}
-
 pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedExperimentReport>
 {
    validate_input(&input)?;
@@ -551,7 +528,7 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
    let baseline = summarize(&baseline_samples);
    let candidate = summarize(&candidate_samples);
    let median_speedup_pct = median(&speedups);
-   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed);
+   let confidence_interval_95_pct = paired_bootstrap_ci(&speedups, input.seed, PAIRED_BOOTSTRAP_RESAMPLES);
    let mut reasons = Vec::new();
    if input.acceptance_policy == AcceptancePolicy::Performance
    {
@@ -572,15 +549,15 @@ pub fn analyze_paired_experiment(input: PairedExperimentInput) -> Result<PairedE
    {
       reasons.push(String::from("candidate median regresses by more than 3%"));
    }
-   if percentile(&candidate_samples, 0.95) > percentile(&baseline_samples, 0.95) * 1.03
+   if regresses_by_ratio(percentile(&baseline_samples, 0.95), percentile(&candidate_samples, 0.95), input.lower_is_better, 1.03)
    {
       reasons.push(String::from("candidate p95 regresses by more than 3%"));
    }
-   if percentile(&candidate_samples, 0.99) > percentile(&baseline_samples, 0.99) * 1.03
+   if regresses_by_ratio(percentile(&baseline_samples, 0.99), percentile(&candidate_samples, 0.99), input.lower_is_better, 1.03)
    {
       reasons.push(String::from("candidate p99 regresses by more than 3%"));
    }
-   if candidate.peak > baseline.peak * 1.05
+   if regresses_by_ratio(baseline.peak, candidate.peak, input.lower_is_better, 1.05)
    {
       reasons.push(String::from("candidate peak regresses by more than 5%"));
    }
@@ -740,40 +717,6 @@ fn validate_samples(samples: &[f64], pair: usize, label: &str) -> Result<()>
    Ok(())
 }
 
-fn relative_speedup_pct(baseline: f64, candidate: f64, lower_is_better: bool) -> f64
-{
-   if baseline == 0.0
-   {
-      return if candidate == 0.0 { 0.0 } else { f64::NEG_INFINITY };
-   }
-   if lower_is_better
-   {
-      (baseline - candidate) / baseline * 100.0
-   }
-   else
-   {
-      (candidate - baseline) / baseline * 100.0
-   }
-}
-
-fn paired_bootstrap_ci(speedups: &[f64], seed: u64) -> [f64; 2]
-{
-   let mut state = seed.max(1);
-   let mut medians = Vec::with_capacity(PAIRED_BOOTSTRAP_RESAMPLES);
-   let mut resample = vec![0.0; speedups.len()];
-   for _ in 0..PAIRED_BOOTSTRAP_RESAMPLES
-   {
-      for value in &mut resample
-      {
-         state = xorshift64(state);
-         *value = speedups[(state as usize) % speedups.len()];
-      }
-      medians.push(median(&resample));
-   }
-   medians.sort_unstable_by(f64::total_cmp);
-   [percentile_sorted(&medians, 0.025), percentile_sorted(&medians, 0.975)]
-}
-
 fn summarize(samples: &[f64]) -> DistributionSummary
 {
    let mut sorted = samples.to_vec();
@@ -791,45 +734,4 @@ fn summarize(samples: &[f64]) -> DistributionSummary
       median_absolute_deviation: percentile_sorted(&deviations, 0.50),
       coefficient_of_variation: if mean == 0.0 { 0.0 } else { variance.sqrt() / mean },
    }
-}
-
-fn median(samples: &[f64]) -> f64
-{
-   let mut sorted = samples.to_vec();
-   sorted.sort_unstable_by(f64::total_cmp);
-   percentile_sorted(&sorted, 0.50)
-}
-
-fn percentile(samples: &[f64], quantile: f64) -> f64
-{
-   let mut sorted = samples.to_vec();
-   sorted.sort_unstable_by(f64::total_cmp);
-   percentile_sorted(&sorted, quantile)
-}
-
-fn percentile_sorted(sorted: &[f64], quantile: f64) -> f64
-{
-   if sorted.is_empty()
-   {
-      return 0.0;
-   }
-   let rank = quantile.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
-   let lower = rank.floor() as usize;
-   let upper = rank.ceil() as usize;
-   if lower == upper
-   {
-      sorted[lower]
-   }
-   else
-   {
-      sorted[lower] + (sorted[upper] - sorted[lower]) * (rank - lower as f64)
-   }
-}
-
-fn xorshift64(mut value: u64) -> u64
-{
-   value ^= value << 13;
-   value ^= value >> 7;
-   value ^= value << 17;
-   value
 }

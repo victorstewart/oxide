@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "id": "idle.steady",
+  "fixture": {
+    "path": "fixtures/dashboard.mixed-static.json",
+    "sha256": "b3f1a54053b7b9de284164bba630f3091c73d2a10de7e2b0bea10ee87d954579"
+  },
+  "assets": {
+    "path": "assets/neutral-v1.json",
+    "sha256": "526211b8ad140a772d0f9427184ab32ebfe770c5b61dedbaa7501f8a5c4cd66f"
+  },
+  "font_pack": {
+    "id": "oxide-bench-fonts-v1",
+    "manifest": "font-packs/oxide-bench-fonts-v1.json",
+    "sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "viewport_class": "phone-portrait",
+  "scene": {
+    "roles": [
+      "dashboard",
+      "label",
+      "icon-image",
+      "rounded-card",
+      "control",
+      "backdrop-region"
+    ],
+    "style_tokens": {
+      "path": "styles/neutral-v1.json",
+      "sha256": "3fe8e237e670aa0b535a667d5058ed77b1097942755cebeb7f3d3ba3f85d8916"
+    },
+    "layout_assertions": {
+      "path": "layout/dashboard.mixed-static.json",
+      "sha256": "6688dd72c34d50e3fc87663892fdf063ad692b69f7d0921040ab532fd1cfc2ee"
+    }
+  },
+  "phases": [
+    {
+      "id": "setup",
+      "measured": false
+    },
+    {
+      "id": "prewarm",
+      "measured": false,
+      "duration_ms": 3000
+    },
+    {
+      "id": "settled-idle",
+      "measured": true,
+      "duration_ms": 60000
+    },
+    {
+      "id": "teardown",
+      "measured": false
+    }
+  ],
+  "primary_metric": "cpu.process_ms_per_wall_s",
+  "required_metrics": [
+    "idle.wakeups_per_min",
+    "idle.device_scope_gpu_activity_ms",
+    "memory.resident_drift_bytes"
+  ],
+  "optional_metrics": [
+    "memory.declared_resource_bytes",
+    "oxide.idle_submitted_frames",
+    "oxide.idle_renderer_wakeups"
+  ],
+  "parity_checkpoints": [
+    {
+      "id": "settled",
+      "phase_id": "settled-idle",
+      "at_us": 60000000,
+      "state": {
+        "path": "checkpoints/idle.steady/settled/state.json",
+        "sha256": "c2dab82b757761aba4ffe3a586a3c0c93cf908df4c7e10f86eb2f724a23d4cd0"
+      },
+      "accessibility": {
+        "path": "checkpoints/idle.steady/settled/accessibility.json",
+        "sha256": "db2f7927f2dd9022ac856547ed4fda094f36960aacaaaf6fd08e07e79cfc69f8"
+      },
+      "screenshot": {
+        "path": "checkpoints/dashboard.mixed-static/idle/screenshot.png",
+        "sha256": "560fc361a83413728036242950a1bd9071dbf473f3d342370fedab68bbd0c62a"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "dashboard",
+          "count": 1
+        },
+        {
+          "role": "label",
+          "count": 176
+        },
+        {
+          "role": "icon-image",
+          "count": 64
+        },
+        {
+          "role": "rounded-card",
+          "count": 32
+        },
+        {
+          "role": "control",
+          "count": 24
+        },
+        {
+          "role": "backdrop-region",
+          "count": 4
+        }
+      ]
+    }
+  ],
+  "fairness_contract": {
+    "locale": "en_US_POSIX",
+    "timezone": "UTC",
+    "direction": "ltr",
+    "logical_viewport_width": 390,
+    "logical_viewport_height": 844,
+    "expected_visible_role_counts": [
+      {
+        "role": "dashboard",
+        "count": 1
+      },
+      {
+        "role": "label",
+        "count": 176
+      },
+      {
+        "role": "icon-image",
+        "count": 64
+      },
+      {
+        "role": "rounded-card",
+        "count": 32
+      },
+      {
+        "role": "control",
+        "count": 24
+      },
+      {
+        "role": "backdrop-region",
+        "count": 4
+      }
+    ],
+    "schedule_tolerance_us": 1000,
+    "coordinate_tolerance_microunits": 1000,
+    "elapsed_time_driven": true
+  }
+}

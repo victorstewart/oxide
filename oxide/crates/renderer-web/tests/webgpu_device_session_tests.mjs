@@ -6,6 +6,15 @@ const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 
+function oxideDeviceDescriptor(maxBindGroups = 4)
+{
+   return {
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxBindGroups, maxTextureDimension2D: 8_192 },
+   };
+}
+
 test("separate wasm modules reuse one page-session device across route transitions", async () => {
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
@@ -59,11 +68,8 @@ test("separate wasm modules reuse one page-session device across route transitio
    const foundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
    const landingAdapter = await globalThis.navigator.gpu.requestAdapter();
    const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
-   const landingDevicePromise = landingAdapter.requestDevice({
-      label: DEVICE_LABEL,
-      requiredFeatures: ["timestamp-query"],
-      requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
-   });
+   assert.strictEqual(landingAdapter, foundationAdapter);
+   const landingDevicePromise = landingAdapter.requestDevice(oxideDeviceDescriptor());
    const foundationDevicePromise = foundationAdapter.requestDevice({
       label: DEVICE_LABEL,
       requiredFeatures: ["timestamp-query"],
@@ -98,15 +104,11 @@ test("separate wasm modules reuse one page-session device across route transitio
       const module = transition % 2 === 0 ? landingModule : foundationModule;
       const lease = module.acquireOxideWebGpuDeviceSession();
       const adapter = await globalThis.navigator.gpu.requestAdapter();
-      const device = await adapter.requestDevice({
-         label: DEVICE_LABEL,
-         requiredFeatures: ["timestamp-query"],
-         requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
-      });
+      const device = await adapter.requestDevice(oxideDeviceDescriptor());
       assert.strictEqual(device, landingDevice);
       module.releaseOxideWebGpuDeviceSession(lease);
    }
-   assert.equal(nativeAdapterRequests, 130);
+   assert.equal(nativeAdapterRequests, 1);
    assert.equal(nativeDeviceRequests, 1);
    assert.deepEqual(
       {
@@ -121,14 +123,10 @@ test("separate wasm modules reuse one page-session device across route transitio
    const incompatibleLease = foundationModule.acquireOxideWebGpuDeviceSession();
    const incompatibleAdapter = await globalThis.navigator.gpu.requestAdapter();
    await assert.rejects(
-      incompatibleAdapter.requestDevice({
-         label: DEVICE_LABEL,
-         requiredFeatures: ["timestamp-query"],
-         requiredLimits: { maxBindGroups: 8, maxTextureDimension2D: 8_192 },
-      }),
+      incompatibleAdapter.requestDevice(oxideDeviceDescriptor(8)),
       /incompatible Oxide WebGPU device requirements/,
    );
-   assert.equal(nativeAdapterRequests, 131);
+   assert.equal(nativeAdapterRequests, 1);
    foundationModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
    assert.equal(readSnapshot().incompatible_acquire_failure_count, 1);
 

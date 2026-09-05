@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="thread-info">
+<col><mnemonic>time</mnemonic></col><col><mnemonic>pid</mnemonic></col><col><mnemonic>tid</mnemonic></col><col><mnemonic>process</mnemonic></col><col><mnemonic>thread</mnemonic></col><col><mnemonic>name</mnemonic></col><col><mnemonic>main-thread</mnemonic></col>
+</schema>
+<row><event-time>0</event-time><pid>42</pid><tid>900</tid><process fmt="OxideBenchMacOS (42)"><pid>42</pid></process><thread fmt="main (0x384) (OxideBenchMacOS, pid: 42)"><tid>900</tid><process><pid>42</pid></process></thread><thread-name fmt="main">main</thread-name><boolean fmt="Yes">1</boolean></row>
+<row><event-time>0</event-time><pid>42</pid><tid>901</tid><process fmt="OxideBenchMacOS (42)"><pid>42</pid></process><thread fmt="worker (0x385) (OxideBenchMacOS, pid: 42)"><tid>901</tid><process><pid>42</pid></process></thread><thread-name fmt="worker">worker</thread-name><boolean fmt="No">0</boolean></row>
+</node>
+</trace-query-result>

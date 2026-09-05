@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "audit_id": "macos-appkit-native-production-v1",
+  "status": "pending",
+  "identity": {
+    "platform": "macos",
+    "framework": "appkit",
+    "implementation": "appkit-production",
+    "variant": "native.production"
+  },
+  "source": {
+    "source_revision": "working-tree-snapshot-production-appkit-qualification-pending-2026-07-21",
+    "source_tree": [
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionScenarioAdapter.swift",
+        "sha256": "02e7ec99016f5be499cb465d1cb08789d132319570172bdcddc1939d9b2488c0"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionReferenceFoundation.swift",
+        "sha256": "3e6e6550360da2c44b65120f4b8828c25668ee3604f413a00da92a91a5abd798"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionReferenceDataSources.swift",
+        "sha256": "236f5c389d03b6269b919eba5447a27b146f23516436b111778844401d3298b5"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionReferenceScenarioModel.swift",
+        "sha256": "8bb79342e639a0ff64d370b92e3cb0311da666bd55e6f015c60ad5886b5d0861"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionReferenceScenes.swift",
+        "sha256": "54c727757140e1bef63b8b7dde92e4f1af194fcbdbf480916e2fbee6ac686253"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionReleaseScenes.swift",
+        "sha256": "180598cb49b2901f0813c3f09cda72856e65ae63b21b3624ab991c0b6a08fd01"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionVisualComponents.swift",
+        "sha256": "05ba3921c7bc501ba92418dec0323382dfaacf36aa61dcbed4e594457e4704fc"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/AppKitProductionEdgeRaster.swift",
+        "sha256": "9e14c6713c1be5f44ab194d17105960afd4bf6fc01ccf386173f2d7f6df2dfbc"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/main.swift",
+        "sha256": "3f8c3d6355058de0f164fd360737972dc9001a718ad01a08bfb071ac87525a47"
+      },
+      {
+        "path": "host/apple-comparison/AppKit-macOS/Info.plist",
+        "sha256": "db5733f30571a531b74fad537106fc98fc05790e4a72af6b3a56a537aa4ce21e"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/BenchmarkCampaign.swift",
+        "sha256": "32f42015341a729f1bfb5f6fc639a04e39b4dc381250fac90dce0239c7af3bb3"
+      },
+      {
+        "path": "host/apple-comparison/Shared/ComparatorApp/BenchmarkCampaignExecutor.swift",
+        "sha256": "f17fe6fdec1a1c1f2894d1159c486b2691f5e97aec9ccc177688655bacbeb9a9"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/BenchmarkContract.swift",
+        "sha256": "7bd206dcce7234b6df196ca44a1e5801e3d12fbd6e3f0369422da2e7fcc6d46f"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/BenchmarkPhaseScheduler.swift",
+        "sha256": "0ee75b144bce5960fb6a4d3e0b84326057dca6b0f63ce781e76b02e94f47c0b8"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/BenchmarkTelemetryRing.swift",
+        "sha256": "3e83a8dc11af1d94468ea21acb9d24078ab8e5b6ccef4f863c1d423385f3d5d3"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/ComparisonContract.swift",
+        "sha256": "31966102956dd7193dde793c1f7bc621994928976d772cfeba169ae587eca54d"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/ComparisonTransport.swift",
+        "sha256": "b2398c42233050a1a23fddfab2e10d00530d0474531e6eebf94213ee998a6138"
+      },
+      {
+        "path": "host/apple-comparison/Shared/iOSControl/DarwinControlSignal.swift",
+        "sha256": "4d42127e81c4ae723e748ac1fde4c40eeb6adbc4e7d65c8299bd5e4057f80ad6"
+      },
+      {
+        "path": "host/apple-comparison/Shared/Foundation/DurableArtifactStore.swift",
+        "sha256": "04bb18be1cf9b94434d17e974dd94116cfd50c4724b867f171c696d54cb9f459"
+      },
+      {
+        "path": "host/apple-comparison/Shared/ComparatorApp/MacOSCampaignControl.swift",
+        "sha256": "61041b91ed8c94c4b46a83ce2c1e64b0763ced4a9c7a5586f1be172592bb0c65"
+      },
+      {
+        "path": "host/apple-comparison/Shared/ComparatorApp/MacOSCanonicalLaunchExecutor.swift",
+        "sha256": "489f72544bf2b2147ed50e044da57dd7002104c995570e8fcba96c2b389593b3"
+      },
+      {
+        "path": "host/apple-comparison/Shared/ComparatorApp/MacOSTrustedInputControl.swift",
+        "sha256": "665d78e4cdca3a8a3535b5c1a92867637c1e4c4783549370e9470e4175f970df"
+      }
+    ],
+    "dependencies": [
+      {
+        "path": "host/apple-comparison/AppleComparison.xcodeproj/project.pbxproj",
+        "sha256": "7dd4e2ce75852936ad99480f8d1b7f10659fd49b5ecd93212948bd88ed7a2084"
+      },
+      {
+        "path": "host/apple-comparison/MacOSComparisonControllerUITests/Info.plist",
+        "sha256": "55a9c3dbd2e3925788619684eace456de8fcbdd4e0afb681237cdcff36d6bda9"
+      },
+      {
+        "path": "host/apple-comparison/MacOSComparisonControllerUITests/MacOSComparisonControllerUITests.swift",
+        "sha256": "95d783b3ef638ff94bc99392476b637bb7ce46a0dfd980702038e872e9e36b21"
+      },
+      {
+        "path": "host/apple-comparison/MacOSComparisonControllerUITests/MacOSTrustedInputXCUIController.swift",
+        "sha256": "9098954d00733407945866fb437301ee38a1e53103d8ab90a875987bfe93b21c"
+      }
+    ],
+    "build_recipe": {
+      "path": "host/apple-comparison/project.yml",
+      "sha256": "438e2641c686a969c09e1a4abf6d1e5f0b7649c39d52f1aa7bba2f854ab88a1c"
+    },
+    "build_flags": [
+      "Release",
+      "SWIFT_OPTIMIZATION_LEVEL=-O",
+      "MTL_ENABLE_DEBUG_INFO=NO",
+      "MACOSX_DEPLOYMENT_TARGET=15.0"
+    ]
+  },
+  "reviewer": null,
+  "selection": {
+    "selected_before_oxide_results": true,
+    "disclosure": "The full-stack native.production AppKit hierarchy is frozen before any Oxide-versus-AppKit performance result is acquired. Existing screenshot work is correctness-only and contains no performance outcome.",
+    "evidence": null
+  },
+  "production_architecture": {
+    "virtualization_and_reuse": {
+      "status": "pending",
+      "rationale": "The comparator contains native NSCollectionView/NSTableView reuse and in-place binding, pending independent production-AppKit review.",
+      "evidence": []
+    },
+    "layout": {
+      "status": "pending",
+      "rationale": "Distinct native scene roots and AppKit component hierarchies are present, pending independent layout-architecture review.",
+      "evidence": []
+    },
+    "text": {
+      "status": "pending",
+      "rationale": "Pinned-font AppKit/Core Text components are present, pending independent text-architecture review.",
+      "evidence": []
+    },
+    "image_decode_and_cache": {
+      "status": "pending",
+      "rationale": "Native image ownership and cache behavior are present, pending bounded-profile and independent review.",
+      "evidence": []
+    },
+    "animation_and_compositing": {
+      "status": "pending",
+      "rationale": "Layer-backed native components and transition state are present, pending independent compositing review.",
+      "evidence": []
+    },
+    "input": {
+      "status": "pending",
+      "rationale": "Native responder and target-action paths are present, pending independently reviewed OS-input evidence.",
+      "evidence": []
+    },
+    "accessibility": {
+      "status": "pending",
+      "rationale": "Raw AppKit accessibility evidence is captured from the native hierarchy, pending independent review.",
+      "evidence": []
+    },
+    "cleanup": {
+      "status": "pending",
+      "rationale": "Bounded teardown and footprint recovery tests exist, pending independent cleanup and retained-resource review.",
+      "evidence": []
+    }
+  },
+  "forbidden_work": {
+    "debug_work": {
+      "status": "pending",
+      "rationale": "Release flags and bundle identity are enforced, pending signed artifact review.",
+      "evidence": []
+    },
+    "synchronous_sleeps": {
+      "status": "pending",
+      "rationale": "Source review has found no synchronous sleeps in measured paths, pending independent confirmation.",
+      "evidence": []
+    },
+    "benchmark_logging": {
+      "status": "pending",
+      "rationale": "Lean-pass logging absence remains to be proven by acquisition evidence.",
+      "evidence": []
+    },
+    "forced_layout_or_render_loops": {
+      "status": "pending",
+      "rationale": "Explicit layout/display calls are confined to correctness capture and quiescence paths; measured-path exclusion awaits profile review.",
+      "evidence": []
+    },
+    "accidental_full_tree_rebuild": {
+      "status": "pending",
+      "rationale": "In-place collection/table updates exist, pending per-scenario profile confirmation.",
+      "evidence": []
+    },
+    "unbounded_native_or_dom_growth": {
+      "status": "pending",
+      "rationale": "Correctness warmup converges, but the required 1x/2x scaling evidence is not yet attached.",
+      "evidence": []
+    },
+    "harness_profiler_hotspot": {
+      "status": "pending",
+      "rationale": "Per-scenario bounded profiles and >=5% stack dispositions remain to be acquired.",
+      "evidence": []
+    }
+  },
+  "scaling": {
+    "one_x": {
+      "fixture_scale": "1x",
+      "complexity_summary": "Qualification acquisition pending.",
+      "disposition": {
+        "status": "pending",
+        "rationale": "The required bounded 1x scaling evidence is absent.",
+        "evidence": []
+      }
+    },
+    "two_x": {
+      "fixture_scale": "2x",
+      "complexity_summary": "Qualification acquisition pending.",
+      "disposition": {
+        "status": "pending",
+        "rationale": "The required bounded 2x scaling evidence is absent.",
+        "evidence": []
+      }
+    }
+  },
+  "scenario_profiles": [],
+  "gates": {
+    "parity": {
+      "status": "pending",
+      "rationale": "The current source-bound 32-checkpoint matrix passes calibrated visual and exact structural admission; reviewed durable audit evidence is not yet attached.",
+      "evidence": []
+    },
+    "artifact": {
+      "status": "pending",
+      "rationale": "Release bundle identities are enforced by the controller but are not yet attached to reviewer evidence.",
+      "evidence": []
+    },
+    "release_build": {
+      "status": "pending",
+      "rationale": "The Release build passes, pending independent shipping-payload review.",
+      "evidence": []
+    }
+  },
+  "native_ceiling": null,
+  "reviewer_signoff": null,
+  "rejection_reasons": [
+    "No independent reviewer with current production AppKit experience has approved this reference.",
+    "Required 1x/2x scaling and per-scenario bounded-profile evidence are absent.",
+    "Reviewed parity, artifact, release-build, presentation-calibration, and collector-calibration evidence is not yet attached."
+  ]
+}

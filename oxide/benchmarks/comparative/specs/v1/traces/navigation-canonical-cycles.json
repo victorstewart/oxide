@@ -1,0 +1,98 @@
+[
+  {
+    "at_us": 0,
+    "op": "navigate",
+    "target": "navigation:item:05",
+    "state_id": "navigation:cycle:0:detail"
+  },
+  {
+    "at_us": 325000,
+    "op": "navigate",
+    "target": "navigation:modal",
+    "state_id": "navigation:cycle:0:modal"
+  },
+  {
+    "at_us": 650000,
+    "op": "navigate",
+    "target": "navigation:dismiss-control",
+    "state_id": "navigation:cycle:0:detail-restored"
+  },
+  {
+    "at_us": 950000,
+    "op": "navigate",
+    "target": "navigation:back-control",
+    "state_id": "navigation:cycle:0:list-restored"
+  },
+  {
+    "at_us": 1200000,
+    "op": "navigate",
+    "target": "navigation:item:05",
+    "state_id": "navigation:cycle:1:detail"
+  },
+  {
+    "at_us": 1525000,
+    "op": "navigate",
+    "target": "navigation:modal",
+    "state_id": "navigation:cycle:1:modal"
+  },
+  {
+    "at_us": 1850000,
+    "op": "navigate",
+    "target": "navigation:dismiss-control",
+    "state_id": "navigation:cycle:1:detail-restored"
+  },
+  {
+    "at_us": 2150000,
+    "op": "navigate",
+    "target": "navigation:back-control",
+    "state_id": "navigation:cycle:1:list-restored"
+  },
+  {
+    "at_us": 2400000,
+    "op": "navigate",
+    "target": "navigation:item:05",
+    "state_id": "navigation:cycle:2:detail"
+  },
+  {
+    "at_us": 2725000,
+    "op": "navigate",
+    "target": "navigation:modal",
+    "state_id": "navigation:cycle:2:modal"
+  },
+  {
+    "at_us": 3050000,
+    "op": "navigate",
+    "target": "navigation:dismiss-control",
+    "state_id": "navigation:cycle:2:detail-restored"
+  },
+  {
+    "at_us": 3350000,
+    "op": "navigate",
+    "target": "navigation:back-control",
+    "state_id": "navigation:cycle:2:list-restored"
+  },
+  {
+    "at_us": 3600000,
+    "op": "navigate",
+    "target": "navigation:item:05",
+    "state_id": "navigation:cycle:3:detail"
+  },
+  {
+    "at_us": 3925000,
+    "op": "navigate",
+    "target": "navigation:modal",
+    "state_id": "navigation:cycle:3:modal"
+  },
+  {
+    "at_us": 4250000,
+    "op": "navigate",
+    "target": "navigation:dismiss-control",
+    "state_id": "navigation:cycle:3:detail-restored"
+  },
+  {
+    "at_us": 4550000,
+    "op": "navigate",
+    "target": "navigation:back-control",
+    "state_id": "navigation:cycle:3:list-restored"
+  }
+]

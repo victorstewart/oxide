@@ -169,6 +169,24 @@ fn no_material_regression_policy_accepts_ties_but_not_tail_regressions()
 }
 
 #[test]
+fn higher_is_better_tail_direction_is_respected()
+{
+   let mut improvement = input(1.10);
+   improvement.lower_is_better = false;
+   let improved = analyze_paired_experiment(improvement).expect("analyze higher-is-better improvement");
+   assert!(improved.decision.accepted, "{:?}", improved.decision.reasons);
+   assert!(improved.decision.median_speedup_pct > 9.9);
+
+   let mut regression = input(0.90);
+   regression.lower_is_better = false;
+   let regressed = analyze_paired_experiment(regression).expect("analyze higher-is-better regression");
+   assert!(!regressed.decision.accepted);
+   assert!(regressed.decision.reasons.iter().any(|reason| reason.contains("p95")));
+   assert!(regressed.decision.reasons.iter().any(|reason| reason.contains("p99")));
+   assert!(regressed.decision.reasons.iter().any(|reason| reason.contains("peak")));
+}
+
+#[test]
 fn cold_browser_startup_persists_empty_warmups()
 {
    let mut startup = input(0.90);

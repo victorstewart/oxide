@@ -1,0 +1,1449 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		02E4CDC6B22F39D7B25185D9 /* AppKitScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEE4D1EC96E96021FC385DAA /* AppKitScenarioAdapter.swift */; };
+		06B38017DCA12197488FE0F5 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		08EF537DB447146A10D73008 /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		09E80C9F170553871284FC0B /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		0DE4F520ADBB120CE4AEF98B /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		0E7B2FE59E20C4C659C08504 /* MacOSCampaignControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */; };
+		109448074BDF9B35D87C703A /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		1177C044766F3265A57C40A8 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		14E92E461546B59EA59F50BB /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		17906631B1BB18DC512B5637 /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		19FF1D137FE6B78FA09287BB /* AppKitProductionEdgeRaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E9B94D353ADA9F678FEE08 /* AppKitProductionEdgeRaster.swift */; };
+		1AA65FC1CF6652661D7EB9D9 /* MacOSCanonicalLaunchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */; };
+		1B59E4F1D21135000B28D82E /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		23E38FDD86B2A46151FA0DAB /* phase0.json in Resources */ = {isa = PBXBuildFile; fileRef = 50A74B275588462D7154B47F /* phase0.json */; };
+		248E6E70F61454866F9FABAD /* AppKitProductionReleaseScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFE036C04774ABA7A5D97CD /* AppKitProductionReleaseScenes.swift */; };
+		263F7F7B411556B89566D7CE /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		26C36709694DD5B048760ACC /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		297DDE694135F1F3C82354B4 /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		2FDF5F67716CDAFD8F2416E2 /* AppKitProductionReleaseScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AFE036C04774ABA7A5D97CD /* AppKitProductionReleaseScenes.swift */; };
+		307AFF206473D30438344B37 /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		3199C28FB0A8ABCDDB19C105 /* AppKitProductionScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6C4A0B4457AAC04A8C8EFC /* AppKitProductionScenarioAdapter.swift */; };
+		31D36186C78277F24CC310AE /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		34E337B6B02FDF6BB46D45E1 /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		3B9B0E20A50C94C122C26567 /* AppKitProductionReferenceScenarioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541734E82ADC7483D5391616 /* AppKitProductionReferenceScenarioModel.swift */; };
+		3CA55564CC6FDEE0F1274C9D /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B052E22F32CB532A4122A4 /* main.swift */; };
+		3D38D9084894D229126BD161 /* AppKitProductionReferenceFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 917B9BBB5FA614315EA21503 /* AppKitProductionReferenceFoundation.swift */; };
+		3F236FF7B4640B0D04719511 /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		3F3C6CE2645BA7A0AC64BAFF /* MacOSCanonicalLaunchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */; };
+		453CEAE3DCB206E8D3E44543 /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		49A552A81349449E1CE8365B /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		4A46CD0867B54EED82511FCF /* AppKitProductionEdgeRaster.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E9B94D353ADA9F678FEE08 /* AppKitProductionEdgeRaster.swift */; };
+		4AFD07023B5737107446C046 /* AppKitProductionScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6C4A0B4457AAC04A8C8EFC /* AppKitProductionScenarioAdapter.swift */; };
+		4D17A029489C8CDD50282620 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		4E74A812F2C18AABBDA0C51F /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		554C3E48F2B3FC10DD3E5336 /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		556A90C17560E0CA6ED4D295 /* AppKitProductionScenarioAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 454D0499F6C3EA3A43EC9AD8 /* AppKitProductionScenarioAdapterTests.swift */; };
+		573BC81B68D13E8807E2B4F1 /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		57B4F73F34651AC318D4F952 /* AppKitProductionReferenceScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D7BCB26DFA63322D6DD72A /* AppKitProductionReferenceScenes.swift */; };
+		59CBF7407968309008BF733F /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		5D47FDB01B63814D154354D3 /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		64FB05C9781F48F4EF3C8694 /* OxideScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78B9ED0DFBF29F7CB60E6227 /* OxideScenarioAdapter.swift */; };
+		67DAF55E384038021E3B5AB2 /* MacOSCanonicalLaunchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */; };
+		688C7CF8054D225E94F15829 /* v1 in Resources */ = {isa = PBXBuildFile; fileRef = 301D9A7D022711310BC1863B /* v1 */; };
+		6A445130A44B7D03B30657ED /* AppKitProductionReferenceArchitectureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD076EA8FACCC18B0284909 /* AppKitProductionReferenceArchitectureTests.swift */; };
+		6B74FB6D5C659DCB06DE693D /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		6BACF80D0722408A444A75CD /* BenchmarkCampaignExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */; };
+		6CFDE1363960E8058219B44F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEED70F4CAF2D708D5EDB0A2 /* main.swift */; };
+		6F7D0A4CBE19A9CBB026F1F8 /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		7224499BEA1CD53AB9026E2F /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		73E7DA6F6ED643D046990099 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		75EDCFCB18FBE59C8A1F786B /* MacOSCampaignControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */; };
+		763A3016ABE61D7860602F1C /* MacOSTrustedInputXCUIController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487C345B34378F109C3025A8 /* MacOSTrustedInputXCUIController.swift */; };
+		76C8BAB6021582F332B41A5C /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		790B074F4377BBCE06D3B835 /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		7928DAE99C5E5F71173FB383 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		7948A5931DEFC54EA2B40F07 /* MacOSTrustedInputControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25524AB0A4015913F93C2963 /* MacOSTrustedInputControlTests.swift */; };
+		79D832184CA80A1747F5DD25 /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		7AF7E2CD802FA08060C04167 /* MacOSCanonicalLaunchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */; };
+		7B894E2F1F0A045A3F82D872 /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		7E2BA128ADCD967174D7B71E /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8A0092D54259410CF8CD1C /* main.swift */; };
+		7F405F04B44C15C8A59A0355 /* MacOSCanonicalLaunchExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */; };
+		887B7B91ABCB3E59FE159CA5 /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		89CA7ECC566F9292CB94CF4B /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		8A150C56A55748B830D762CE /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		8A19A4594D827C174CF06C1A /* ComparisonTransportUnitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C440D6A7A9320410B590DAC /* ComparisonTransportUnitTests.swift */; };
+		8E25AF9548CF3BF6B39617D3 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		95510B4E17D1278B53E74C27 /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		96EB12C0978918790E0CB621 /* MacOSCampaignControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */; };
+		9845DA42A2D63EE01D14CC46 /* AppKitProductionVisualComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B95361E6DA3B456645614F08 /* AppKitProductionVisualComponents.swift */; };
+		9C31BD090BBCD9E4AEC9091D /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		9CE0701D123411D71E366BAC /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		9D56D740E61F318A5E476B49 /* ComparisonControllerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F6293718C14A8696988C0D4 /* ComparisonControllerUITests.swift */; };
+		A0061F8F0E5766367129FDA7 /* AppKitProductionReferenceDataSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75012DE121400E7D12EF2F6F /* AppKitProductionReferenceDataSources.swift */; };
+		A02FCBD6079F9873D953E0AB /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		A22E1EFD5782C8A7FCBE0D8F /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		A23C8F07FE52134FDFB18C3E /* MacOSTrustedInputXCUIController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 487C345B34378F109C3025A8 /* MacOSTrustedInputXCUIController.swift */; };
+		A763ECD365EA263DEAD0CBF2 /* DarwinControlSignal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */; };
+		AAA8B66AD5479413C2BA4181 /* MacOSCampaignControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */; };
+		AB8474B18A7985537039EB9F /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		B08EE2714C964152868797EB /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		B2D4FF8D8D6C6F210A6D8C4A /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		B357A80A73C5DA2D82D19086 /* AppKitProductionReferenceScenes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D7BCB26DFA63322D6DD72A /* AppKitProductionReferenceScenes.swift */; };
+		B4D55C65A0FAC66A2A7F080D /* TransportProbeAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */; };
+		B540E58B17DE0BE2DFC7EF25 /* UIKitScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E434927C3216724AEFA09BC /* UIKitScenarioAdapter.swift */; };
+		B6CF90DD356F58B5E727BAB2 /* BenchmarkCampaignExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */; };
+		B8DEFDD74EA4D048E2D1472B /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		BBE3197970E02E0619FB2983 /* AppKitProductionVisualComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B95361E6DA3B456645614F08 /* AppKitProductionVisualComponents.swift */; };
+		BC95867223A2BC4B2E7E3797 /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		C1D093F1E692D0A7A7152757 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		C24FB6442054865589B3F65A /* v1 in Resources */ = {isa = PBXBuildFile; fileRef = 301D9A7D022711310BC1863B /* v1 */; };
+		C5E6FB98B668ACE5CD1F19DB /* BenchmarkCampaignExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */; };
+		C71B4E5022F1BA77EE2474C7 /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		C8175EF69F5E04301EAC2F04 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		C87C45DBB24AEC9B3548B006 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		C94AFAD4111B87C8979294F0 /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		CA673C13C41367B04D3AA361 /* BenchmarkCampaignExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */; };
+		CCCBF4412DFEF7AD38ADFC9A /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		CEDF86FF81A67779FC84AD91 /* MacOSComparisonControllerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D14BBE04A575F7451D9571FE /* MacOSComparisonControllerUITests.swift */; };
+		CFF67086D039329944C1296B /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		D035EEB1106297A68A5B7770 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+		D11E6732EF95C58A1EAC3C62 /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		D51468DD7B141C23A7DABDAC /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		D70286CD46E786EA7DA77833 /* TransportProbeAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */; };
+		D8F33D4BD5FDC41528A6B14C /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		DC6BB853E7050A3237C41695 /* AppKitProductionReferenceDataSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75012DE121400E7D12EF2F6F /* AppKitProductionReferenceDataSources.swift */; };
+		DCC42CF0DB8AFA64A6ABEFC3 /* AppKitProductionReferenceScenarioModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541734E82ADC7483D5391616 /* AppKitProductionReferenceScenarioModel.swift */; };
+		E390D80C796B2D1797FE4AEE /* v1 in Resources */ = {isa = PBXBuildFile; fileRef = 301D9A7D022711310BC1863B /* v1 */; };
+		E3C4BBD70D0EFE93310A448B /* BenchmarkContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C0F049701F014659A90174 /* BenchmarkContract.swift */; };
+		E4AC812F2A2AC68160495CA8 /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		E4DEDB1B7DC732B5CF5DB356 /* ComparisonTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */; };
+		E6949EDFF2D848A6A3286DEF /* BenchmarkCampaignExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */; };
+		E971A6315E080FDE6E3BB819 /* AppKitScenarioAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAF7058E7EE856806AAFC0A2 /* AppKitScenarioAdapterTests.swift */; };
+		EA38480514E1E1805DF2B201 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BCA701640D27EF44BA2C488 /* main.swift */; };
+		EAA06D606E85EC74EFA2C0A8 /* MacOSTrustedInputControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */; };
+		EBBDE75559A25656185E2481 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		EBD5453EB9F8E5F5ED096CEA /* ComparisonContract.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */; };
+		EEB14EB3668306C19F91D50C /* AppKitProductionReferenceFoundation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 917B9BBB5FA614315EA21503 /* AppKitProductionReferenceFoundation.swift */; };
+		EFBA9528A48C0C334380EE6E /* v1 in Resources */ = {isa = PBXBuildFile; fileRef = 301D9A7D022711310BC1863B /* v1 */; };
+		EFDAAA8ACD43FB8B4671FB25 /* OxideScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D717B9AC726936AA9CFA0AC /* OxideScenarioAdapter.swift */; };
+		F172342ECB16EE68D2804947 /* MacOSCanonicalLaunchExecutorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4D3AD912F25ADDBFA6E85E8 /* MacOSCanonicalLaunchExecutorTests.swift */; };
+		F5EFD65657C0E5F3626A6A27 /* BenchmarkCampaign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */; };
+		F65D22AA67D60CCE1391C7A5 /* DurableArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */; };
+		FC08CF499F8E6005A42AC1D6 /* BenchmarkTelemetryRing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */; };
+		FF4115A7768178D8439244F5 /* BenchmarkPhaseScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0FC305A041A7179E906BAC07 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C9D5B9F678A0BAB84C4DD084 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 849B9F7C604D921FF55A7872;
+			remoteInfo = OxideBenchIOS;
+		};
+		1A1845A794DFEB3BA171A180 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C9D5B9F678A0BAB84C4DD084 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C42D25FB10B65EF9D392644B;
+			remoteInfo = UIKitBenchIOS;
+		};
+		2E54ED60F862A96644F7EC23 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C9D5B9F678A0BAB84C4DD084 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A5742E84CBE3E8AEFEE3A71A;
+			remoteInfo = OxideBenchMacOS;
+		};
+		418927209DBB412E59699FAE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C9D5B9F678A0BAB84C4DD084 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8BE81F7B271DF3B6A31B6D5E;
+			remoteInfo = AppKitBenchMacOS;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		041AC7AA613258D97EB355C6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSCanonicalLaunchExecutor.swift; sourceTree = "<group>"; };
+		0B63F9378B51234F2E943E8B /* OxideBenchIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OxideBenchIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1299605E9F59BC54D426E203 /* AppKitBenchMacOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AppKitBenchMacOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		17B50F50DDAB371862FD71EB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1897394CFC779C964A530236 /* MacOSComparisonControllerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacOSComparisonControllerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1F6293718C14A8696988C0D4 /* ComparisonControllerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonControllerUITests.swift; sourceTree = "<group>"; };
+		1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportProbeAppDelegate.swift; sourceTree = "<group>"; };
+		24129DC8D346C5C53D759E15 /* ComparisonControllerUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ComparisonControllerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		25524AB0A4015913F93C2963 /* MacOSTrustedInputControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSTrustedInputControlTests.swift; sourceTree = "<group>"; };
+		27964024BA5ACD573FA01BB2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DarwinControlSignal.swift; sourceTree = "<group>"; };
+		301D9A7D022711310BC1863B /* v1 */ = {isa = PBXFileReference; lastKnownFileType = folder; name = v1; path = ../../benchmarks/comparative/specs/v1; sourceTree = SOURCE_ROOT; };
+		32E9B94D353ADA9F678FEE08 /* AppKitProductionEdgeRaster.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionEdgeRaster.swift; sourceTree = "<group>"; };
+		3AFE036C04774ABA7A5D97CD /* AppKitProductionReleaseScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReleaseScenes.swift; sourceTree = "<group>"; };
+		3B63BFCEA1546EA0E89AEC08 /* ComparisonHarnessUnitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ComparisonHarnessUnitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		3BCA701640D27EF44BA2C488 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		3C440D6A7A9320410B590DAC /* ComparisonTransportUnitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonTransportUnitTests.swift; sourceTree = "<group>"; };
+		454D0499F6C3EA3A43EC9AD8 /* AppKitProductionScenarioAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionScenarioAdapterTests.swift; sourceTree = "<group>"; };
+		487C345B34378F109C3025A8 /* MacOSTrustedInputXCUIController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSTrustedInputXCUIController.swift; sourceTree = "<group>"; };
+		50A74B275588462D7154B47F /* phase0.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = phase0.json; sourceTree = "<group>"; };
+		51D7BCB26DFA63322D6DD72A /* AppKitProductionReferenceScenes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReferenceScenes.swift; sourceTree = "<group>"; };
+		541734E82ADC7483D5391616 /* AppKitProductionReferenceScenarioModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReferenceScenarioModel.swift; sourceTree = "<group>"; };
+		5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkCampaign.swift; sourceTree = "<group>"; };
+		5D660CA7D60920E47AE6D70E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		5E434927C3216724AEFA09BC /* UIKitScenarioAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitScenarioAdapter.swift; sourceTree = "<group>"; };
+		75012DE121400E7D12EF2F6F /* AppKitProductionReferenceDataSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReferenceDataSources.swift; sourceTree = "<group>"; };
+		78B9ED0DFBF29F7CB60E6227 /* OxideScenarioAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxideScenarioAdapter.swift; sourceTree = "<group>"; };
+		7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSCampaignControl.swift; sourceTree = "<group>"; };
+		85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkPhaseScheduler.swift; sourceTree = "<group>"; };
+		86C0F049701F014659A90174 /* BenchmarkContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkContract.swift; sourceTree = "<group>"; };
+		8B0F38B63B9CBDBDFFA7EA01 /* OxideBenchMacOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OxideBenchMacOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8D717B9AC726936AA9CFA0AC /* OxideScenarioAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OxideScenarioAdapter.swift; sourceTree = "<group>"; };
+		917B9BBB5FA614315EA21503 /* AppKitProductionReferenceFoundation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReferenceFoundation.swift; sourceTree = "<group>"; };
+		94B9A9BA6CC5AB92E1406EFB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkCampaignExecutor.swift; sourceTree = "<group>"; };
+		9C6C4A0B4457AAC04A8C8EFC /* AppKitProductionScenarioAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionScenarioAdapter.swift; sourceTree = "<group>"; };
+		A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkTelemetryRing.swift; sourceTree = "<group>"; };
+		A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSTrustedInputControl.swift; sourceTree = "<group>"; };
+		B95361E6DA3B456645614F08 /* AppKitProductionVisualComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionVisualComponents.swift; sourceTree = "<group>"; };
+		B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonTransport.swift; sourceTree = "<group>"; };
+		BB3D592557A919F34586B24E /* AppKitComparisonUnitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppKitComparisonUnitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurableArtifactStore.swift; sourceTree = "<group>"; };
+		C6B052E22F32CB532A4122A4 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComparisonContract.swift; sourceTree = "<group>"; };
+		D14BBE04A575F7451D9571FE /* MacOSComparisonControllerUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSComparisonControllerUITests.swift; sourceTree = "<group>"; };
+		D4D3AD912F25ADDBFA6E85E8 /* MacOSCanonicalLaunchExecutorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacOSCanonicalLaunchExecutorTests.swift; sourceTree = "<group>"; };
+		D7576EC37C56E6506547C24F /* UIKitBenchIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UIKitBenchIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DCD076EA8FACCC18B0284909 /* AppKitProductionReferenceArchitectureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitProductionReferenceArchitectureTests.swift; sourceTree = "<group>"; };
+		DEED70F4CAF2D708D5EDB0A2 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		E2555514A82E8CFB596696A7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		EE8A0092D54259410CF8CD1C /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		EEE4D1EC96E96021FC385DAA /* AppKitScenarioAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitScenarioAdapter.swift; sourceTree = "<group>"; };
+		F5E800996B07EF7951EF4B78 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FAF7058E7EE856806AAFC0A2 /* AppKitScenarioAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitScenarioAdapterTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		1D17228D19D525F4BD07A978 /* Oxide-macOS */ = {
+			isa = PBXGroup;
+			children = (
+				17B50F50DDAB371862FD71EB /* Info.plist */,
+				DEED70F4CAF2D708D5EDB0A2 /* main.swift */,
+				78B9ED0DFBF29F7CB60E6227 /* OxideScenarioAdapter.swift */,
+			);
+			path = "Oxide-macOS";
+			sourceTree = "<group>";
+		};
+		1FFCEE1332524D045CB13288 /* AppKitComparisonUnitTests */ = {
+			isa = PBXGroup;
+			children = (
+				DCD076EA8FACCC18B0284909 /* AppKitProductionReferenceArchitectureTests.swift */,
+				454D0499F6C3EA3A43EC9AD8 /* AppKitProductionScenarioAdapterTests.swift */,
+				FAF7058E7EE856806AAFC0A2 /* AppKitScenarioAdapterTests.swift */,
+				94B9A9BA6CC5AB92E1406EFB /* Info.plist */,
+				D4D3AD912F25ADDBFA6E85E8 /* MacOSCanonicalLaunchExecutorTests.swift */,
+				25524AB0A4015913F93C2963 /* MacOSTrustedInputControlTests.swift */,
+			);
+			path = AppKitComparisonUnitTests;
+			sourceTree = "<group>";
+		};
+		3067825F58379DEFE6DA8635 /* AppKit-macOS */ = {
+			isa = PBXGroup;
+			children = (
+				32E9B94D353ADA9F678FEE08 /* AppKitProductionEdgeRaster.swift */,
+				75012DE121400E7D12EF2F6F /* AppKitProductionReferenceDataSources.swift */,
+				917B9BBB5FA614315EA21503 /* AppKitProductionReferenceFoundation.swift */,
+				541734E82ADC7483D5391616 /* AppKitProductionReferenceScenarioModel.swift */,
+				51D7BCB26DFA63322D6DD72A /* AppKitProductionReferenceScenes.swift */,
+				3AFE036C04774ABA7A5D97CD /* AppKitProductionReleaseScenes.swift */,
+				9C6C4A0B4457AAC04A8C8EFC /* AppKitProductionScenarioAdapter.swift */,
+				B95361E6DA3B456645614F08 /* AppKitProductionVisualComponents.swift */,
+				EEE4D1EC96E96021FC385DAA /* AppKitScenarioAdapter.swift */,
+				3BCA701640D27EF44BA2C488 /* main.swift */,
+			);
+			path = "AppKit-macOS";
+			sourceTree = "<group>";
+		};
+		37A5954CBFBA47E67DD9001F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1299605E9F59BC54D426E203 /* AppKitBenchMacOS.app */,
+				BB3D592557A919F34586B24E /* AppKitComparisonUnitTests.xctest */,
+				24129DC8D346C5C53D759E15 /* ComparisonControllerUITests.xctest */,
+				3B63BFCEA1546EA0E89AEC08 /* ComparisonHarnessUnitTests.xctest */,
+				1897394CFC779C964A530236 /* MacOSComparisonControllerUITests.xctest */,
+				0B63F9378B51234F2E943E8B /* OxideBenchIOS.app */,
+				8B0F38B63B9CBDBDFFA7EA01 /* OxideBenchMacOS.app */,
+				D7576EC37C56E6506547C24F /* UIKitBenchIOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		38FC02219A0A7A88DAC0A3A5 /* ComparatorApp */ = {
+			isa = PBXGroup;
+			children = (
+				9C692B07769BFD8113BB89D5 /* BenchmarkCampaignExecutor.swift */,
+				7D4274BB4BFB45FE2439992B /* MacOSCampaignControl.swift */,
+				07511BA33EFED7779B63F83D /* MacOSCanonicalLaunchExecutor.swift */,
+				A752B782399D32A5D27443BF /* MacOSTrustedInputControl.swift */,
+				1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */,
+			);
+			name = ComparatorApp;
+			path = Shared/ComparatorApp;
+			sourceTree = "<group>";
+		};
+		5F9BCF1CF33EFEBF2C436318 /* Foundation */ = {
+			isa = PBXGroup;
+			children = (
+				5B20A457537143FB6F1685B7 /* BenchmarkCampaign.swift */,
+				86C0F049701F014659A90174 /* BenchmarkContract.swift */,
+				85625DF4B5E6321E860DDD36 /* BenchmarkPhaseScheduler.swift */,
+				A0A99A3B599E92A3E198753E /* BenchmarkTelemetryRing.swift */,
+				D0CD7A45C70F8A43A223A013 /* ComparisonContract.swift */,
+				B9B637D4B50BD972A33A7BFE /* ComparisonTransport.swift */,
+				BEC214E40994966492A24BC0 /* DurableArtifactStore.swift */,
+			);
+			name = Foundation;
+			path = Shared/Foundation;
+			sourceTree = "<group>";
+		};
+		651E25D44F2AA2C46ACBD474 /* UIKit-iOS */ = {
+			isa = PBXGroup;
+			children = (
+				5D660CA7D60920E47AE6D70E /* Info.plist */,
+				C6B052E22F32CB532A4122A4 /* main.swift */,
+				5E434927C3216724AEFA09BC /* UIKitScenarioAdapter.swift */,
+			);
+			path = "UIKit-iOS";
+			sourceTree = "<group>";
+		};
+		86931E1E67BCF57E52AEF30F /* ComparisonHarnessUnitTests */ = {
+			isa = PBXGroup;
+			children = (
+				3C440D6A7A9320410B590DAC /* ComparisonTransportUnitTests.swift */,
+				27964024BA5ACD573FA01BB2 /* Info.plist */,
+			);
+			path = ComparisonHarnessUnitTests;
+			sourceTree = "<group>";
+		};
+		9677919BB5719B8427596371 = {
+			isa = PBXGroup;
+			children = (
+				301D9A7D022711310BC1863B /* v1 */,
+				3067825F58379DEFE6DA8635 /* AppKit-macOS */,
+				1FFCEE1332524D045CB13288 /* AppKitComparisonUnitTests */,
+				CEDE74FA6AD6F2A896B04EC1 /* ComparativePlans */,
+				38FC02219A0A7A88DAC0A3A5 /* ComparatorApp */,
+				C4D893205A4E1D9D69DB2C96 /* ComparisonControllerUITests */,
+				86931E1E67BCF57E52AEF30F /* ComparisonHarnessUnitTests */,
+				5F9BCF1CF33EFEBF2C436318 /* Foundation */,
+				9D2BC627BEE99C188D33B9A0 /* iOSControl */,
+				CA73A4983981B3E2190960F4 /* MacOSComparisonControllerUITests */,
+				E01B935E1308F3E14334273B /* Oxide-iOS */,
+				1D17228D19D525F4BD07A978 /* Oxide-macOS */,
+				651E25D44F2AA2C46ACBD474 /* UIKit-iOS */,
+				37A5954CBFBA47E67DD9001F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		9D2BC627BEE99C188D33B9A0 /* iOSControl */ = {
+			isa = PBXGroup;
+			children = (
+				2A07141B1368A13DF8EC2E0E /* DarwinControlSignal.swift */,
+			);
+			name = iOSControl;
+			path = Shared/iOSControl;
+			sourceTree = "<group>";
+		};
+		C4D893205A4E1D9D69DB2C96 /* ComparisonControllerUITests */ = {
+			isa = PBXGroup;
+			children = (
+				1F6293718C14A8696988C0D4 /* ComparisonControllerUITests.swift */,
+				E2555514A82E8CFB596696A7 /* Info.plist */,
+			);
+			path = ComparisonControllerUITests;
+			sourceTree = "<group>";
+		};
+		CA73A4983981B3E2190960F4 /* MacOSComparisonControllerUITests */ = {
+			isa = PBXGroup;
+			children = (
+				F5E800996B07EF7951EF4B78 /* Info.plist */,
+				D14BBE04A575F7451D9571FE /* MacOSComparisonControllerUITests.swift */,
+				487C345B34378F109C3025A8 /* MacOSTrustedInputXCUIController.swift */,
+			);
+			path = MacOSComparisonControllerUITests;
+			sourceTree = "<group>";
+		};
+		CEDE74FA6AD6F2A896B04EC1 /* ComparativePlans */ = {
+			isa = PBXGroup;
+			children = (
+				50A74B275588462D7154B47F /* phase0.json */,
+			);
+			path = ComparativePlans;
+			sourceTree = "<group>";
+		};
+		E01B935E1308F3E14334273B /* Oxide-iOS */ = {
+			isa = PBXGroup;
+			children = (
+				041AC7AA613258D97EB355C6 /* Info.plist */,
+				EE8A0092D54259410CF8CD1C /* main.swift */,
+				8D717B9AC726936AA9CFA0AC /* OxideScenarioAdapter.swift */,
+			);
+			path = "Oxide-iOS";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0A7088DD62DABF8561FEC26B /* AppKitComparisonUnitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 41C7817538D2928A237AEC0E /* Build configuration list for PBXNativeTarget "AppKitComparisonUnitTests" */;
+			buildPhases = (
+				32E8123EFC74EDF90AFCB3AC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppKitComparisonUnitTests;
+			packageProductDependencies = (
+			);
+			productName = AppKitComparisonUnitTests;
+			productReference = BB3D592557A919F34586B24E /* AppKitComparisonUnitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		849B9F7C604D921FF55A7872 /* OxideBenchIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0D82E9F5B24EB03B797A3212 /* Build configuration list for PBXNativeTarget "OxideBenchIOS" */;
+			buildPhases = (
+				D2E25069902A4BAD69048851 /* Build and Embed Comparison Runtime */,
+				587FFE40FF7E586043092A46 /* Sources */,
+				676510DED6B951A566340FC8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OxideBenchIOS;
+			packageProductDependencies = (
+			);
+			productName = OxideBenchIOS;
+			productReference = 0B63F9378B51234F2E943E8B /* OxideBenchIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		8BD8700510B5A5D60A15C429 /* ComparisonControllerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1DB61428AF8772EE24BEFBBD /* Build configuration list for PBXNativeTarget "ComparisonControllerUITests" */;
+			buildPhases = (
+				CFF2EE747360EEE07FA0E019 /* Sources */,
+				43A01A59BECDEBF2B3034C40 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8FFA70853B1869A0BB0794EE /* PBXTargetDependency */,
+				76478AF77EACD20A1ED501FD /* PBXTargetDependency */,
+			);
+			name = ComparisonControllerUITests;
+			packageProductDependencies = (
+			);
+			productName = ComparisonControllerUITests;
+			productReference = 24129DC8D346C5C53D759E15 /* ComparisonControllerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		8BE81F7B271DF3B6A31B6D5E /* AppKitBenchMacOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 36634401328B5251E533A47C /* Build configuration list for PBXNativeTarget "AppKitBenchMacOS" */;
+			buildPhases = (
+				324ECA22C02E8D083F0A4577 /* Sources */,
+				E72B3D1146430DE8AC469111 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AppKitBenchMacOS;
+			packageProductDependencies = (
+			);
+			productName = AppKitBenchMacOS;
+			productReference = 1299605E9F59BC54D426E203 /* AppKitBenchMacOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		8CA4C7E20FEDDF7CF5210729 /* ComparisonHarnessUnitTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F1BBBE863470A8FE02DAED9B /* Build configuration list for PBXNativeTarget "ComparisonHarnessUnitTests" */;
+			buildPhases = (
+				F87BB1475AAE8331E1BC020C /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ComparisonHarnessUnitTests;
+			packageProductDependencies = (
+			);
+			productName = ComparisonHarnessUnitTests;
+			productReference = 3B63BFCEA1546EA0E89AEC08 /* ComparisonHarnessUnitTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		A5742E84CBE3E8AEFEE3A71A /* OxideBenchMacOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA241E1777196576BC860805 /* Build configuration list for PBXNativeTarget "OxideBenchMacOS" */;
+			buildPhases = (
+				8EA6EFD275EB082AAC5EAEC6 /* Build and Embed Comparison Runtime */,
+				CF7F67E657D24423B0441434 /* Sources */,
+				E0CF1F1D0AF2B4FF582C9274 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = OxideBenchMacOS;
+			packageProductDependencies = (
+			);
+			productName = OxideBenchMacOS;
+			productReference = 8B0F38B63B9CBDBDFFA7EA01 /* OxideBenchMacOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B7FB5A2CE8D8B820A5BA7782 /* MacOSComparisonControllerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9463D15E36FFF5BE98702406 /* Build configuration list for PBXNativeTarget "MacOSComparisonControllerUITests" */;
+			buildPhases = (
+				687F37A03B3888E35C5944C7 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DCE055DB8C90B882881542D6 /* PBXTargetDependency */,
+				1A44322F73397F1B70E64FBF /* PBXTargetDependency */,
+			);
+			name = MacOSComparisonControllerUITests;
+			packageProductDependencies = (
+			);
+			productName = MacOSComparisonControllerUITests;
+			productReference = 1897394CFC779C964A530236 /* MacOSComparisonControllerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		C42D25FB10B65EF9D392644B /* UIKitBenchIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 250F1153A6B0AA1B81068FCB /* Build configuration list for PBXNativeTarget "UIKitBenchIOS" */;
+			buildPhases = (
+				9E6817FE2741087D69FD9659 /* Sources */,
+				E69E0C3E70785CA0B9A98155 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UIKitBenchIOS;
+			packageProductDependencies = (
+			);
+			productName = UIKitBenchIOS;
+			productReference = D7576EC37C56E6506547C24F /* UIKitBenchIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C9D5B9F678A0BAB84C4DD084 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					8BD8700510B5A5D60A15C429 = {
+						TestTargetID = 849B9F7C604D921FF55A7872;
+					};
+					B7FB5A2CE8D8B820A5BA7782 = {
+						TestTargetID = 8BE81F7B271DF3B6A31B6D5E;
+					};
+				};
+			};
+			buildConfigurationList = 3FFBB436C5C9EF619A6F714F /* Build configuration list for PBXProject "AppleComparison" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 9677919BB5719B8427596371;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				8BE81F7B271DF3B6A31B6D5E /* AppKitBenchMacOS */,
+				0A7088DD62DABF8561FEC26B /* AppKitComparisonUnitTests */,
+				8BD8700510B5A5D60A15C429 /* ComparisonControllerUITests */,
+				8CA4C7E20FEDDF7CF5210729 /* ComparisonHarnessUnitTests */,
+				B7FB5A2CE8D8B820A5BA7782 /* MacOSComparisonControllerUITests */,
+				849B9F7C604D921FF55A7872 /* OxideBenchIOS */,
+				A5742E84CBE3E8AEFEE3A71A /* OxideBenchMacOS */,
+				C42D25FB10B65EF9D392644B /* UIKitBenchIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		43A01A59BECDEBF2B3034C40 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				23E38FDD86B2A46151FA0DAB /* phase0.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		676510DED6B951A566340FC8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EFBA9528A48C0C334380EE6E /* v1 in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E0CF1F1D0AF2B4FF582C9274 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E390D80C796B2D1797FE4AEE /* v1 in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E69E0C3E70785CA0B9A98155 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				688C7CF8054D225E94F15829 /* v1 in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E72B3D1146430DE8AC469111 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C24FB6442054865589B3F65A /* v1 in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		8EA6EFD275EB082AAC5EAEC6 /* Build and Embed Comparison Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build and Embed Comparison Runtime";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${OBJROOT}/oxide-comparison-cargo/${PLATFORM_NAME}\"\nTARGET_GUARD=\"${REPO_ROOT}/host/apple-comparison/scripts/guard-cargo-target.sh\"\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${CARGO_TARGET_DIR}\"\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/comparison-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\n(cd \"${REPO_ROOT}/host/apple-comparison/oxide-comparison-runtime\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME MACOSX_DEPLOYMENT_TARGET && \\\n   cargo build --locked -p oxide-comparison-runtime --release)\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\ncp -v \"${CARGO_TARGET_DIR}/release/liboxide_comparison_runtime.a\" \"${BUILT_PRODUCTS_DIR}/liboxide_comparison_runtime.a\"\n";
+		};
+		D2E25069902A4BAD69048851 /* Build and Embed Comparison Runtime */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build and Embed Comparison Runtime";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${OBJROOT}/oxide-comparison-cargo/${PLATFORM_NAME}\"\nTARGET_GUARD=\"${REPO_ROOT}/host/apple-comparison/scripts/guard-cargo-target.sh\"\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${CARGO_TARGET_DIR}\"\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/xcode-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\n(cd \"${REPO_ROOT}/host/apple-comparison/oxide-comparison-runtime\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \\\n   export IPHONEOS_DEPLOYMENT_TARGET=18.0 && \\\n   cargo build --locked -p oxide-comparison-runtime --release --target \"${RUST_TARGET}\")\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\ncp -v \"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_comparison_runtime.a\" \"${BUILT_PRODUCTS_DIR}/liboxide_comparison_runtime.a\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		324ECA22C02E8D083F0A4577 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4A46CD0867B54EED82511FCF /* AppKitProductionEdgeRaster.swift in Sources */,
+				DC6BB853E7050A3237C41695 /* AppKitProductionReferenceDataSources.swift in Sources */,
+				EEB14EB3668306C19F91D50C /* AppKitProductionReferenceFoundation.swift in Sources */,
+				DCC42CF0DB8AFA64A6ABEFC3 /* AppKitProductionReferenceScenarioModel.swift in Sources */,
+				57B4F73F34651AC318D4F952 /* AppKitProductionReferenceScenes.swift in Sources */,
+				248E6E70F61454866F9FABAD /* AppKitProductionReleaseScenes.swift in Sources */,
+				3199C28FB0A8ABCDDB19C105 /* AppKitProductionScenarioAdapter.swift in Sources */,
+				9845DA42A2D63EE01D14CC46 /* AppKitProductionVisualComponents.swift in Sources */,
+				79D832184CA80A1747F5DD25 /* BenchmarkCampaign.swift in Sources */,
+				B6CF90DD356F58B5E727BAB2 /* BenchmarkCampaignExecutor.swift in Sources */,
+				C94AFAD4111B87C8979294F0 /* BenchmarkContract.swift in Sources */,
+				C8175EF69F5E04301EAC2F04 /* BenchmarkPhaseScheduler.swift in Sources */,
+				1177C044766F3265A57C40A8 /* BenchmarkTelemetryRing.swift in Sources */,
+				453CEAE3DCB206E8D3E44543 /* ComparisonContract.swift in Sources */,
+				B8DEFDD74EA4D048E2D1472B /* ComparisonTransport.swift in Sources */,
+				3F236FF7B4640B0D04719511 /* DarwinControlSignal.swift in Sources */,
+				297DDE694135F1F3C82354B4 /* DurableArtifactStore.swift in Sources */,
+				0E7B2FE59E20C4C659C08504 /* MacOSCampaignControl.swift in Sources */,
+				3F3C6CE2645BA7A0AC64BAFF /* MacOSCanonicalLaunchExecutor.swift in Sources */,
+				887B7B91ABCB3E59FE159CA5 /* MacOSTrustedInputControl.swift in Sources */,
+				EA38480514E1E1805DF2B201 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		32E8123EFC74EDF90AFCB3AC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				19FF1D137FE6B78FA09287BB /* AppKitProductionEdgeRaster.swift in Sources */,
+				6A445130A44B7D03B30657ED /* AppKitProductionReferenceArchitectureTests.swift in Sources */,
+				A0061F8F0E5766367129FDA7 /* AppKitProductionReferenceDataSources.swift in Sources */,
+				3D38D9084894D229126BD161 /* AppKitProductionReferenceFoundation.swift in Sources */,
+				3B9B0E20A50C94C122C26567 /* AppKitProductionReferenceScenarioModel.swift in Sources */,
+				B357A80A73C5DA2D82D19086 /* AppKitProductionReferenceScenes.swift in Sources */,
+				2FDF5F67716CDAFD8F2416E2 /* AppKitProductionReleaseScenes.swift in Sources */,
+				4AFD07023B5737107446C046 /* AppKitProductionScenarioAdapter.swift in Sources */,
+				556A90C17560E0CA6ED4D295 /* AppKitProductionScenarioAdapterTests.swift in Sources */,
+				BBE3197970E02E0619FB2983 /* AppKitProductionVisualComponents.swift in Sources */,
+				02E4CDC6B22F39D7B25185D9 /* AppKitScenarioAdapter.swift in Sources */,
+				E971A6315E080FDE6E3BB819 /* AppKitScenarioAdapterTests.swift in Sources */,
+				D11E6732EF95C58A1EAC3C62 /* BenchmarkCampaign.swift in Sources */,
+				CA673C13C41367B04D3AA361 /* BenchmarkCampaignExecutor.swift in Sources */,
+				4E74A812F2C18AABBDA0C51F /* BenchmarkContract.swift in Sources */,
+				06B38017DCA12197488FE0F5 /* BenchmarkPhaseScheduler.swift in Sources */,
+				8E25AF9548CF3BF6B39617D3 /* BenchmarkTelemetryRing.swift in Sources */,
+				A22E1EFD5782C8A7FCBE0D8F /* ComparisonContract.swift in Sources */,
+				D51468DD7B141C23A7DABDAC /* ComparisonTransport.swift in Sources */,
+				89CA7ECC566F9292CB94CF4B /* DarwinControlSignal.swift in Sources */,
+				49A552A81349449E1CE8365B /* DurableArtifactStore.swift in Sources */,
+				7F405F04B44C15C8A59A0355 /* MacOSCanonicalLaunchExecutor.swift in Sources */,
+				F172342ECB16EE68D2804947 /* MacOSCanonicalLaunchExecutorTests.swift in Sources */,
+				59CBF7407968309008BF733F /* MacOSTrustedInputControl.swift in Sources */,
+				7948A5931DEFC54EA2B40F07 /* MacOSTrustedInputControlTests.swift in Sources */,
+				A23C8F07FE52134FDFB18C3E /* MacOSTrustedInputXCUIController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		587FFE40FF7E586043092A46 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F5EFD65657C0E5F3626A6A27 /* BenchmarkCampaign.swift in Sources */,
+				C5E6FB98B668ACE5CD1F19DB /* BenchmarkCampaignExecutor.swift in Sources */,
+				109448074BDF9B35D87C703A /* BenchmarkContract.swift in Sources */,
+				7224499BEA1CD53AB9026E2F /* BenchmarkPhaseScheduler.swift in Sources */,
+				EBBDE75559A25656185E2481 /* BenchmarkTelemetryRing.swift in Sources */,
+				5D47FDB01B63814D154354D3 /* ComparisonContract.swift in Sources */,
+				E4DEDB1B7DC732B5CF5DB356 /* ComparisonTransport.swift in Sources */,
+				34E337B6B02FDF6BB46D45E1 /* DarwinControlSignal.swift in Sources */,
+				E4AC812F2A2AC68160495CA8 /* DurableArtifactStore.swift in Sources */,
+				AAA8B66AD5479413C2BA4181 /* MacOSCampaignControl.swift in Sources */,
+				1AA65FC1CF6652661D7EB9D9 /* MacOSCanonicalLaunchExecutor.swift in Sources */,
+				9CE0701D123411D71E366BAC /* MacOSTrustedInputControl.swift in Sources */,
+				EFDAAA8ACD43FB8B4671FB25 /* OxideScenarioAdapter.swift in Sources */,
+				B4D55C65A0FAC66A2A7F080D /* TransportProbeAppDelegate.swift in Sources */,
+				7E2BA128ADCD967174D7B71E /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		687F37A03B3888E35C5944C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C31BD090BBCD9E4AEC9091D /* BenchmarkCampaign.swift in Sources */,
+				790B074F4377BBCE06D3B835 /* BenchmarkContract.swift in Sources */,
+				7928DAE99C5E5F71173FB383 /* BenchmarkPhaseScheduler.swift in Sources */,
+				FC08CF499F8E6005A42AC1D6 /* BenchmarkTelemetryRing.swift in Sources */,
+				14E92E461546B59EA59F50BB /* ComparisonContract.swift in Sources */,
+				BC95867223A2BC4B2E7E3797 /* ComparisonTransport.swift in Sources */,
+				A763ECD365EA263DEAD0CBF2 /* DarwinControlSignal.swift in Sources */,
+				17906631B1BB18DC512B5637 /* DurableArtifactStore.swift in Sources */,
+				CEDF86FF81A67779FC84AD91 /* MacOSComparisonControllerUITests.swift in Sources */,
+				EAA06D606E85EC74EFA2C0A8 /* MacOSTrustedInputControl.swift in Sources */,
+				763A3016ABE61D7860602F1C /* MacOSTrustedInputXCUIController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9E6817FE2741087D69FD9659 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				573BC81B68D13E8807E2B4F1 /* BenchmarkCampaign.swift in Sources */,
+				E6949EDFF2D848A6A3286DEF /* BenchmarkCampaignExecutor.swift in Sources */,
+				1B59E4F1D21135000B28D82E /* BenchmarkContract.swift in Sources */,
+				76C8BAB6021582F332B41A5C /* BenchmarkPhaseScheduler.swift in Sources */,
+				C1D093F1E692D0A7A7152757 /* BenchmarkTelemetryRing.swift in Sources */,
+				A02FCBD6079F9873D953E0AB /* ComparisonContract.swift in Sources */,
+				95510B4E17D1278B53E74C27 /* ComparisonTransport.swift in Sources */,
+				09E80C9F170553871284FC0B /* DarwinControlSignal.swift in Sources */,
+				6B74FB6D5C659DCB06DE693D /* DurableArtifactStore.swift in Sources */,
+				75EDCFCB18FBE59C8A1F786B /* MacOSCampaignControl.swift in Sources */,
+				67DAF55E384038021E3B5AB2 /* MacOSCanonicalLaunchExecutor.swift in Sources */,
+				AB8474B18A7985537039EB9F /* MacOSTrustedInputControl.swift in Sources */,
+				D70286CD46E786EA7DA77833 /* TransportProbeAppDelegate.swift in Sources */,
+				B540E58B17DE0BE2DFC7EF25 /* UIKitScenarioAdapter.swift in Sources */,
+				3CA55564CC6FDEE0F1274C9D /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CF7F67E657D24423B0441434 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D8F33D4BD5FDC41528A6B14C /* BenchmarkCampaign.swift in Sources */,
+				6BACF80D0722408A444A75CD /* BenchmarkCampaignExecutor.swift in Sources */,
+				554C3E48F2B3FC10DD3E5336 /* BenchmarkContract.swift in Sources */,
+				4D17A029489C8CDD50282620 /* BenchmarkPhaseScheduler.swift in Sources */,
+				73E7DA6F6ED643D046990099 /* BenchmarkTelemetryRing.swift in Sources */,
+				EBD5453EB9F8E5F5ED096CEA /* ComparisonContract.swift in Sources */,
+				7B894E2F1F0A045A3F82D872 /* ComparisonTransport.swift in Sources */,
+				08EF537DB447146A10D73008 /* DarwinControlSignal.swift in Sources */,
+				6F7D0A4CBE19A9CBB026F1F8 /* DurableArtifactStore.swift in Sources */,
+				96EB12C0978918790E0CB621 /* MacOSCampaignControl.swift in Sources */,
+				7AF7E2CD802FA08060C04167 /* MacOSCanonicalLaunchExecutor.swift in Sources */,
+				263F7F7B411556B89566D7CE /* MacOSTrustedInputControl.swift in Sources */,
+				64FB05C9781F48F4EF3C8694 /* OxideScenarioAdapter.swift in Sources */,
+				6CFDE1363960E8058219B44F /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CFF2EE747360EEE07FA0E019 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CFF67086D039329944C1296B /* BenchmarkCampaign.swift in Sources */,
+				0DE4F520ADBB120CE4AEF98B /* BenchmarkContract.swift in Sources */,
+				FF4115A7768178D8439244F5 /* BenchmarkPhaseScheduler.swift in Sources */,
+				CCCBF4412DFEF7AD38ADFC9A /* BenchmarkTelemetryRing.swift in Sources */,
+				31D36186C78277F24CC310AE /* ComparisonContract.swift in Sources */,
+				9D56D740E61F318A5E476B49 /* ComparisonControllerUITests.swift in Sources */,
+				307AFF206473D30438344B37 /* ComparisonTransport.swift in Sources */,
+				8A150C56A55748B830D762CE /* DarwinControlSignal.swift in Sources */,
+				F65D22AA67D60CCE1391C7A5 /* DurableArtifactStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F87BB1475AAE8331E1BC020C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C71B4E5022F1BA77EE2474C7 /* BenchmarkCampaign.swift in Sources */,
+				E3C4BBD70D0EFE93310A448B /* BenchmarkContract.swift in Sources */,
+				D035EEB1106297A68A5B7770 /* BenchmarkPhaseScheduler.swift in Sources */,
+				C87C45DBB24AEC9B3548B006 /* BenchmarkTelemetryRing.swift in Sources */,
+				26C36709694DD5B048760ACC /* ComparisonContract.swift in Sources */,
+				B08EE2714C964152868797EB /* ComparisonTransport.swift in Sources */,
+				8A19A4594D827C174CF06C1A /* ComparisonTransportUnitTests.swift in Sources */,
+				B2D4FF8D8D6C6F210A6D8C4A /* DurableArtifactStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1A44322F73397F1B70E64FBF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A5742E84CBE3E8AEFEE3A71A /* OxideBenchMacOS */;
+			targetProxy = 2E54ED60F862A96644F7EC23 /* PBXContainerItemProxy */;
+		};
+		76478AF77EACD20A1ED501FD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C42D25FB10B65EF9D392644B /* UIKitBenchIOS */;
+			targetProxy = 1A1845A794DFEB3BA171A180 /* PBXContainerItemProxy */;
+		};
+		8FFA70853B1869A0BB0794EE /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 849B9F7C604D921FF55A7872 /* OxideBenchIOS */;
+			targetProxy = 0FC305A041A7179E906BAC07 /* PBXContainerItemProxy */;
+		};
+		DCE055DB8C90B882881542D6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8BE81F7B271DF3B6A31B6D5E /* AppKitBenchMacOS */;
+			targetProxy = 418927209DBB412E59699FAE /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0AB961E80F71F0B16210CF21 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = ComparisonControllerUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.controlleruitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = OxideBenchIOS;
+			};
+			name = Debug;
+		};
+		0D097716E4550D67EC5E294D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = AppKitComparisonUnitTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.appkitunittests;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		1FC431F144A573190FAE82E0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "UIKit-iOS/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.uikitbenchios;
+				PRODUCT_NAME = UIKitBenchIOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		22414682433C4923D7C78953 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = MacOSComparisonControllerUITests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.macoscontrolleruitests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = AppKitBenchMacOS;
+			};
+			name = Debug;
+		};
+		3641A5064D62233E02F3A511 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				INFOPLIST_FILE = "Oxide-iOS/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-lc++",
+					"-framework",
+					UIKit,
+					"-framework",
+					Foundation,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Metal,
+					"-framework",
+					CoreGraphics,
+					"-framework",
+					UserNotifications,
+					"-framework",
+					CoreLocation,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					Contacts,
+					"-framework",
+					CoreBluetooth,
+					"-framework",
+					CoreMotion,
+					"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.oxidebenchios;
+				PRODUCT_NAME = OxideBenchIOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		44597DD792E45C44DDF55727 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_BITCODE = NO;
+				INFOPLIST_FILE = "Oxide-iOS/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-lc++",
+					"-framework",
+					UIKit,
+					"-framework",
+					Foundation,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Metal,
+					"-framework",
+					CoreGraphics,
+					"-framework",
+					UserNotifications,
+					"-framework",
+					CoreLocation,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					Contacts,
+					"-framework",
+					CoreBluetooth,
+					"-framework",
+					CoreMotion,
+					"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.oxidebenchios;
+				PRODUCT_NAME = OxideBenchIOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		55EC43DF77E8E4F60AB03C14 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = AppKitComparisonUnitTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.appkitunittests;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		7206D2905A03BC3CFB7672C5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Oxide-macOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-lc++",
+					"-framework",
+					AppKit,
+					"-framework",
+					Foundation,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Metal,
+					"-framework",
+					CoreGraphics,
+					"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.oxidebenchmacos;
+				PRODUCT_NAME = OxideBenchMacOS;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		834ECA0C78E35317635923B5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = MacOSComparisonControllerUITests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.macoscontrolleruitests;
+				SDKROOT = macosx;
+				TEST_TARGET_NAME = AppKitBenchMacOS;
+			};
+			name = Release;
+		};
+		924DEA99FF73AF57CA8A94D5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A16260E8B50F404598176C36 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "AppKit-macOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.appkitbenchmacos;
+				PRODUCT_NAME = AppKitBenchMacOS;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		B656E524FBAEE55E3961C463 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = ComparisonControllerUITests/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.controlleruitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = OxideBenchIOS;
+			};
+			name = Release;
+		};
+		D3FC4897BF19E7C7053F83BA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "UIKit-iOS/Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.uikitbenchios;
+				PRODUCT_NAME = UIKitBenchIOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		D5D60F06D4277310554AC6BB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "AppKit-macOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.appkitbenchmacos;
+				PRODUCT_NAME = AppKitBenchMacOS;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		D8E0280B01C2E9051DED0D65 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		E6B56A13CA781AB3A8169723 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = "Oxide-macOS/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				OTHER_LDFLAGS = (
+					"-ObjC",
+					"-lc++",
+					"-framework",
+					AppKit,
+					"-framework",
+					Foundation,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Metal,
+					"-framework",
+					CoreGraphics,
+					"$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.oxidebenchmacos;
+				PRODUCT_NAME = OxideBenchMacOS;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		ECA6911541E785C2A17BEFB7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ComparisonHarnessUnitTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.harnessunittests;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		FE09E407962E8722E685278A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = ComparisonHarnessUnitTests/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.oxide.comparison.harnessunittests;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0D82E9F5B24EB03B797A3212 /* Build configuration list for PBXNativeTarget "OxideBenchIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3641A5064D62233E02F3A511 /* Debug */,
+				44597DD792E45C44DDF55727 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1DB61428AF8772EE24BEFBBD /* Build configuration list for PBXNativeTarget "ComparisonControllerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0AB961E80F71F0B16210CF21 /* Debug */,
+				B656E524FBAEE55E3961C463 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		250F1153A6B0AA1B81068FCB /* Build configuration list for PBXNativeTarget "UIKitBenchIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D3FC4897BF19E7C7053F83BA /* Debug */,
+				1FC431F144A573190FAE82E0 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		36634401328B5251E533A47C /* Build configuration list for PBXNativeTarget "AppKitBenchMacOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D5D60F06D4277310554AC6BB /* Debug */,
+				A16260E8B50F404598176C36 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3FFBB436C5C9EF619A6F714F /* Build configuration list for PBXProject "AppleComparison" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				924DEA99FF73AF57CA8A94D5 /* Debug */,
+				D8E0280B01C2E9051DED0D65 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		41C7817538D2928A237AEC0E /* Build configuration list for PBXNativeTarget "AppKitComparisonUnitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0D097716E4550D67EC5E294D /* Debug */,
+				55EC43DF77E8E4F60AB03C14 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		9463D15E36FFF5BE98702406 /* Build configuration list for PBXNativeTarget "MacOSComparisonControllerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				22414682433C4923D7C78953 /* Debug */,
+				834ECA0C78E35317635923B5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EA241E1777196576BC860805 /* Build configuration list for PBXNativeTarget "OxideBenchMacOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E6B56A13CA781AB3A8169723 /* Debug */,
+				7206D2905A03BC3CFB7672C5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F1BBBE863470A8FE02DAED9B /* Build configuration list for PBXNativeTarget "ComparisonHarnessUnitTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FE09E407962E8722E685278A /* Debug */,
+				ECA6911541E785C2A17BEFB7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C9D5B9F678A0BAB84C4DD084 /* Project object */;
+}

@@ -1,0 +1,15 @@
+{
+  "checkpoint_id": "initial",
+  "model": {
+    "changed_node_count": 0,
+    "generation": 0,
+    "mutation_class": null,
+    "node_count": 10000
+  },
+  "scenario_id": "mutation.damage",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {"count": 1, "role": "mutation-surface"},
+    {"count": 10000, "role": "simple-node"}
+  ]
+}

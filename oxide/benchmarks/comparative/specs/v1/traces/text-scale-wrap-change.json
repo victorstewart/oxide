@@ -1,0 +1,16 @@
+[
+  {
+    "at_us": 0,
+    "op": "scale",
+    "state_id": "text:scale:1250000",
+    "target": "text:scale-millionths",
+    "value": 1250000
+  },
+  {
+    "at_us": 250000,
+    "op": "mutate",
+    "state_id": "text:wrap-rotation:1",
+    "target": "text:wrap-width-rotation",
+    "value": 1
+  }
+]

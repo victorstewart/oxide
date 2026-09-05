@@ -1,0 +1,64 @@
+{
+  "avatar": {
+    "corner_radius": 18,
+    "height": 36,
+    "width": 36
+  },
+  "composer": {
+    "height": 48,
+    "width": 318,
+    "x": 12,
+    "y": 780
+  },
+  "coordinate_space": "logical-points",
+  "message": {
+    "corner_radius": 12,
+    "maximum_width": 286,
+    "vertical_gap": 8
+  },
+  "root": {
+    "height": 844,
+    "width": 390,
+    "x": 0,
+    "y": 0
+  },
+  "schema_version": 1,
+  "send_control": {
+    "height": 48,
+    "width": 40,
+    "x": 338,
+    "y": 780
+  },
+  "text_masks": [
+    [
+      16,
+      18,
+      250,
+      22
+    ],
+    [
+      12,
+      52,
+      366,
+      700
+    ],
+    [
+      24,
+      790,
+      294,
+      20
+    ],
+    [
+      342,
+      790,
+      32,
+      20
+    ]
+  ],
+  "thread": {
+    "bottom": 92,
+    "inset": 12,
+    "top": 52,
+    "visible_messages": 10
+  }
+}

@@ -1,0 +1,702 @@
+{
+  "schema_version": 1,
+  "id": "apple-release-claim-complete",
+  "platform": "apple",
+  "tier": "claim-complete",
+  "budget_id": "apple-release-claim-complete",
+  "timing": {
+    "passes": [
+      {
+        "pass_id": "primary-presentation",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "feed.variable-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "grid.large-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "chat.live-update",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "navigation.modal",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "iterations",
+              "phase_id": "canonical-cycles",
+              "source_iteration_count": 4,
+              "iteration_count": 20,
+              "occupied_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "image.decode-zoom",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "effects.layers",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "mutation.damage",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "text.multilingual",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "resize.theme",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "iterations",
+              "phase_id": "ten-changes",
+              "source_iteration_count": 10,
+              "iteration_count": 10,
+              "occupied_seconds": 20
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "attribution-time-profiler",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "feed.variable-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "navigation.modal",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "iterations",
+              "phase_id": "canonical-cycles",
+              "source_iteration_count": 4,
+              "iteration_count": 20,
+              "occupied_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "image.decode-zoom",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "attribution-system-trace",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "feed.variable-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "navigation.modal",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "iterations",
+              "phase_id": "canonical-cycles",
+              "source_iteration_count": 4,
+              "iteration_count": 20,
+              "occupied_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "image.decode-zoom",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "common-gpu",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "feed.variable-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "image.decode-zoom",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "effects.layers",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "attribution-physical-footprint",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "feed.variable-scroll",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "navigation.modal",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "iterations",
+              "phase_id": "canonical-cycles",
+              "source_iteration_count": 4,
+              "iteration_count": 20,
+              "occupied_seconds": 20
+            }
+          },
+          {
+            "scenario_id": "image.decode-zoom",
+            "setup_seconds": 1,
+            "warmup_seconds": 5,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 20
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "idle",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "idle.steady",
+            "setup_seconds": 1,
+            "warmup_seconds": 3,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 60
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "endurance",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "endurance.churn",
+            "setup_seconds": 1,
+            "warmup_seconds": 2,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 300
+            }
+          }
+        ]
+      },
+      {
+        "pass_id": "energy",
+        "reset_seconds_per_session": 5,
+        "readiness_timeout_seconds": 30,
+        "scenarios": [
+          {
+            "scenario_id": "dashboard.mixed-static",
+            "setup_seconds": 1,
+            "warmup_seconds": 120,
+            "measurement": {
+              "mode": "duration",
+              "duration_seconds": 120
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "id": "startup.first-screen",
+      "expected_path": "scenarios/startup.first-screen.json",
+      "artifact": {
+        "path": "scenarios/startup.first-screen.json",
+        "sha256": "bfc034c10956e7caf13d909da52f8a988ccbbeca35d3a5a8ffce71ee20f3fa0c"
+      }
+    },
+    {
+      "id": "dashboard.mixed-static",
+      "expected_path": "scenarios/dashboard.mixed-static.json",
+      "artifact": {
+        "path": "scenarios/dashboard.mixed-static.json",
+        "sha256": "aa66fdb461e69ab44ef9571aa963e3823f14a48bf21460b3f6ed7269f8cff946"
+      }
+    },
+    {
+      "id": "feed.variable-scroll",
+      "expected_path": "scenarios/feed.variable-scroll.json",
+      "artifact": {
+        "path": "scenarios/feed.variable-scroll.json",
+        "sha256": "540d8fd61d3cf92d454f1b44a0f56d2fa27d2c319697ed52a3af940247a593fe"
+      }
+    },
+    {
+      "id": "grid.large-scroll",
+      "expected_path": "scenarios/grid.large-scroll.json",
+      "artifact": null
+    },
+    {
+      "id": "chat.live-update",
+      "expected_path": "scenarios/chat.live-update.json",
+      "artifact": {
+        "path": "scenarios/chat.live-update.json",
+        "sha256": "e41b6b5335f554f823f6e60aa916493a78a2e2afe2155829d0acbabf8707f1ca"
+      }
+    },
+    {
+      "id": "navigation.modal",
+      "expected_path": "scenarios/navigation.modal.json",
+      "artifact": {
+        "path": "scenarios/navigation.modal.json",
+        "sha256": "1062108924081c7b286ebd5de0f27755209cefc43dc29f373a75c9ed91d17847"
+      }
+    },
+    {
+      "id": "image.decode-zoom",
+      "expected_path": "scenarios/image.decode-zoom.json",
+      "artifact": {
+        "path": "scenarios/image.decode-zoom.json",
+        "sha256": "229bd8a0d41abff229d0cc6f8edd11ddf32ccc59bbfe5a6dfcbfbe6eea6cf15d"
+      }
+    },
+    {
+      "id": "effects.layers",
+      "expected_path": "scenarios/effects.layers.json",
+      "artifact": null
+    },
+    {
+      "id": "mutation.damage",
+      "expected_path": "scenarios/mutation.damage.json",
+      "artifact": null
+    },
+    {
+      "id": "text.multilingual",
+      "expected_path": "scenarios/text.multilingual.json",
+      "artifact": null
+    },
+    {
+      "id": "resize.theme",
+      "expected_path": "scenarios/resize.theme.json",
+      "artifact": null
+    },
+    {
+      "id": "idle.steady",
+      "expected_path": "scenarios/idle.steady.json",
+      "artifact": {
+        "path": "scenarios/idle.steady.json",
+        "sha256": "f91774e7628fcb252705dd8b7c55eaadf68b8fcb441906a2984f8dc490807a4b"
+      }
+    },
+    {
+      "id": "endurance.churn",
+      "expected_path": "scenarios/endurance.churn.json",
+      "artifact": {
+        "path": "scenarios/endurance.churn.json",
+        "sha256": "75e0188c122de1849dae1c4371874df4a860891bbf7480a89818fdc16df0d24f"
+      }
+    }
+  ],
+  "packs": [
+    {
+      "id": "launch",
+      "ordered_scenario_ids": [
+        "startup.first-screen"
+      ],
+      "isolated_process": true
+    },
+    {
+      "id": "core-interaction",
+      "ordered_scenario_ids": [
+        "dashboard.mixed-static",
+        "chat.live-update",
+        "navigation.modal",
+        "resize.theme"
+      ],
+      "isolated_process": false
+    },
+    {
+      "id": "scroll-damage",
+      "ordered_scenario_ids": [
+        "feed.variable-scroll",
+        "grid.large-scroll",
+        "mutation.damage"
+      ],
+      "isolated_process": false
+    },
+    {
+      "id": "media-text-warm",
+      "ordered_scenario_ids": [
+        "image.decode-zoom",
+        "effects.layers",
+        "text.multilingual"
+      ],
+      "isolated_process": false
+    },
+    {
+      "id": "soak-idle",
+      "ordered_scenario_ids": [
+        "idle.steady"
+      ],
+      "isolated_process": true
+    },
+    {
+      "id": "soak-endurance",
+      "ordered_scenario_ids": [
+        "endurance.churn"
+      ],
+      "isolated_process": true
+    }
+  ],
+  "passes": [
+    {
+      "id": "correctness",
+      "role": "correctness",
+      "evidence_role": "correctness-only",
+      "pair_count": 0,
+      "pack_ids": [],
+      "scenario_ids": [
+        "startup.first-screen",
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "grid.large-scroll",
+        "chat.live-update",
+        "navigation.modal",
+        "image.decode-zoom",
+        "effects.layers",
+        "mutation.damage",
+        "text.multilingual",
+        "resize.theme",
+        "idle.steady",
+        "endurance.churn"
+      ],
+      "launch_classes": [],
+      "collector": null
+    },
+    {
+      "id": "primary-presentation",
+      "role": "primary",
+      "evidence_role": "claim-bearing",
+      "pair_count": 12,
+      "pack_ids": [
+        "core-interaction",
+        "scroll-damage",
+        "media-text-warm"
+      ],
+      "scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "grid.large-scroll",
+        "chat.live-update",
+        "navigation.modal",
+        "image.decode-zoom",
+        "effects.layers",
+        "mutation.damage",
+        "text.multilingual",
+        "resize.theme"
+      ],
+      "launch_classes": [],
+      "collector": null
+    },
+    {
+      "id": "canonical-launch",
+      "role": "launch",
+      "evidence_role": "claim-bearing",
+      "pair_count": 36,
+      "pack_ids": [
+        "launch"
+      ],
+      "scenario_ids": [
+        "startup.first-screen"
+      ],
+      "launch_classes": [
+        "terminated-warm-system-cache:12",
+        "fresh-install-first-launch:12",
+        "warm-resume:12"
+      ],
+      "collector": null
+    },
+    {
+      "id": "idle",
+      "role": "idle",
+      "evidence_role": "claim-bearing",
+      "pair_count": 12,
+      "pack_ids": [
+        "soak-idle"
+      ],
+      "scenario_ids": [
+        "idle.steady"
+      ],
+      "launch_classes": [],
+      "collector": null
+    },
+    {
+      "id": "endurance",
+      "role": "endurance",
+      "evidence_role": "claim-bearing",
+      "pair_count": 12,
+      "pack_ids": [
+        "soak-endurance"
+      ],
+      "scenario_ids": [
+        "endurance.churn"
+      ],
+      "launch_classes": [],
+      "collector": null
+    },
+    {
+      "id": "energy",
+      "role": "energy",
+      "evidence_role": "claim-bearing",
+      "pair_count": 12,
+      "pack_ids": [],
+      "scenario_ids": [
+        "dashboard.mixed-static"
+      ],
+      "launch_classes": [],
+      "collector": null
+    },
+    {
+      "id": "attribution-time-profiler",
+      "role": "attribution",
+      "evidence_role": "descriptive-diagnostic",
+      "pair_count": 3,
+      "pack_ids": [],
+      "scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "navigation.modal",
+        "image.decode-zoom"
+      ],
+      "launch_classes": [],
+      "collector": "time-profiler"
+    },
+    {
+      "id": "attribution-system-trace",
+      "role": "attribution",
+      "evidence_role": "descriptive-diagnostic",
+      "pair_count": 3,
+      "pack_ids": [],
+      "scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "navigation.modal",
+        "image.decode-zoom"
+      ],
+      "launch_classes": [],
+      "collector": "system-trace"
+    },
+    {
+      "id": "common-gpu",
+      "role": "attribution",
+      "evidence_role": "descriptive-diagnostic",
+      "pair_count": 12,
+      "pack_ids": [],
+      "scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "image.decode-zoom",
+        "effects.layers"
+      ],
+      "launch_classes": [],
+      "collector": "common-gpu"
+    },
+    {
+      "id": "attribution-physical-footprint",
+      "role": "attribution",
+      "evidence_role": "descriptive-diagnostic",
+      "pair_count": 3,
+      "pack_ids": [],
+      "scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "navigation.modal",
+        "image.decode-zoom"
+      ],
+      "launch_classes": [],
+      "collector": "physical-footprint"
+    }
+  ],
+  "budget_components": [
+    {
+      "component": "correctness-install-pulls",
+      "occupied_seconds": 600,
+      "pass_ids": [
+        "correctness"
+      ]
+    },
+    {
+      "component": "primary-dynamic-presentation",
+      "occupied_seconds": 6960,
+      "pass_ids": [
+        "primary-presentation"
+      ]
+    },
+    {
+      "component": "launch-or-startup-delivery",
+      "occupied_seconds": 1440,
+      "pass_ids": [
+        "canonical-launch"
+      ]
+    },
+    {
+      "component": "idle-endurance",
+      "occupied_seconds": 8640,
+      "pass_ids": [
+        "idle",
+        "endurance"
+      ]
+    },
+    {
+      "component": "energy",
+      "occupied_seconds": 5760,
+      "pass_ids": [
+        "energy"
+      ]
+    },
+    {
+      "component": "attribution",
+      "occupied_seconds": 4578,
+      "pass_ids": [
+        "attribution-time-profiler",
+        "attribution-system-trace",
+        "common-gpu",
+        "attribution-physical-footprint"
+      ]
+    }
+  ]
+}

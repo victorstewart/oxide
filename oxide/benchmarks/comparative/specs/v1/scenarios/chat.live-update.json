@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "id": "chat.live-update",
+  "fixture": {
+    "path": "fixtures/chat.live-update.json",
+    "sha256": "01206a386f19660b99af8bbafa632a29041e2f0e8fe1af4ab12b6143ef39cb28"
+  },
+  "assets": {
+    "path": "assets/neutral-v1.json",
+    "sha256": "526211b8ad140a772d0f9427184ab32ebfe770c5b61dedbaa7501f8a5c4cd66f"
+  },
+  "font_pack": {
+    "id": "oxide-bench-fonts-v1",
+    "manifest": "font-packs/oxide-bench-fonts-v1.json",
+    "sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "viewport_class": "phone-portrait",
+  "scene": {
+    "roles": [
+      "chat-thread",
+      "message",
+      "avatar",
+      "composer",
+      "send-control"
+    ],
+    "style_tokens": {
+      "path": "styles/neutral-v1.json",
+      "sha256": "3fe8e237e670aa0b535a667d5058ed77b1097942755cebeb7f3d3ba3f85d8916"
+    },
+    "layout_assertions": {
+      "path": "layout/chat.live-update.json",
+      "sha256": "44cd17c13b2728509088242be758df0128e55b541df1aa3a35ffeb38d52ff8d6"
+    }
+  },
+  "phases": [
+    {
+      "id": "setup",
+      "measured": false
+    },
+    {
+      "id": "prewarm",
+      "measured": false,
+      "duration_ms": 2000
+    },
+    {
+      "id": "prepend-50",
+      "measured": true,
+      "duration_ms": 500,
+      "trace": {
+        "path": "traces/chat-prepend-50.json",
+        "sha256": "760ef9c1a5f3dd86aa7e2521373e730151d01737849fbfa068c4f70dd6dafa4f"
+      }
+    },
+    {
+      "id": "append-10hz",
+      "measured": true,
+      "duration_ms": 2000,
+      "trace": {
+        "path": "traces/chat-append-10hz.json",
+        "sha256": "41d638906b36e6e44078e506b94618176c31e82968b78840a75bbf876541539b"
+      }
+    },
+    {
+      "id": "type-100",
+      "measured": true,
+      "duration_ms": 1500,
+      "trace": {
+        "path": "traces/chat-type-100.json",
+        "sha256": "c0468d29012cf893b4375fb64118445db2910af08986c1e8e221a1718aebe871"
+      }
+    },
+    {
+      "id": "paste-10kib",
+      "measured": true,
+      "duration_ms": 1000,
+      "trace": {
+        "path": "traces/chat-paste-10kib.json",
+        "sha256": "bc1aab36751fef35f76f53a6d58860378090832450f80673d4b10c3ca4e4ad9a"
+      }
+    },
+    {
+      "id": "select-replace",
+      "measured": true,
+      "duration_ms": 1000,
+      "trace": {
+        "path": "traces/chat-select-replace.json",
+        "sha256": "4423f797ef860b75e59971b196ac7d2c8ffe36d4996818bc4ba23c18da7b6e44"
+      }
+    },
+    {
+      "id": "teardown",
+      "measured": false
+    }
+  ],
+  "primary_metric": "keystroke_to_attributed_presentation_ms",
+  "required_metrics": [
+    "frame.present_ms",
+    "first.interactive_ms",
+    "input.event_to_visible_response_ms",
+    "frame.missed_display_opportunities_per_1000",
+    "cpu.main_thread_ms",
+    "memory.resident_bytes",
+    "oxide.dirty_node_count",
+    "oxide.layout_pass_count",
+    "oxide.draw_call_count",
+    "oxide.encoded_bytes",
+    "oxide.texture_bytes"
+  ],
+  "optional_metrics": [
+    "text.shape_ms",
+    "memory.retained_slope_bytes_per_min"
+  ],
+  "parity_checkpoints": [
+    {
+      "id": "initial",
+      "phase_id": "setup",
+      "state": {
+        "path": "checkpoints/chat.live-update/initial/state.json",
+        "sha256": "e8e76cfae969a4d6dd8a387cbdf324e64b3b67a9ca452e0976157063f678203c"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/initial/accessibility.json",
+        "sha256": "cf88d8ac48ee7f724fc69ee2172fcbcf73c7e00fe8b01b0a43b68a03aed288f4"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/initial/screenshot.png",
+        "sha256": "cbe6352873e1d5d15ae61c943274d2f251a4fa7326bb7ad0bff2128bd6440241"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "prepended-50",
+      "phase_id": "prepend-50",
+      "at_us": 0,
+      "state": {
+        "path": "checkpoints/chat.live-update/prepended-50/state.json",
+        "sha256": "66d93aa5dc42c93c9d89b0f4075dc7276a6da15501b78448b315422e32f3252e"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/prepended-50/accessibility.json",
+        "sha256": "49702c72acdc59d0d12f9b24b544dd413f4655d6898f1766e03dcec0411732fd"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/prepended-50/screenshot.png",
+        "sha256": "5bb6342f4a4d81a1c0ae75c6ec671465073f9d9f09a3935cca23b5cf202abca4"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "append-settled",
+      "phase_id": "append-10hz",
+      "at_us": 1900000,
+      "state": {
+        "path": "checkpoints/chat.live-update/append-settled/state.json",
+        "sha256": "d4ae56dd389b5190938d0963173f9a34f7bf48c7305b46078f028e647eb5f00e"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/append-settled/accessibility.json",
+        "sha256": "11a251eb2a0eb1526752fdace949069b8fbc9a9fde46e23641e7256222dd12cb"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/append-settled/screenshot.png",
+        "sha256": "432c423754265f48112f47852c8349d51960689a6966da11439aa7e3bfbfe758"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "typed-100",
+      "phase_id": "type-100",
+      "at_us": 1485000,
+      "state": {
+        "path": "checkpoints/chat.live-update/typed-100/state.json",
+        "sha256": "5bc384af12a5ae86c196a66de160c34c3443abbb27dc9869f84ccba999b00572"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/typed-100/accessibility.json",
+        "sha256": "e333fe7b7120d4298671a19c9e30e16800f6c745077c7daeb7532f37a52953d2"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/typed-100/screenshot.png",
+        "sha256": "ea79d0bf9f70346cf1439635bb21e436768a538f9546f1bd3de8a1c4824aa4e4"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "pasted-10kib",
+      "phase_id": "paste-10kib",
+      "at_us": 0,
+      "state": {
+        "path": "checkpoints/chat.live-update/pasted-10kib/state.json",
+        "sha256": "a5ea35ea5363570246fe1e01e69a5c05af2dfbbf22eee48adb0c9564197d41dc"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/pasted-10kib/accessibility.json",
+        "sha256": "32d8cfeeacf7350d7c5bf0bfb0e22150452e132b4ef01fa054b74614921db1c1"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/pasted-10kib/screenshot.png",
+        "sha256": "6a6e71f0d26a1c2edaa5dc6878d164e0b1e10ecfaaccd30a29e4dc5649e8ce61"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "selection-replaced",
+      "phase_id": "select-replace",
+      "at_us": 500000,
+      "state": {
+        "path": "checkpoints/chat.live-update/selection-replaced/state.json",
+        "sha256": "878698eaf0fb162ebb7090c3995ce8f2bb23d3569734e7b63c99259bae2a7fde"
+      },
+      "accessibility": {
+        "path": "checkpoints/chat.live-update/selection-replaced/accessibility.json",
+        "sha256": "33b743f7ddeb1c0024fbea670f4c58a1637827cd1fbc58ad20e9121e4dd40994"
+      },
+      "screenshot": {
+        "path": "checkpoints/chat.live-update/selection-replaced/screenshot.png",
+        "sha256": "6a6e71f0d26a1c2edaa5dc6878d164e0b1e10ecfaaccd30a29e4dc5649e8ce61"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "chat-thread",
+          "count": 1
+        },
+        {
+          "role": "message",
+          "count": 10
+        },
+        {
+          "role": "avatar",
+          "count": 10
+        },
+        {
+          "role": "composer",
+          "count": 1
+        },
+        {
+          "role": "send-control",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "fairness_contract": {
+    "locale": "en_US_POSIX",
+    "timezone": "UTC",
+    "direction": "mixed-ltr-rtl",
+    "logical_viewport_width": 390,
+    "logical_viewport_height": 844,
+    "expected_visible_role_counts": [
+      {
+        "role": "chat-thread",
+        "count": 1
+      },
+      {
+        "role": "message",
+        "count": 10
+      },
+      {
+        "role": "avatar",
+        "count": 10
+      },
+      {
+        "role": "composer",
+        "count": 1
+      },
+      {
+        "role": "send-control",
+        "count": 1
+      }
+    ],
+    "schedule_tolerance_us": 1000,
+    "coordinate_tolerance_microunits": 1000,
+    "elapsed_time_driven": true
+  }
+}

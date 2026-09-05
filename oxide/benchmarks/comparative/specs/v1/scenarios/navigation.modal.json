@@ -1,0 +1,399 @@
+{
+  "schema_version": 1,
+  "id": "navigation.modal",
+  "fixture": {
+    "path": "fixtures/navigation.modal.json",
+    "sha256": "0490ef34ec47dfc1d56377283596ec7034af71bd62e005163bad5fecb027730b"
+  },
+  "assets": {
+    "path": "assets/neutral-v1.json",
+    "sha256": "526211b8ad140a772d0f9427184ab32ebfe770c5b61dedbaa7501f8a5c4cd66f"
+  },
+  "font_pack": {
+    "id": "oxide-bench-fonts-v1",
+    "manifest": "font-packs/oxide-bench-fonts-v1.json",
+    "sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "viewport_class": "phone-portrait",
+  "scene": {
+    "roles": [
+      "navigation-list",
+      "list-item",
+      "detail",
+      "modal",
+      "dismiss-control",
+      "back-control"
+    ],
+    "style_tokens": {
+      "path": "styles/neutral-v1.json",
+      "sha256": "3fe8e237e670aa0b535a667d5058ed77b1097942755cebeb7f3d3ba3f85d8916"
+    },
+    "layout_assertions": {
+      "path": "layout/navigation.modal.json",
+      "sha256": "b651fb93ad0c52f28e84dda2bf5e657ecd013ecf176f892493ebc6fbbe5078f8"
+    }
+  },
+  "phases": [
+    {
+      "id": "setup",
+      "measured": false
+    },
+    {
+      "id": "prewarm",
+      "measured": false,
+      "duration_ms": 2000
+    },
+    {
+      "id": "canonical-cycles",
+      "measured": true,
+      "duration_ms": 5000,
+      "trace": {
+        "path": "traces/navigation-canonical-cycles.json",
+        "sha256": "1ae9bb102b5449f15910f5e9070d901909409f3c666968329d33a6b993323f30"
+      }
+    },
+    {
+      "id": "interactive-cancel",
+      "measured": true,
+      "duration_ms": 1000,
+      "trace": {
+        "path": "traces/navigation-interactive-cancel.json",
+        "sha256": "147377bba3009d68510c803b9e329fb28036bd43bd1d65b2f2fffe57921c455e"
+      }
+    },
+    {
+      "id": "teardown",
+      "measured": false
+    }
+  ],
+  "primary_metric": "modal_open_to_attributed_presentation_ms",
+  "required_metrics": [
+    "frame.present_ms",
+    "first.interactive_ms",
+    "input.event_to_visible_response_ms",
+    "frame.missed_display_opportunities_per_1000",
+    "cpu.main_thread_ms",
+    "memory.resident_bytes",
+    "oxide.dirty_node_count",
+    "oxide.layout_pass_count",
+    "oxide.draw_call_count",
+    "oxide.encoded_bytes",
+    "oxide.texture_bytes"
+  ],
+  "optional_metrics": [
+    "gpu.device_scope_active_ms",
+    "transition.cancel_to_restored_ms"
+  ],
+  "parity_checkpoints": [
+    {
+      "id": "list-initial",
+      "phase_id": "setup",
+      "state": {
+        "path": "checkpoints/navigation.modal/list-initial/state.json",
+        "sha256": "23954dda78742af79346bb513d2feaf5e1512a4f90d9aa5e4b5737ba1f3bc2f7"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/list-initial/accessibility.json",
+        "sha256": "190c8a21e4d47421f42c04547f5b271ba7a0ce691adb4907469c60fe7a3a8d92"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/list-initial/screenshot.png",
+        "sha256": "fae393201b099279ea89cf074bfe17b4938aa1014b61da55eecb7fb29f1a56a7"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "navigation-list",
+          "count": 1
+        },
+        {
+          "role": "list-item",
+          "count": 12
+        }
+      ]
+    },
+    {
+      "id": "modal-0",
+      "phase_id": "canonical-cycles",
+      "at_us": 325000,
+      "state": {
+        "path": "checkpoints/navigation.modal/modal-0/state.json",
+        "sha256": "209c910b0239d20110b8029df01fac8eb1ce4686b419553f2a53539747d6fa71"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/modal-0/accessibility.json",
+        "sha256": "af5418ad4ed1a1029526cee8b6f4b053e3b344b7fdc8202ff17f4445d01220d6"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/modal-0/screenshot.png",
+        "sha256": "3c840ae098e70237679f92f7a5e2aa9b714224ffaa56e925aa6a939a3dbd5801"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "modal-25",
+      "phase_id": "canonical-cycles",
+      "at_us": 400000,
+      "state": {
+        "path": "checkpoints/navigation.modal/modal-25/state.json",
+        "sha256": "e7a5069713bf5ad56177b33201834e1080ee361f8b229ad25938cd654d27878a"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/modal-25/accessibility.json",
+        "sha256": "fe958ab6a2a9e56c46ab5d63e8558ebac3b2db9070bd38031353c0c281317aa2"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/modal-25/screenshot.png",
+        "sha256": "b833d042cf254b421467acc278352b668102f014e6b99da62ac284787de938ba"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "modal-50",
+      "phase_id": "canonical-cycles",
+      "at_us": 475000,
+      "state": {
+        "path": "checkpoints/navigation.modal/modal-50/state.json",
+        "sha256": "93f299f9c6869d81aba8f1eeba53dc12df641f323889567ae100a4471d84302c"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/modal-50/accessibility.json",
+        "sha256": "9a2a4a64471acdae67fc2b9431cc4c28794982765bad6facac9ebc516b4e8d46"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/modal-50/screenshot.png",
+        "sha256": "4b4a6c582988e65ab57160fbeb0335454ce664e3d8ffaad16f5da858fb9477ae"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "modal-75",
+      "phase_id": "canonical-cycles",
+      "at_us": 550000,
+      "state": {
+        "path": "checkpoints/navigation.modal/modal-75/state.json",
+        "sha256": "78aaf08e1e5210a7185da0be885090e65ed091d8286a8a8b6d73e4a3e9063adf"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/modal-75/accessibility.json",
+        "sha256": "9983ee36d885a1b8f665f6357142bceb858dcfdc7fb681146ccc951f0923bf21"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/modal-75/screenshot.png",
+        "sha256": "5d384178ccd4ea2d9fc594ebcc5db56cee1b4a0e2e17a3ee116795d59b3f88f4"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "modal-100",
+      "phase_id": "canonical-cycles",
+      "at_us": 625000,
+      "state": {
+        "path": "checkpoints/navigation.modal/modal-100/state.json",
+        "sha256": "dd02345da52183ce6c58f7b2c1ec918a5187a91f92ff736239cc4e115ea22984"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/modal-100/accessibility.json",
+        "sha256": "4b598159398477bf9a3b5c6b701a41ec20ad7d648c098dae8c2913937c4b85b7"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/modal-100/screenshot.png",
+        "sha256": "de46306519be9dbb161bd2c90d41d8038bae5b6613843ea75cd5acfbe265ff2f"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "list-restored",
+      "phase_id": "canonical-cycles",
+      "at_us": 5000000,
+      "state": {
+        "path": "checkpoints/navigation.modal/list-restored/state.json",
+        "sha256": "2dc923a6c53718f787e9c2b92c302e8b437f570a5bd7a4fb756c3812a04c616d"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/list-restored/accessibility.json",
+        "sha256": "0019c6fb244750ca5651638e612990ddfe7cdc747b77b5efb5c00d36db379c38"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/list-restored/screenshot.png",
+        "sha256": "fae393201b099279ea89cf074bfe17b4938aa1014b61da55eecb7fb29f1a56a7"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "navigation-list",
+          "count": 1
+        },
+        {
+          "role": "list-item",
+          "count": 12
+        }
+      ]
+    },
+    {
+      "id": "cancel-mid",
+      "phase_id": "interactive-cancel",
+      "at_us": 500000,
+      "state": {
+        "path": "checkpoints/navigation.modal/cancel-mid/state.json",
+        "sha256": "507f608f22c8accb214679db8aa4d53da3c27c672a46eaf9c593fee52788e3f1"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/cancel-mid/accessibility.json",
+        "sha256": "f9a0d90b8132a703740c2924d191e7ec5160034912a6ab7fed866d8b99849a5e"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/cancel-mid/screenshot.png",
+        "sha256": "4b4a6c582988e65ab57160fbeb0335454ce664e3d8ffaad16f5da858fb9477ae"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "detail",
+          "count": 1
+        },
+        {
+          "role": "modal",
+          "count": 1
+        },
+        {
+          "role": "dismiss-control",
+          "count": 1
+        },
+        {
+          "role": "back-control",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "cancel-restored",
+      "phase_id": "interactive-cancel",
+      "at_us": 1000000,
+      "state": {
+        "path": "checkpoints/navigation.modal/cancel-restored/state.json",
+        "sha256": "0be9b23d362d546487108c1765fa5956baab81122cc060fb21075d7f98e02d65"
+      },
+      "accessibility": {
+        "path": "checkpoints/navigation.modal/cancel-restored/accessibility.json",
+        "sha256": "6377d7f513800fbf2862d3af88363108148cdd49afe8d773505190c6ca3198c5"
+      },
+      "screenshot": {
+        "path": "checkpoints/navigation.modal/cancel-restored/screenshot.png",
+        "sha256": "fae393201b099279ea89cf074bfe17b4938aa1014b61da55eecb7fb29f1a56a7"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "navigation-list",
+          "count": 1
+        },
+        {
+          "role": "list-item",
+          "count": 12
+        }
+      ]
+    }
+  ],
+  "fairness_contract": {
+    "locale": "en_US_POSIX",
+    "timezone": "UTC",
+    "direction": "ltr",
+    "logical_viewport_width": 390,
+    "logical_viewport_height": 844,
+    "expected_visible_role_counts": [
+      {
+        "role": "navigation-list",
+        "count": 1
+      },
+      {
+        "role": "list-item",
+        "count": 12
+      }
+    ],
+    "schedule_tolerance_us": 1000,
+    "coordinate_tolerance_microunits": 1000,
+    "elapsed_time_driven": true
+  }
+}

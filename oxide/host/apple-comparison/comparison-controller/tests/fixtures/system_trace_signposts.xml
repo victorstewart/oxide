@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="os-signpost">
+<col><mnemonic>time</mnemonic></col><col><mnemonic>thread</mnemonic></col><col><mnemonic>process</mnemonic></col><col><mnemonic>event-type</mnemonic></col><col><mnemonic>scope</mnemonic></col><col><mnemonic>identifier</mnemonic></col><col><mnemonic>name</mnemonic></col><col><mnemonic>format-string</mnemonic></col><col><mnemonic>backtrace</mnemonic></col><col><mnemonic>subsystem</mnemonic></col><col><mnemonic>category</mnemonic></col><col><mnemonic>message</mnemonic></col><col><mnemonic>emit-location</mnemonic></col>
+</schema>
+<row><event-time>100</event-time><thread fmt="main (0x384) (OxideBenchMacOS, pid: 42)"><tid>900</tid><process><pid>42</pid></process></thread><process fmt="OxideBenchMacOS (42)"><pid>42</pid></process><event-type fmt="Event">Event</event-type><sentinel/><sentinel/><signpost-name fmt="PhaseBegin">PhaseBegin</signpost-name><sentinel/><sentinel/><subsystem fmt="com.oxide.comparison">com.oxide.comparison</subsystem><category fmt="Presentation">Presentation</category><os-log-metadata fmt="scenario=2 identifier=7 measured=1">scenario=2 identifier=7 measured=1</os-log-metadata><sentinel/></row>
+<row><event-time>300</event-time><thread fmt="main (0x384) (OxideBenchMacOS, pid: 42)"><tid>900</tid><process><pid>42</pid></process></thread><process fmt="OxideBenchMacOS (42)"><pid>42</pid></process><event-type fmt="Event">Event</event-type><sentinel/><sentinel/><signpost-name fmt="PhaseEnd">PhaseEnd</signpost-name><sentinel/><sentinel/><subsystem fmt="com.oxide.comparison">com.oxide.comparison</subsystem><category fmt="Presentation">Presentation</category><os-log-metadata fmt="scenario=2 identifier=7 measured=1">scenario=2 identifier=7 measured=1</os-log-metadata><sentinel/></row>
+</node>
+</trace-query-result>

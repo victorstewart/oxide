@@ -1,0 +1,638 @@
+{
+  "schema_version": 1,
+  "suite_id": "oxide-production-ui-comparison",
+  "plan_id": "web-pr-html-first-vs-oxide-v1",
+  "plan_sha256": "503d596bec238bab123ae7b2cc518bf998c1b1e69f29e312e6671a37baaf7cf6",
+  "tier": "pr",
+  "platform": "web",
+  "reference": {
+    "id": "html-first.production",
+    "variant": "semantic-ssr-minimal-js",
+    "source_commit": "07ba2866476342c42b35f74fedf0b5003f0ceafb",
+    "source_tree": "worktree-sha256:2c5086964d0eaa6486764e96657b666edefdf3b3f2b69f2d57c303d6ec717833",
+    "build_command_hash": "fe6ce66b4f96947351c0631aa586f7bf46ad974242b855f58997a671a3046639",
+    "build_flags": [
+      "production",
+      "shipping",
+      "no-benchmark-in-production-payload"
+    ],
+    "executable_or_bundle_sha256": "8af31e9716b8cbac207d092d86104683c0fb3af5e91d5cb56b99dc1ada81661e",
+    "shipping_payload_manifest_sha256": "696a4a70af39e1ed0739fa9382de568242a6c2731c032a17f7c571804ef6c6e4",
+    "reference_audit_sha256": "2c5086964d0eaa6486764e96657b666edefdf3b3f2b69f2d57c303d6ec717833",
+    "comparator_acceptance_status": "materialization-and-pixel-parity-pending"
+  },
+  "contender": {
+    "id": "oxide.production",
+    "variant": "wasm-webgpu-production",
+    "source_commit": "07ba2866476342c42b35f74fedf0b5003f0ceafb",
+    "source_tree": "worktree-sha256:e63c2d5bd84553547ad0d41f25d005e1e786cf5c7541ea9fd88a8163cf802bd6",
+    "build_command_hash": "6e765c66e10fcd4b57c496e68caef4f5d8741d79919232d430531d82b13bb1ec",
+    "build_flags": [
+      "production",
+      "shipping",
+      "no-benchmark-in-production-payload"
+    ],
+    "executable_or_bundle_sha256": "a716598d21a09c2182f1efa9b65db9fbe583fefcd719cf4defe188afaf05d679",
+    "shipping_payload_manifest_sha256": "12e78ed587204c97ed391fd3b6652d8a98a9790d74e692257490d8a08c79ba21",
+    "reference_audit_sha256": "e63c2d5bd84553547ad0d41f25d005e1e786cf5c7541ea9fd88a8163cf802bd6",
+    "comparator_acceptance_status": "materialization-and-pixel-parity-pending"
+  },
+  "common": {
+    "harness_sha256": "80e2ef29e7de45bafba33694197fe0990338ac5c0213eccec9fe536cc0021ff3",
+    "pass_instrumentation_sha256": "d2fd24df3df839c03cfe750aeb9eb0840413a14cefee06bbcfa160d9ac2bb002",
+    "scenario_manifest_sha256": "bf776e5a93bcf55dabaaad734d4f1143621a16198cdf34070b2f6f19072fc099",
+    "trace_sha256": "bc8341fd6f52c4af888e2156b890ecdb628a3441ea64e29b8f560b5e63d28456",
+    "fixture_sha256": "eba0f3b89aacb508ebde6fec050e33c559bb615ccf0ac14fa8c80257b7a852bf",
+    "asset_manifest_sha256": "d19b2ee70ec875008ed98595607040b94b69d360ffb4beb7aef8c475c7a8e0ba",
+    "font_pack_sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "environment": {
+    "browser": "shipping-google-chrome",
+    "chrome_version": "150.0.7871.124",
+    "headed": true,
+    "gpu": "real-hardware-no-software-fallback",
+    "viewport_css_pixels": [
+      390,
+      844
+    ],
+    "device_scale_factor": 3,
+    "network_profile": "engine-local",
+    "observer": "automation-init-before-application",
+    "web_vitals_version": "5.3.0",
+    "web_vitals_npm_integrity": "sha512-q6LWsLatGYZp5VGBIOvbTj6JBV2nOmC8KvWztXBmwJcfFAzhwKwbOxhUH306XY3CcaZDUlSmSuNPBsCn0bFu+g==",
+    "dom_application_gpu_pass_duration_ns": null,
+    "html_first_initial_route_reset_forbidden": true
+  },
+  "seed": "0",
+  "scenario_ids": [
+    "startup.first-screen",
+    "dashboard.mixed-static",
+    "feed.variable-scroll",
+    "chat.live-update",
+    "navigation.modal",
+    "image.decode-zoom"
+  ],
+  "scenario_packs": [
+    {
+      "id": "pr-dynamic",
+      "ordered_scenario_ids": [
+        "dashboard.mixed-static",
+        "feed.variable-scroll",
+        "chat.live-update",
+        "navigation.modal",
+        "image.decode-zoom"
+      ],
+      "isolation_class": "implementation-owned-headed-chrome-process",
+      "reset_contract": "frozen-seed-state-hash-and-teardown",
+      "common_ready_predicate": "resources-ready-and-complete-state-generation",
+      "fixed_warmup_ns": "2000000000",
+      "measured_duration_ns": "6000000000",
+      "max_process_wall_ns": "60000000000",
+      "sentinel_scenario_id": "dashboard.mixed-static",
+      "trace_capacity_limit": "1000000",
+      "calibration_evidence_sha256": "6cecf7582cff360bb3f662dd5b3886aa2f0535a1146d3ed8c08d9835789fa9cd"
+    },
+    {
+      "id": "pr-startup",
+      "ordered_scenario_ids": [
+        "startup.first-screen"
+      ],
+      "isolation_class": "new-browser-process-new-implementation-profile",
+      "reset_contract": "browser-profile-cold-no-post-navigation-reset",
+      "common_ready_predicate": "complete-state-hash-and-attributed-presented-generation",
+      "fixed_warmup_ns": "0",
+      "measured_duration_ns": "15000000000",
+      "max_process_wall_ns": "15000000000",
+      "sentinel_scenario_id": "startup.first-screen",
+      "trace_capacity_limit": "250000",
+      "calibration_evidence_sha256": "6cecf7582cff360bb3f662dd5b3886aa2f0535a1146d3ed8c08d9835789fa9cd"
+    }
+  ],
+  "controller_chunks": [
+    {
+      "id": "presentation-pairs-0-3",
+      "ordered_pair_indices": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "pack_ids": [
+        "pr-dynamic"
+      ],
+      "pass_id": "minimal-presentation",
+      "max_occupied_ns": "240000000000",
+      "expected_heartbeat_count": "40",
+      "bundled_plan_resource_sha256": "503d596bec238bab123ae7b2cc518bf998c1b1e69f29e312e6671a37baaf7cf6",
+      "checkpoint_generation": "1"
+    },
+    {
+      "id": "startup-pairs-0-3",
+      "ordered_pair_indices": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "pack_ids": [
+        "pr-startup"
+      ],
+      "pass_id": "minimal-presentation",
+      "max_occupied_ns": "120000000000",
+      "expected_heartbeat_count": "8",
+      "bundled_plan_resource_sha256": "503d596bec238bab123ae7b2cc518bf998c1b1e69f29e312e6671a37baaf7cf6",
+      "checkpoint_generation": "2"
+    }
+  ],
+  "measurement_pass_id": "minimal-presentation",
+  "instrumentation_profile": "chrome-presentation-minimal-plus-prestart-observer",
+  "pass_pair_count": "4",
+  "process_boundary_plan": "one-headed-shipping-chrome-process-and-implementation-owned-profile-per-side-session",
+  "comparison_cells": [
+    {
+      "id": "web-html-first-startup.first-screen",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "startup.first-screen",
+      "cache_class": "browser-profile-cold",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-startup",
+      "primary_metric_id": "first_complete_ui_paint_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p50",
+      "materiality_boundary": "relative=0.05,absolute_ms=50",
+      "sufficiency_rule": "valid_profile_cold_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-startup",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    },
+    {
+      "id": "web-html-first-dashboard.mixed-static",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "dashboard.mixed-static",
+      "cache_class": "packed-warm",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-dynamic",
+      "primary_metric_id": "interaction_to_present_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p95",
+      "materiality_boundary": "log_ratio=-0.05",
+      "sufficiency_rule": "trusted_actions>=100,valid_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-dynamic",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    },
+    {
+      "id": "web-html-first-feed.variable-scroll",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "feed.variable-scroll",
+      "cache_class": "packed-warm",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-dynamic",
+      "primary_metric_id": "interaction_to_present_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p95",
+      "materiality_boundary": "log_ratio=-0.05",
+      "sufficiency_rule": "trusted_actions>=100,valid_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-dynamic",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    },
+    {
+      "id": "web-html-first-chat.live-update",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "chat.live-update",
+      "cache_class": "packed-warm",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-dynamic",
+      "primary_metric_id": "interaction_to_present_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p95",
+      "materiality_boundary": "log_ratio=-0.05",
+      "sufficiency_rule": "trusted_actions>=100,valid_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-dynamic",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    },
+    {
+      "id": "web-html-first-navigation.modal",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "navigation.modal",
+      "cache_class": "packed-warm",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-dynamic",
+      "primary_metric_id": "interaction_to_present_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p95",
+      "materiality_boundary": "log_ratio=-0.05",
+      "sufficiency_rule": "trusted_actions>=100,valid_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-dynamic",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    },
+    {
+      "id": "web-html-first-image.decode-zoom",
+      "platform": "web",
+      "reference_id": "html-first.production",
+      "contender_id": "oxide.production",
+      "scenario_id": "image.decode-zoom",
+      "cache_class": "packed-warm",
+      "network_profile": "engine-local",
+      "refresh_track": "actual-observed",
+      "pack_id": "pr-dynamic",
+      "primary_metric_id": "interaction_to_present_ms",
+      "owning_pass_id": "minimal-presentation",
+      "evidence_role": "required_claim",
+      "within_session_estimator": "p95",
+      "materiality_boundary": "log_ratio=-0.05",
+      "sufficiency_rule": "trusted_actions>=100,valid_pairs>=4",
+      "required_guardrail_metric_ids": [
+        "browser_cpu_ms_per_wall_second",
+        "process_tree_private_bytes",
+        "shipping_brotli_11_bytes"
+      ],
+      "guardrail_not_applicable_reasons": [
+        "dom_application_gpu_pass_duration_ns=null:no-equivalent-dom-api"
+      ],
+      "oxide_superiority_family_id": "oxide-superiority-dynamic",
+      "reference_superiority_family_id": null,
+      "equivalence_lower_family_id": null,
+      "equivalence_upper_family_id": null,
+      "required_guardrail_family_id": "required-guardrail-noninferiority"
+    }
+  ],
+  "metric_definitions": [
+    {
+      "id": "interaction_to_present_ms",
+      "unit": "ms",
+      "direction": "lower_is_better",
+      "scope": "trusted-action",
+      "comparability": "symmetric-cross-implementation",
+      "source": "chromium-event-latency-compositor-presentation-flow",
+      "owning_pass_id": "minimal-presentation",
+      "allowed_primary_cell_types": [
+        "dynamic"
+      ],
+      "sample_unit": "trusted-logical-action",
+      "within_session_estimator": "p95",
+      "block_duration": "six-second-packed-phase",
+      "pair_effect": "log-badness-ratio",
+      "across_session_estimator": "hodges-lehmann-paired",
+      "zero_policy": "strictly-positive",
+      "availability_policy": "required-for-eligible-product-cell",
+      "materiality_boundary": "log_ratio=-0.05",
+      "guardrail_boundary": "log_ratio=0.05",
+      "max_interval_width": "log_ratio=0.10",
+      "decision_alpha": 0.05,
+      "decision_test": "exact-paired-sign",
+      "exact_test_resolution_floor": "4",
+      "max_clock_uncertainty_ns": "100000"
+    },
+    {
+      "id": "first_complete_ui_paint_ms",
+      "unit": "ms",
+      "direction": "lower_is_better",
+      "scope": "profile-cold-navigation",
+      "comparability": "symmetric-cross-implementation",
+      "source": "generation-correlated-chromium-compositor-presentation",
+      "owning_pass_id": "minimal-presentation",
+      "allowed_primary_cell_types": [
+        "startup"
+      ],
+      "sample_unit": "navigation",
+      "within_session_estimator": "p50",
+      "block_duration": "one-profile-cold-navigation",
+      "pair_effect": "log-badness-ratio",
+      "across_session_estimator": "hodges-lehmann-paired",
+      "zero_policy": "strictly-positive",
+      "availability_policy": "required-for-eligible-product-cell",
+      "materiality_boundary": "relative=0.05,absolute_ms=50",
+      "guardrail_boundary": "relative=0.05,absolute_ms=50",
+      "max_interval_width": "log_ratio=0.10",
+      "decision_alpha": 0.05,
+      "decision_test": "exact-paired-sign",
+      "exact_test_resolution_floor": "4",
+      "max_clock_uncertainty_ns": "100000"
+    },
+    {
+      "id": "browser_cpu_ms_per_wall_second",
+      "unit": "ms/s",
+      "direction": "lower_is_better",
+      "scope": "process-tree",
+      "comparability": "symmetric-cross-implementation",
+      "source": "os-process-accounting-and-chrome-trace",
+      "owning_pass_id": "minimal-presentation",
+      "allowed_primary_cell_types": [
+        "resource"
+      ],
+      "sample_unit": "trusted-logical-action",
+      "within_session_estimator": "p95",
+      "block_duration": "six-second-packed-phase",
+      "pair_effect": "log-badness-ratio",
+      "across_session_estimator": "hodges-lehmann-paired",
+      "zero_policy": "strictly-positive",
+      "availability_policy": "required-for-eligible-product-cell",
+      "materiality_boundary": "log_ratio=-0.05",
+      "guardrail_boundary": "log_ratio=0.05",
+      "max_interval_width": "log_ratio=0.10",
+      "decision_alpha": 0.05,
+      "decision_test": "exact-paired-sign",
+      "exact_test_resolution_floor": "4",
+      "max_clock_uncertainty_ns": "100000"
+    },
+    {
+      "id": "process_tree_private_bytes",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "scope": "post-ready-and-journey-peak",
+      "comparability": "symmetric-cross-implementation",
+      "source": "os-process-tree-private-footprint-minus-blank",
+      "owning_pass_id": "minimal-presentation",
+      "allowed_primary_cell_types": [
+        "resource"
+      ],
+      "sample_unit": "trusted-logical-action",
+      "within_session_estimator": "p95",
+      "block_duration": "six-second-packed-phase",
+      "pair_effect": "log-badness-ratio",
+      "across_session_estimator": "hodges-lehmann-paired",
+      "zero_policy": "strictly-positive",
+      "availability_policy": "required-for-eligible-product-cell",
+      "materiality_boundary": "log_ratio=-0.05",
+      "guardrail_boundary": "log_ratio=0.05",
+      "max_interval_width": "log_ratio=0.10",
+      "decision_alpha": 0.05,
+      "decision_test": "exact-paired-sign",
+      "exact_test_resolution_floor": "4",
+      "max_clock_uncertainty_ns": "100000"
+    },
+    {
+      "id": "shipping_brotli_11_bytes",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "scope": "shipping-payload",
+      "comparability": "symmetric-cross-implementation",
+      "source": "clean-shipping-manifest-brotli-11",
+      "owning_pass_id": "minimal-presentation",
+      "allowed_primary_cell_types": [
+        "delivery"
+      ],
+      "sample_unit": "trusted-logical-action",
+      "within_session_estimator": "p95",
+      "block_duration": "six-second-packed-phase",
+      "pair_effect": "log-badness-ratio",
+      "across_session_estimator": "hodges-lehmann-paired",
+      "zero_policy": "strictly-positive",
+      "availability_policy": "required-for-eligible-product-cell",
+      "materiality_boundary": "relative=-0.01,absolute_bytes=-10240",
+      "guardrail_boundary": "relative=0.01,absolute_bytes=10240",
+      "max_interval_width": "log_ratio=0.10",
+      "decision_alpha": 0.05,
+      "decision_test": "exact-paired-sign",
+      "exact_test_resolution_floor": "4",
+      "max_clock_uncertainty_ns": "100000"
+    }
+  ],
+  "decision_families": [
+    {
+      "id": "oxide-superiority-dynamic",
+      "claim_kind": "oxide_superiority",
+      "alpha": 0.05,
+      "ordered_members": [
+        {
+          "comparison_cell_id": "web-html-first-dashboard.mixed-static",
+          "metric_id": "interaction_to_present_ms",
+          "boundary_id": "material-superiority-log-ratio=-0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-feed.variable-scroll",
+          "metric_id": "interaction_to_present_ms",
+          "boundary_id": "material-superiority-log-ratio=-0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-chat.live-update",
+          "metric_id": "interaction_to_present_ms",
+          "boundary_id": "material-superiority-log-ratio=-0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-navigation.modal",
+          "metric_id": "interaction_to_present_ms",
+          "boundary_id": "material-superiority-log-ratio=-0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-image.decode-zoom",
+          "metric_id": "interaction_to_present_ms",
+          "boundary_id": "material-superiority-log-ratio=-0.05",
+          "alternative": "lower"
+        }
+      ],
+      "exact_test_resolution_floor": "4",
+      "maximum_pair_count": "4"
+    },
+    {
+      "id": "oxide-superiority-startup",
+      "claim_kind": "oxide_superiority",
+      "alpha": 0.05,
+      "ordered_members": [
+        {
+          "comparison_cell_id": "web-html-first-startup.first-screen",
+          "metric_id": "first_complete_ui_paint_ms",
+          "boundary_id": "material-superiority-relative=0.05,absolute_ms=50",
+          "alternative": "lower"
+        }
+      ],
+      "exact_test_resolution_floor": "4",
+      "maximum_pair_count": "4"
+    },
+    {
+      "id": "required-guardrail-noninferiority",
+      "claim_kind": "required_guardrail_noninferiority",
+      "alpha": 0.05,
+      "ordered_members": [
+        {
+          "comparison_cell_id": "web-html-first-startup.first-screen",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-startup.first-screen",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-startup.first-screen",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-dashboard.mixed-static",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-dashboard.mixed-static",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-dashboard.mixed-static",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-feed.variable-scroll",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-feed.variable-scroll",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-feed.variable-scroll",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-chat.live-update",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-chat.live-update",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-chat.live-update",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-navigation.modal",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-navigation.modal",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-navigation.modal",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-image.decode-zoom",
+          "metric_id": "browser_cpu_ms_per_wall_second",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-image.decode-zoom",
+          "metric_id": "process_tree_private_bytes",
+          "boundary_id": "noninferiority-log-ratio=0.05",
+          "alternative": "lower"
+        },
+        {
+          "comparison_cell_id": "web-html-first-image.decode-zoom",
+          "metric_id": "shipping_brotli_11_bytes",
+          "boundary_id": "noninferiority-relative=0.01,absolute_bytes=10240",
+          "alternative": "lower"
+        }
+      ],
+      "exact_test_resolution_floor": "4",
+      "maximum_pair_count": "4"
+    }
+  ]
+}

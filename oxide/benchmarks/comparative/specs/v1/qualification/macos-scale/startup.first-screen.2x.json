@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "startup.first-screen",
+  "scale": "two_x",
+  "dimension": "dataset_cardinality",
+  "transform": "namespaced_dataset_shards",
+  "base_cardinality": 24576,
+  "effective_cardinality": 49152,
+  "fixture": {
+    "path": "fixtures/startup.first-screen.json",
+    "sha256": "5a1f0165a37d6bad982c59a9533940fa3cfe34c75c87e41b80ed8effdf34b485"
+  }
+}

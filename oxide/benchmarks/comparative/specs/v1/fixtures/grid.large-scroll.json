@@ -1,0 +1,29 @@
+{
+  "column_contracts": [
+    {
+      "columns": 3,
+      "viewport_class": "phone-portrait"
+    },
+    {
+      "columns": 6,
+      "viewport_class": "desktop-wide"
+    }
+  ],
+  "detail_tile_index": 7500,
+  "id": "grid.large-scroll",
+  "schema_version": 1,
+  "thumbnail_count": 256,
+  "thumbnail_recipe": {
+    "base_tile_count": 128,
+    "base_tile_index": "thumbnail_index_mod_128",
+    "variant_count": 2,
+    "variant_index": "thumbnail_index_div_128",
+    "variants": [
+      "identity",
+      "source-over-accent-20-percent"
+    ]
+  },
+  "tile_count": 10000,
+  "tile_identity": "grid:tile:%05d",
+  "tile_title": "Tile %05d"
+}

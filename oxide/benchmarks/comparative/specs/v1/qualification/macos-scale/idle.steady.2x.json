@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "idle.steady",
+  "scale": "two_x",
+  "dimension": "operation_cardinality",
+  "transform": "isolated_operation_shadow",
+  "base_cardinality": 1,
+  "effective_cardinality": 2,
+  "fixture": {
+    "path": "fixtures/dashboard.mixed-static.json",
+    "sha256": "b3f1a54053b7b9de284164bba630f3091c73d2a10de7e2b0bea10ee87d954579"
+  }
+}

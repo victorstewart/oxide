@@ -523,7 +523,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 399, 0x0a3d9230959bfc6d);
+    assert_report_case_id_set(&workspace, "workspace latest", 405, 0x33b1f487ffee903e);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -4035,6 +4035,81 @@ fn filtered_run_suite_supports_text_fallback_label_encode_case() {
     assert!(report_f64(row, "fallback_label_glyph_runs") >= 1.0);
     assert!(report_f64(row, "fallback_label_vertices") > 0.0);
     let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn filtered_run_suite_supports_variable_font_authoring_construction_case()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-variable-font-authoring-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.font.variable_instance_construct")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered variable-font authoring smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.authoring.font.variable_instance_construct"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+   let report = std::fs::read_to_string(&json_out).expect("read variable-font authoring report");
+   let row = report_case_slice(&report, "cpu.authoring.font.variable_instance_construct");
+   assert!(row.contains("\"cache_state\": \"cold\""), "row: {row}");
+   assert_eq!(report_f64(row, "font_instances_per_op"), 1.0);
+   assert_eq!(report_f64(row, "variation_axes_per_instance"), 2.0);
+   assert_eq!(report_f64(row, "pinned_weight"), 400.0);
+   assert_eq!(report_f64(row, "pinned_width"), 100.0);
+   assert_eq!(report_f64(row, "constructor_validation"), 1.0);
+   assert!(report_f64(row, "font_bytes") > 1_000_000.0);
+   assert!(report.contains("Variable Font Instance Construction"));
+   let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn filtered_run_suite_supports_variable_axes_cold_and_warm_text_evidence()
+{
+   let mut json_out = std::env::temp_dir();
+   json_out.push(format!("oxide-perf-runner-variable-axes-text-{}.json", std::process::id()));
+   let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+      .env("OXIDE_PERF_RUNNER_FILTER", "cpu.architecture.text.variable_axes_3x")
+      .arg("--run-suite")
+      .arg("--smoke")
+      .arg("--json-out")
+      .arg(&json_out)
+      .output()
+      .expect("run filtered variable-axis text smoke suite");
+   let stdout = String::from_utf8_lossy(&output.stdout);
+   let stderr = String::from_utf8_lossy(&output.stderr);
+
+   assert!(output.status.success(), "filtered suite failed: {stderr}");
+   assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+   assert!(stdout.contains("case=cpu.architecture.text.variable_axes_3x"), "stdout: {stdout}");
+   assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+   let report = std::fs::read_to_string(&json_out).expect("read variable-axis text report");
+   let row = report_case_slice(&report, "cpu.architecture.text.variable_axes_3x");
+   assert!(row.contains("\"cache_state\": \"cold\""), "row: {row}");
+   assert_eq!(report_f64(row, "device_scale"), 3.0);
+   assert_eq!(report_f64(row, "physical_raster_px"), 45.0);
+   assert_eq!(report_f64(row, "cold_shape_runs"), 2.0);
+   assert_eq!(report_f64(row, "latin_variation_axes"), 2.0);
+   assert_eq!(report_f64(row, "cjk_variation_axes"), 1.0);
+   assert!(report_f64(row, "cold_glyph_cache_misses") > 0.0);
+   assert!(report_f64(row, "cold_rasterizations") > 0.0);
+   assert!(report_f64(row, "cold_dirty_pixels") > 0.0);
+   assert!(report_f64(row, "warm_glyph_cache_hits") > 0.0);
+   assert_eq!(report_f64(row, "warm_glyph_cache_misses"), 0.0);
+   assert_eq!(report_f64(row, "warm_rasterizations"), 0.0);
+   assert_eq!(report_f64(row, "warm_dirty_pixels"), 0.0);
+   assert_eq!(report_f64(row, "warm_vertices"), report_f64(row, "cold_vertices"));
+   assert_eq!(report_f64(row, "resident_glyphs"), report_f64(row, "cold_glyph_cache_misses"));
+   let _ = std::fs::remove_file(json_out);
 }
 
 #[test]

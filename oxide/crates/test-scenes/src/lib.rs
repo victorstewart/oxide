@@ -5,10 +5,14 @@ extern crate alloc;
 extern crate std;
 
 mod animation_config;
+mod comparative;
 mod integration;
 mod orchestration;
 mod permissions;
 mod stress_test;
+
+#[cfg(feature = "comparison-geometry")]
+pub use comparative::ComparisonGeometryNode;
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -158,6 +162,11 @@ pub struct Router<U: elements::ImageUploader> {
     permissions: permissions::PermissionsScene,
     integration: integration::IntegrationScene,
     stress_test: stress_test::StressTestScene,
+    comparison: Option<comparative::ComparisonScene>,
+    comparison_scale_shadow: Option<comparative::ComparisonScene>,
+    comparison_scale_effective_cardinality: Option<u64>,
+    comparison_scale_primary_events: u64,
+    comparison_scale_shadow_events: u64,
     damage_stats_pct: f32,
     damage_stats_rects: u32,
     sensors: Option<oxide_ui_core::sensors::SensorView>,
@@ -196,6 +205,11 @@ impl<U: elements::ImageUploader> Router<U> {
             permissions: permissions::PermissionsScene::default(),
             integration: integration::IntegrationScene::default(),
             stress_test: stress_test::StressTestScene::default(),
+            comparison: None,
+            comparison_scale_shadow: None,
+            comparison_scale_effective_cardinality: None,
+            comparison_scale_primary_events: 0,
+            comparison_scale_shadow_events: 0,
             damage_stats_pct: 0.0,
             damage_stats_rects: 0,
             sensors: None,
@@ -228,6 +242,7 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn set_scene(&mut self, i: usize) {
+        self.comparison = None;
         let previous = self.current;
         self.current = match i {
             0 => SceneKind::Controls,
@@ -267,6 +282,13 @@ impl<U: elements::ImageUploader> Router<U> {
 
     pub fn update(&mut self, now_ms: u64, dt_ms: u32) {
         self.fps.tick(now_ms);
+        if let Some(comparison) = self.comparison.as_mut() {
+            comparison.update(dt_ms);
+            if let Some(shadow) = self.comparison_scale_shadow.as_mut() {
+                shadow.update(dt_ms);
+            }
+            return;
+        }
         self.camera.set_active(matches!(self.current, SceneKind::Camera));
         match self.current {
             SceneKind::Controls => self.controls.update(dt_ms),
@@ -292,6 +314,9 @@ impl<U: elements::ImageUploader> Router<U> {
     pub fn wants_next_frame(&self) -> bool {
         if self.force_full_damage_next_frame {
             return true;
+        }
+        if let Some(comparison) = self.comparison.as_ref() {
+            return comparison.wants_next_frame();
         }
         match self.current {
             SceneKind::Controls => true,
@@ -408,6 +433,10 @@ impl<U: elements::ImageUploader> Router<U> {
     }
 
     pub fn input_pointer(&mut self, x: f32, y: f32, dx: f32, dy: f32, buttons: u32) {
+        if let Some(comparison) = self.comparison.as_mut() {
+            comparison.input_pointer(x, y, dx, dy, buttons);
+            return;
+        }
         match self.current {
             SceneKind::Controls => self.controls.input_pointer(x, y, dx, dy, buttons),
             SceneKind::TextLayout => {}
@@ -722,6 +751,10 @@ impl<U: elements::ImageUploader> Router<U> {
         // Reset damage for this frame
         self.last_damage.clear();
         b.clip_push(gfx::RectI::new(0, 0, viewport.w.ceil() as i32, viewport.h.ceil() as i32));
+        if let Some(comparison) = self.comparison.as_mut() {
+            comparison.draw(viewport, device_scale, &mut self.text, &mut self.uploader, b);
+            self.push_damage(rectf_to_recti(viewport));
+        } else {
         match self.current {
             SceneKind::Controls => {
                 self.controls.draw(viewport, device_scale, &mut self.text, &mut self.uploader, b);
@@ -891,6 +924,7 @@ impl<U: elements::ImageUploader> Router<U> {
                 self.push_damage(rectf_to_recti(viewport));
             }
         }
+        }
         b.clip_pop();
         self.counters.draws = b.drawlist().items.len();
         if self.overlay_visible {
@@ -994,6 +1028,175 @@ impl<U: elements::ImageUploader> Router<U> {
     pub fn camera_set_options(&mut self, blur: bool, sigma: f32, grayscale: bool, animate: bool) {
         self.camera.set_options(blur, sigma, grayscale, animate);
     }
+
+   pub fn prepare_comparison_scenario(&mut self, scenario: &oxide_benchmark_spec::ScenarioSpec, fixture: &[u8]) -> Result<(), alloc::string::String>
+   {
+      self.prepare_comparison_scenario_id(&scenario.id, fixture)
+   }
+
+   pub fn prepare_comparison_scenario_id(&mut self, scenario_id: &str, fixture: &[u8]) -> Result<(), alloc::string::String>
+   {
+      self.comparison = Some(comparative::ComparisonScene::prepare_id(scenario_id, fixture)?);
+      self.comparison_scale_shadow = None;
+      self.comparison_scale_effective_cardinality = None;
+      self.comparison_scale_primary_events = 0;
+      self.comparison_scale_shadow_events = 0;
+      self.overlay_visible = false;
+      self.force_full_damage_next_frame = true;
+      self.touch_surface.reset();
+      Ok(())
+   }
+
+   pub fn prepare_scaled_comparison_scenario(&mut self, scenario: &oxide_benchmark_spec::ScenarioSpec, fixture: &[u8], overlay: &oxide_benchmark_spec::MacOsComparatorScaleOverlay) -> Result<(), alloc::string::String>
+   {
+      oxide_benchmark_spec::validate_macos_comparator_scale_overlay(overlay, &scenario.id, &scenario.fixture).map_err(|error| alloc::format!("{error}"))?;
+      self.prepare_comparison_scenario(scenario, fixture)?;
+      if overlay.scale == oxide_benchmark_spec::MacOsComparatorScale::TwoX
+      {
+         self.comparison_scale_shadow = Some(comparative::ComparisonScene::prepare(scenario, fixture)?);
+      }
+      self.comparison_scale_effective_cardinality = Some(overlay.effective_cardinality);
+      Ok(())
+   }
+
+   pub fn set_comparison_resources(&mut self, thumbnail_atlas: gfx::ImageHandle, font_ids: [usize; 3]) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_resources(thumbnail_atlas, font_ids);
+      Ok(())
+   }
+
+   pub fn set_comparison_thumbnail_variant_resource(&mut self, accented_thumbnail_atlas: gfx::ImageHandle) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_thumbnail_variant_resource(accented_thumbnail_atlas)
+   }
+
+   pub fn set_comparison_fonts(&mut self, font_ids: [usize; 3]) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_fonts(font_ids);
+      Ok(())
+   }
+
+   pub fn set_comparison_inline_text_resources(&mut self, images: alloc::vec::Vec<gfx::ImageHandle>, atlas: oxide_benchmark_spec::InlineTextAtlas) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_inline_text_resources(images, atlas)
+   }
+
+   pub fn set_comparison_image_resources(&mut self, source: gfx::ImageHandle, source_sha256: &str, thumbnail: gfx::ImageHandle, thumbnail_sha256: &str) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_image_resources(source, source_sha256, thumbnail, thumbnail_sha256)
+   }
+
+   pub fn set_comparison_image_thumbnail_resource(&mut self, thumbnail: gfx::ImageHandle, thumbnail_sha256: &str) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_image_thumbnail_resource(thumbnail, thumbnail_sha256)
+   }
+
+   pub fn set_comparison_image_source_resource(&mut self, source: gfx::ImageHandle, source_sha256: &str) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.set_image_source_resource(source, source_sha256)
+   }
+
+   pub fn apply_comparison_event(&mut self, event: &oxide_benchmark_spec::TraceEvent) -> Result<(), alloc::string::String>
+   {
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      comparison.apply(event)?;
+      self.comparison_scale_primary_events = self.comparison_scale_primary_events.saturating_add(1);
+      if let Some(shadow) = self.comparison_scale_shadow.as_mut()
+      {
+         shadow.apply(event)?;
+         self.comparison_scale_shadow_events = self.comparison_scale_shadow_events.saturating_add(1);
+      }
+      Ok(())
+   }
+
+   pub fn comparison_host_click(&mut self, x: f32, y: f32) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_click(x, y))
+   }
+
+   pub fn comparison_host_pointer_down(&mut self, x: f32, y: f32) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_pointer_down(x, y))
+   }
+
+   pub fn comparison_host_pointer_move(&mut self, x: f32, y: f32, dx: f32, dy: f32) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_pointer_move(x, y, dx, dy))
+   }
+
+   pub fn comparison_host_pointer_up(&mut self) -> bool
+   {
+      self.comparison.as_mut().is_some_and(comparative::ComparisonScene::host_pointer_up)
+   }
+
+   pub fn comparison_host_pointer_delta(&mut self, dx: f32, dy: f32) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_pointer_delta(dx, dy))
+   }
+
+   pub fn comparison_host_wheel(&mut self, delta_y_millionths: i32) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_wheel(delta_y_millionths))
+   }
+
+   pub fn comparison_host_text(&mut self, value: &str) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_text(value))
+   }
+
+   pub fn comparison_host_key(&mut self, key_code: u16, shift: bool, value: &str) -> bool
+   {
+      self.comparison.as_mut().is_some_and(|comparison| comparison.host_key(key_code, shift, value))
+   }
+
+   pub fn comparison_host_chat_selection_text(&self) -> Option<&str>
+   {
+      self.comparison.as_ref().and_then(comparative::ComparisonScene::host_chat_selection_text)
+   }
+
+   pub fn comparison_scale_attestation(&self) -> Option<(u64, bool)>
+   {
+      let effective_cardinality = self.comparison_scale_effective_cardinality?;
+      let primary = self.comparison.as_ref()?;
+      let completed = if let Some(shadow) = self.comparison_scale_shadow.as_ref()
+      {
+         self.comparison_scale_primary_events == self.comparison_scale_shadow_events
+            && primary.checkpoint_json("scale-attestation").ok() == shadow.checkpoint_json("scale-attestation").ok()
+      }
+      else
+      {
+         self.comparison_scale_shadow_events == 0
+      };
+      Some((effective_cardinality, completed))
+   }
+
+   pub fn comparison_role_counts(&self) -> Option<alloc::vec::Vec<oxide_benchmark_spec::RoleCount>>
+   {
+      self.comparison.as_ref().map(comparative::ComparisonScene::role_counts)
+   }
+
+   pub fn comparison_checkpoint_json(&self, checkpoint_id: &str) -> Result<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>), alloc::string::String>
+   {
+      self.comparison.as_ref().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?.checkpoint_json(checkpoint_id)
+   }
+
+   #[cfg(feature = "comparison-geometry")]
+   pub fn capture_comparison_geometry(&mut self, viewport: gfx::RectF, device_scale: f32) -> Result<alloc::vec::Vec<ComparisonGeometryNode>, alloc::string::String>
+   {
+      self.text.begin_frame();
+      let mut builder = DrawListBuilder::new();
+      let comparison = self.comparison.as_mut().ok_or_else(|| alloc::string::String::from("comparison scenario is not prepared"))?;
+      let geometry = comparison.capture_geometry(viewport, device_scale, &mut self.text, &mut self.uploader, &mut builder);
+      let _ = self.text.finish_frame(&mut self.uploader, &mut builder);
+      Ok(geometry)
+   }
 
     pub fn camera_set_metrics(&mut self, metrics: CameraMetrics) {
         self.camera.set_metrics(metrics);

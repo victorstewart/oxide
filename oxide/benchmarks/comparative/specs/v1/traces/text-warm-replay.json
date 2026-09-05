@@ -1,0 +1,37 @@
+[
+  {
+    "at_us": 0,
+    "op": "mutate",
+    "state_id": "text:warm-replay:1",
+    "target": "text:replay-generation",
+    "value": 1
+  },
+  {
+    "at_us": 100000,
+    "op": "mutate",
+    "state_id": "text:warm-replay:2",
+    "target": "text:replay-generation",
+    "value": 2
+  },
+  {
+    "at_us": 200000,
+    "op": "mutate",
+    "state_id": "text:warm-replay:3",
+    "target": "text:replay-generation",
+    "value": 3
+  },
+  {
+    "at_us": 300000,
+    "op": "mutate",
+    "state_id": "text:warm-replay:4",
+    "target": "text:replay-generation",
+    "value": 4
+  },
+  {
+    "at_us": 400000,
+    "op": "mutate",
+    "state_id": "text:warm-replay:5",
+    "target": "text:replay-generation",
+    "value": 5
+  }
+]

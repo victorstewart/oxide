@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "apple-release-core",
+  "platform": "apple",
+  "tier": "release-core",
+  "correctness_install_pulls_seconds": 600,
+  "primary_dynamic_presentation_seconds": 6960,
+  "launch_or_startup_delivery_seconds": 1200,
+  "idle_endurance_seconds": 3600,
+  "energy_seconds": 2400,
+  "attribution_seconds": 2700,
+  "pre_reserve_seconds": 17460,
+  "reserve_seconds": 3492,
+  "hard_total_seconds": 20952,
+  "campaign_critical_wall_seconds": 20952,
+  "campaign_aggregate_seconds": 20952
+}

@@ -2,6 +2,11 @@ pub const BACKEND_CPU: u8 = 1 << 0;
 pub const BACKEND_METAL: u8 = 1 << 1;
 pub const BACKEND_WEBGPU: u8 = 1 << 2;
 
+pub use oxide_renderer_wgpu::parity::{
+   compare_rgba, BrowserNativeRgbaFixture, PixelTolerance, RgbaDifference, RgbaImage,
+   RgbaParityError,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParityScene
 {
@@ -25,22 +30,6 @@ pub enum ParityLayout
    Portrait,
    MultiDraw,
    ProjectionChanged,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PixelTolerance
-{
-   pub differing_pixels: u64,
-   pub max_channel_error: u8,
-   pub mean_squared_error: f64,
-}
-
-impl PixelTolerance
-{
-   pub const EXACT: Self =
-      Self { differing_pixels: 0, max_channel_error: 0, mean_squared_error: 0.0 };
-   pub const ANTIALIASED: Self =
-      Self { differing_pixels: 16, max_channel_error: 3, mean_squared_error: 0.02 };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

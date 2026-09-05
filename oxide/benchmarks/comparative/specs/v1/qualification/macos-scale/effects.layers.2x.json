@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "effects.layers",
+  "scale": "two_x",
+  "dimension": "operation_cardinality",
+  "transform": "isolated_operation_shadow",
+  "base_cardinality": 3,
+  "effective_cardinality": 6,
+  "fixture": {
+    "path": "fixtures/effects.layers.json",
+    "sha256": "97bb6c7772ab8b23f951ea800566737eb671ac444b584f4df67a65d87f8f8e19"
+  }
+}

@@ -1,0 +1,6343 @@
+{
+  "schema_version": 1,
+  "native": {
+    "schema_version": 1,
+    "coordinate_space": "logical-points",
+    "capture_profile": "macos-canonical-srgb8-3x-v1",
+    "canonical_scale": 3,
+    "source": "appkit-view-tree",
+    "position_tolerance_points": 0.0,
+    "size_tolerance_points": 0.0,
+    "root": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 390.0,
+      "height": 844.0
+    },
+    "nodes": [
+      {
+        "ordinal": 0,
+        "kind": "AppKitBenchMacOS.AppKitProductionRootView",
+        "role": "effects-scene",
+        "identifier": "effects.scene",
+        "bounds": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 390.0,
+          "height": 844.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 1,
+        "kind": "AppKitBenchMacOS.AppKitProductionExactTextField",
+        "role": "heading",
+        "identifier": "effects.heading",
+        "bounds": {
+          "x": 16.0,
+          "y": 8.0,
+          "width": 280.0,
+          "height": 32.0
+        },
+        "text_line_bounds": [
+          {
+            "x": 16.0,
+            "y": 8.0,
+            "width": 280.0,
+            "height": 32.0
+          }
+        ]
+      },
+      {
+        "ordinal": 2,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 3,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 4,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 5,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 6,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 7,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 8,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 9,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 10,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 11,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 12,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 13,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 14,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 15,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 16,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 17,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 18,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 19,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 20,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 21,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 22,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 23,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 24,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 25,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 26,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 27,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 28,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 29,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 30,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 31,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 32,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 33,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 34,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 35,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 36,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 37,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 38,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 39,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 40,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 41,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 42,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 43,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 44,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 45,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 46,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 47,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 48,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 49,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 50,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 51,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 52,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 53,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 54,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 55,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 56,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 57,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 58,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 59,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 60,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 61,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 62,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 63,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 64,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 65,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 66,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 67,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 68,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 69,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 70,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 71,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 72,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 73,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 74,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 75,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 76,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 77,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 78,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 79,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 80,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 81,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 82,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 83,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 84,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 85,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 86,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 87,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 88,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 89,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 90,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 91,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 92,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 93,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 94,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 95,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 96,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 97,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 98,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 99,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 100,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "shadow",
+        "identifier": "effects:shadow:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 101,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:032",
+        "bounds": {
+          "x": 162.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 102,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:032",
+        "bounds": {
+          "x": 162.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 103,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:033",
+        "bounds": {
+          "x": 236.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 104,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:033",
+        "bounds": {
+          "x": 236.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 105,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:034",
+        "bounds": {
+          "x": 310.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 106,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:034",
+        "bounds": {
+          "x": 310.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 107,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:035",
+        "bounds": {
+          "x": 384.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 108,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:035",
+        "bounds": {
+          "x": 384.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 109,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:036",
+        "bounds": {
+          "x": 458.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 110,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:036",
+        "bounds": {
+          "x": 458.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 111,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:037",
+        "bounds": {
+          "x": 532.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 112,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:037",
+        "bounds": {
+          "x": 532.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 113,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:038",
+        "bounds": {
+          "x": 606.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 114,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:038",
+        "bounds": {
+          "x": 606.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 115,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:039",
+        "bounds": {
+          "x": 680.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 116,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:039",
+        "bounds": {
+          "x": 680.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 117,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:040",
+        "bounds": {
+          "x": 14.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 118,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:040",
+        "bounds": {
+          "x": 14.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 119,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 120,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 121,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 122,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:042",
+        "bounds": {
+          "x": 162.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 123,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:042",
+        "bounds": {
+          "x": 162.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 124,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:043",
+        "bounds": {
+          "x": 236.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 125,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:043",
+        "bounds": {
+          "x": 236.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 126,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:044",
+        "bounds": {
+          "x": 310.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 127,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:044",
+        "bounds": {
+          "x": 310.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 128,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:045",
+        "bounds": {
+          "x": 384.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 129,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:045",
+        "bounds": {
+          "x": 384.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 130,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:046",
+        "bounds": {
+          "x": 458.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 131,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:046",
+        "bounds": {
+          "x": 458.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 132,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:047",
+        "bounds": {
+          "x": 532.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 133,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:047",
+        "bounds": {
+          "x": 532.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 134,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:048",
+        "bounds": {
+          "x": 606.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 135,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:048",
+        "bounds": {
+          "x": 606.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 136,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:049",
+        "bounds": {
+          "x": 680.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 137,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:049",
+        "bounds": {
+          "x": 680.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 138,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:050",
+        "bounds": {
+          "x": 14.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 139,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:050",
+        "bounds": {
+          "x": 14.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 140,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:051",
+        "bounds": {
+          "x": 88.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 141,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:051",
+        "bounds": {
+          "x": 88.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 142,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:052",
+        "bounds": {
+          "x": 162.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 143,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:052",
+        "bounds": {
+          "x": 162.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 144,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 145,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 146,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 147,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:054",
+        "bounds": {
+          "x": 310.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 148,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:054",
+        "bounds": {
+          "x": 310.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 149,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:055",
+        "bounds": {
+          "x": 384.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 150,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:055",
+        "bounds": {
+          "x": 384.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 151,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:056",
+        "bounds": {
+          "x": 458.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 152,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:056",
+        "bounds": {
+          "x": 458.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 153,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:057",
+        "bounds": {
+          "x": 532.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 154,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:057",
+        "bounds": {
+          "x": 532.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 155,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:058",
+        "bounds": {
+          "x": 606.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 156,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:058",
+        "bounds": {
+          "x": 606.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 157,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:059",
+        "bounds": {
+          "x": 680.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 158,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:059",
+        "bounds": {
+          "x": 680.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 159,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:060",
+        "bounds": {
+          "x": 14.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 160,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:060",
+        "bounds": {
+          "x": 14.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 161,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:061",
+        "bounds": {
+          "x": 88.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 162,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:061",
+        "bounds": {
+          "x": 88.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 163,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:062",
+        "bounds": {
+          "x": 162.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 164,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:062",
+        "bounds": {
+          "x": 162.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 165,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:063",
+        "bounds": {
+          "x": 236.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 166,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:063",
+        "bounds": {
+          "x": 236.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 167,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:064",
+        "bounds": {
+          "x": 310.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 168,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:064",
+        "bounds": {
+          "x": 310.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 169,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 170,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 171,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 172,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:066",
+        "bounds": {
+          "x": 458.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 173,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:066",
+        "bounds": {
+          "x": 458.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 174,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:067",
+        "bounds": {
+          "x": 532.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 175,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:067",
+        "bounds": {
+          "x": 532.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 176,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:068",
+        "bounds": {
+          "x": 606.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 177,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:068",
+        "bounds": {
+          "x": 606.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 178,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:069",
+        "bounds": {
+          "x": 680.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 179,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:069",
+        "bounds": {
+          "x": 680.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 180,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:070",
+        "bounds": {
+          "x": 14.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 181,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:070",
+        "bounds": {
+          "x": 14.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 182,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:071",
+        "bounds": {
+          "x": 88.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 183,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:071",
+        "bounds": {
+          "x": 88.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 184,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:072",
+        "bounds": {
+          "x": 162.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 185,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:072",
+        "bounds": {
+          "x": 162.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 186,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:073",
+        "bounds": {
+          "x": 236.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 187,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:073",
+        "bounds": {
+          "x": 236.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 188,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:074",
+        "bounds": {
+          "x": 310.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 189,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:074",
+        "bounds": {
+          "x": 310.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 190,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:075",
+        "bounds": {
+          "x": 384.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 191,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:075",
+        "bounds": {
+          "x": 384.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 192,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:076",
+        "bounds": {
+          "x": 458.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 193,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:076",
+        "bounds": {
+          "x": 458.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 194,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 195,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 196,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 197,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:078",
+        "bounds": {
+          "x": 606.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 198,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:078",
+        "bounds": {
+          "x": 606.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 199,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:079",
+        "bounds": {
+          "x": 680.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 200,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:079",
+        "bounds": {
+          "x": 680.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 201,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:080",
+        "bounds": {
+          "x": 14.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 202,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:080",
+        "bounds": {
+          "x": 14.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 203,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:081",
+        "bounds": {
+          "x": 88.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 204,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:081",
+        "bounds": {
+          "x": 88.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 205,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:082",
+        "bounds": {
+          "x": 162.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 206,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:082",
+        "bounds": {
+          "x": 162.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 207,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:083",
+        "bounds": {
+          "x": 236.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 208,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:083",
+        "bounds": {
+          "x": 236.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 209,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:084",
+        "bounds": {
+          "x": 310.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 210,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:084",
+        "bounds": {
+          "x": 310.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 211,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:085",
+        "bounds": {
+          "x": 384.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 212,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:085",
+        "bounds": {
+          "x": 384.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 213,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:086",
+        "bounds": {
+          "x": 458.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 214,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:086",
+        "bounds": {
+          "x": 458.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 215,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:087",
+        "bounds": {
+          "x": 532.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 216,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:087",
+        "bounds": {
+          "x": 532.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 217,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:088",
+        "bounds": {
+          "x": 606.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 218,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:088",
+        "bounds": {
+          "x": 606.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 219,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 220,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 221,
+        "kind": "NSVisualEffectView",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 222,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:090",
+        "bounds": {
+          "x": 14.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 223,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:090",
+        "bounds": {
+          "x": 14.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 224,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:091",
+        "bounds": {
+          "x": 88.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 225,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:091",
+        "bounds": {
+          "x": 88.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 226,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:092",
+        "bounds": {
+          "x": 162.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 227,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:092",
+        "bounds": {
+          "x": 162.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 228,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:093",
+        "bounds": {
+          "x": 236.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 229,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:093",
+        "bounds": {
+          "x": 236.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 230,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:094",
+        "bounds": {
+          "x": 310.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 231,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:094",
+        "bounds": {
+          "x": 310.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 232,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:095",
+        "bounds": {
+          "x": 384.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 233,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:095",
+        "bounds": {
+          "x": 384.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 234,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:096",
+        "bounds": {
+          "x": 458.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 235,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:096",
+        "bounds": {
+          "x": 458.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 236,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:097",
+        "bounds": {
+          "x": 532.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 237,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:097",
+        "bounds": {
+          "x": 532.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 238,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:098",
+        "bounds": {
+          "x": 606.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 239,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:098",
+        "bounds": {
+          "x": 606.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 240,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "rounded-card",
+        "identifier": "effects:card:099",
+        "bounds": {
+          "x": 680.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 241,
+        "kind": "AppKitBenchMacOS.AppKitEffectsCardView",
+        "role": "clip-region",
+        "identifier": "effects:clip:099",
+        "bounds": {
+          "x": 680.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      }
+    ]
+  },
+  "oxide": {
+    "schema_version": 1,
+    "coordinate_space": "logical-points",
+    "capture_profile": "macos-canonical-srgb8-3x-v1",
+    "canonical_scale": 3,
+    "source": "oxide-semantic-tree",
+    "position_tolerance_points": 0.0,
+    "size_tolerance_points": 0.0,
+    "root": {
+      "x": 0.0,
+      "y": 0.0,
+      "width": 390.0,
+      "height": 844.0
+    },
+    "nodes": [
+      {
+        "ordinal": 0,
+        "kind": "element",
+        "role": "effects-scene",
+        "identifier": "effects.scene",
+        "bounds": {
+          "x": 0.0,
+          "y": 0.0,
+          "width": 390.0,
+          "height": 844.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 1,
+        "kind": "text",
+        "role": "heading",
+        "identifier": "effects.heading",
+        "bounds": {
+          "x": 16.0,
+          "y": 8.0,
+          "width": 280.0,
+          "height": 32.0
+        },
+        "text_line_bounds": [
+          {
+            "x": 16.0,
+            "y": 8.0,
+            "width": 280.0,
+            "height": 32.0
+          }
+        ]
+      },
+      {
+        "ordinal": 2,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 3,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 4,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:000",
+        "bounds": {
+          "x": 14.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 5,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 6,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 7,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:001",
+        "bounds": {
+          "x": 88.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 8,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 9,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 10,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:002",
+        "bounds": {
+          "x": 162.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 11,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 12,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 13,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:003",
+        "bounds": {
+          "x": 236.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 14,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 15,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 16,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:004",
+        "bounds": {
+          "x": 310.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 17,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 18,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 19,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 20,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:005",
+        "bounds": {
+          "x": 384.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 21,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 22,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 23,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:006",
+        "bounds": {
+          "x": 458.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 24,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 25,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 26,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:007",
+        "bounds": {
+          "x": 532.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 27,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 28,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 29,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:008",
+        "bounds": {
+          "x": 606.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 30,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 31,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 32,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:009",
+        "bounds": {
+          "x": 680.0,
+          "y": 68.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 33,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 34,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 35,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:010",
+        "bounds": {
+          "x": 14.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 36,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 37,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 38,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:011",
+        "bounds": {
+          "x": 88.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 39,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 40,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 41,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:012",
+        "bounds": {
+          "x": 162.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 42,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 43,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 44,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:013",
+        "bounds": {
+          "x": 236.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 45,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 46,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 47,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:014",
+        "bounds": {
+          "x": 310.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 48,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 49,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 50,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:015",
+        "bounds": {
+          "x": 384.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 51,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 52,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 53,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:016",
+        "bounds": {
+          "x": 458.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 54,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 55,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 56,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 57,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:017",
+        "bounds": {
+          "x": 532.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 58,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 59,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 60,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:018",
+        "bounds": {
+          "x": 606.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 61,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 62,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 63,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:019",
+        "bounds": {
+          "x": 680.0,
+          "y": 142.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 64,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 65,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 66,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:020",
+        "bounds": {
+          "x": 14.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 67,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 68,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 69,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:021",
+        "bounds": {
+          "x": 88.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 70,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 71,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 72,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:022",
+        "bounds": {
+          "x": 162.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 73,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 74,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 75,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:023",
+        "bounds": {
+          "x": 236.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 76,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 77,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 78,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:024",
+        "bounds": {
+          "x": 310.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 79,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 80,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 81,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:025",
+        "bounds": {
+          "x": 384.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 82,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 83,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 84,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:026",
+        "bounds": {
+          "x": 458.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 85,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 86,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 87,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:027",
+        "bounds": {
+          "x": 532.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 88,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 89,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 90,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:028",
+        "bounds": {
+          "x": 606.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 91,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 92,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 93,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 94,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:029",
+        "bounds": {
+          "x": 680.0,
+          "y": 216.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 95,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 96,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 97,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:030",
+        "bounds": {
+          "x": 14.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 98,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 99,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 100,
+        "kind": "element",
+        "role": "shadow",
+        "identifier": "effects:shadow:031",
+        "bounds": {
+          "x": 88.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 101,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:032",
+        "bounds": {
+          "x": 162.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 102,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:032",
+        "bounds": {
+          "x": 162.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 103,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:033",
+        "bounds": {
+          "x": 236.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 104,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:033",
+        "bounds": {
+          "x": 236.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 105,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:034",
+        "bounds": {
+          "x": 310.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 106,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:034",
+        "bounds": {
+          "x": 310.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 107,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:035",
+        "bounds": {
+          "x": 384.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 108,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:035",
+        "bounds": {
+          "x": 384.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 109,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:036",
+        "bounds": {
+          "x": 458.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 110,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:036",
+        "bounds": {
+          "x": 458.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 111,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:037",
+        "bounds": {
+          "x": 532.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 112,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:037",
+        "bounds": {
+          "x": 532.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 113,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:038",
+        "bounds": {
+          "x": 606.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 114,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:038",
+        "bounds": {
+          "x": 606.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 115,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:039",
+        "bounds": {
+          "x": 680.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 116,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:039",
+        "bounds": {
+          "x": 680.0,
+          "y": 290.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 117,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:040",
+        "bounds": {
+          "x": 14.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 118,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:040",
+        "bounds": {
+          "x": 14.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 119,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 120,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 121,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:041",
+        "bounds": {
+          "x": 88.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 122,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:042",
+        "bounds": {
+          "x": 162.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 123,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:042",
+        "bounds": {
+          "x": 162.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 124,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:043",
+        "bounds": {
+          "x": 236.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 125,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:043",
+        "bounds": {
+          "x": 236.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 126,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:044",
+        "bounds": {
+          "x": 310.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 127,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:044",
+        "bounds": {
+          "x": 310.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 128,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:045",
+        "bounds": {
+          "x": 384.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 129,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:045",
+        "bounds": {
+          "x": 384.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 130,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:046",
+        "bounds": {
+          "x": 458.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 131,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:046",
+        "bounds": {
+          "x": 458.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 132,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:047",
+        "bounds": {
+          "x": 532.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 133,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:047",
+        "bounds": {
+          "x": 532.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 134,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:048",
+        "bounds": {
+          "x": 606.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 135,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:048",
+        "bounds": {
+          "x": 606.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 136,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:049",
+        "bounds": {
+          "x": 680.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 137,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:049",
+        "bounds": {
+          "x": 680.0,
+          "y": 364.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 138,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:050",
+        "bounds": {
+          "x": 14.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 139,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:050",
+        "bounds": {
+          "x": 14.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 140,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:051",
+        "bounds": {
+          "x": 88.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 141,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:051",
+        "bounds": {
+          "x": 88.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 142,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:052",
+        "bounds": {
+          "x": 162.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 143,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:052",
+        "bounds": {
+          "x": 162.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 144,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 145,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 146,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:053",
+        "bounds": {
+          "x": 236.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 147,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:054",
+        "bounds": {
+          "x": 310.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 148,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:054",
+        "bounds": {
+          "x": 310.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 149,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:055",
+        "bounds": {
+          "x": 384.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 150,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:055",
+        "bounds": {
+          "x": 384.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 151,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:056",
+        "bounds": {
+          "x": 458.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 152,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:056",
+        "bounds": {
+          "x": 458.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 153,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:057",
+        "bounds": {
+          "x": 532.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 154,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:057",
+        "bounds": {
+          "x": 532.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 155,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:058",
+        "bounds": {
+          "x": 606.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 156,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:058",
+        "bounds": {
+          "x": 606.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 157,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:059",
+        "bounds": {
+          "x": 680.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 158,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:059",
+        "bounds": {
+          "x": 680.0,
+          "y": 438.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 159,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:060",
+        "bounds": {
+          "x": 14.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 160,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:060",
+        "bounds": {
+          "x": 14.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 161,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:061",
+        "bounds": {
+          "x": 88.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 162,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:061",
+        "bounds": {
+          "x": 88.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 163,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:062",
+        "bounds": {
+          "x": 162.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 164,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:062",
+        "bounds": {
+          "x": 162.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 165,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:063",
+        "bounds": {
+          "x": 236.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 166,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:063",
+        "bounds": {
+          "x": 236.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 167,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:064",
+        "bounds": {
+          "x": 310.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 168,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:064",
+        "bounds": {
+          "x": 310.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 169,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 170,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 171,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:065",
+        "bounds": {
+          "x": 384.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 172,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:066",
+        "bounds": {
+          "x": 458.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 173,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:066",
+        "bounds": {
+          "x": 458.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 174,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:067",
+        "bounds": {
+          "x": 532.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 175,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:067",
+        "bounds": {
+          "x": 532.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 176,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:068",
+        "bounds": {
+          "x": 606.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 177,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:068",
+        "bounds": {
+          "x": 606.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 178,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:069",
+        "bounds": {
+          "x": 680.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 179,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:069",
+        "bounds": {
+          "x": 680.0,
+          "y": 512.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 180,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:070",
+        "bounds": {
+          "x": 14.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 181,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:070",
+        "bounds": {
+          "x": 14.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 182,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:071",
+        "bounds": {
+          "x": 88.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 183,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:071",
+        "bounds": {
+          "x": 88.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 184,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:072",
+        "bounds": {
+          "x": 162.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 185,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:072",
+        "bounds": {
+          "x": 162.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 186,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:073",
+        "bounds": {
+          "x": 236.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 187,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:073",
+        "bounds": {
+          "x": 236.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 188,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:074",
+        "bounds": {
+          "x": 310.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 189,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:074",
+        "bounds": {
+          "x": 310.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 190,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:075",
+        "bounds": {
+          "x": 384.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 191,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:075",
+        "bounds": {
+          "x": 384.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 192,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:076",
+        "bounds": {
+          "x": 458.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 193,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:076",
+        "bounds": {
+          "x": 458.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 194,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 195,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 196,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:077",
+        "bounds": {
+          "x": 532.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 197,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:078",
+        "bounds": {
+          "x": 606.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 198,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:078",
+        "bounds": {
+          "x": 606.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 199,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:079",
+        "bounds": {
+          "x": 680.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 200,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:079",
+        "bounds": {
+          "x": 680.0,
+          "y": 586.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 201,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:080",
+        "bounds": {
+          "x": 14.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 202,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:080",
+        "bounds": {
+          "x": 14.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 203,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:081",
+        "bounds": {
+          "x": 88.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 204,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:081",
+        "bounds": {
+          "x": 88.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 205,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:082",
+        "bounds": {
+          "x": 162.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 206,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:082",
+        "bounds": {
+          "x": 162.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 207,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:083",
+        "bounds": {
+          "x": 236.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 208,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:083",
+        "bounds": {
+          "x": 236.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 209,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:084",
+        "bounds": {
+          "x": 310.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 210,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:084",
+        "bounds": {
+          "x": 310.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 211,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:085",
+        "bounds": {
+          "x": 384.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 212,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:085",
+        "bounds": {
+          "x": 384.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 213,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:086",
+        "bounds": {
+          "x": 458.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 214,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:086",
+        "bounds": {
+          "x": 458.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 215,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:087",
+        "bounds": {
+          "x": 532.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 216,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:087",
+        "bounds": {
+          "x": 532.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 217,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:088",
+        "bounds": {
+          "x": 606.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 218,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:088",
+        "bounds": {
+          "x": 606.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 219,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 220,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 221,
+        "kind": "element",
+        "role": "backdrop-region",
+        "identifier": "effects:backdrop:089",
+        "bounds": {
+          "x": 680.0,
+          "y": 660.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 222,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:090",
+        "bounds": {
+          "x": 14.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 223,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:090",
+        "bounds": {
+          "x": 14.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 224,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:091",
+        "bounds": {
+          "x": 88.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 225,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:091",
+        "bounds": {
+          "x": 88.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 226,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:092",
+        "bounds": {
+          "x": 162.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 227,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:092",
+        "bounds": {
+          "x": 162.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 228,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:093",
+        "bounds": {
+          "x": 236.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 229,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:093",
+        "bounds": {
+          "x": 236.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 230,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:094",
+        "bounds": {
+          "x": 310.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 231,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:094",
+        "bounds": {
+          "x": 310.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 232,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:095",
+        "bounds": {
+          "x": 384.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 233,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:095",
+        "bounds": {
+          "x": 384.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 234,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:096",
+        "bounds": {
+          "x": 458.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 235,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:096",
+        "bounds": {
+          "x": 458.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 236,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:097",
+        "bounds": {
+          "x": 532.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 237,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:097",
+        "bounds": {
+          "x": 532.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 238,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:098",
+        "bounds": {
+          "x": 606.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 239,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:098",
+        "bounds": {
+          "x": 606.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 240,
+        "kind": "element",
+        "role": "rounded-card",
+        "identifier": "effects:card:099",
+        "bounds": {
+          "x": 680.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      },
+      {
+        "ordinal": 241,
+        "kind": "element",
+        "role": "clip-region",
+        "identifier": "effects:clip:099",
+        "bounds": {
+          "x": 680.0,
+          "y": 734.0,
+          "width": 68.0,
+          "height": 68.0
+        },
+        "text_line_bounds": []
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "endurance.churn",
+  "visible_node_count": 300,
+  "categories": {
+    "label": 176,
+    "icon_image": 64,
+    "rounded_card": 32,
+    "control": 24,
+    "backdrop_region": 4
+  },
+  "clipped_rounded_cards": 32,
+  "shadow_count": 32,
+  "backdrop_blur_count": 4,
+  "heavy_screen_cycle_count": 100,
+  "tab_switch_count": 500,
+  "animation_frame_count": 600,
+  "tab_count": 2,
+  "initial_tab_index": 0,
+  "heavy_screen_target_id": "endurance:heavy-screen-visible",
+  "active_tab_target_id": "endurance:active-tab",
+  "animation_frame_target_id": "endurance:animation-frame"
+}

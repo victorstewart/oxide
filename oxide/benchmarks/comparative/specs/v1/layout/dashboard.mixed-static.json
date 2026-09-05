@@ -1,0 +1,63 @@
+{
+  "backdrop_regions": [
+    [
+      16,
+      64,
+      358,
+      96
+    ],
+    [
+      16,
+      268,
+      358,
+      96
+    ],
+    [
+      16,
+      472,
+      358,
+      96
+    ],
+    [
+      16,
+      676,
+      358,
+      96
+    ]
+  ],
+  "coordinate_space": "logical-points",
+  "grid": {
+    "card_height": 38,
+    "columns": 2,
+    "gap": 12,
+    "inset": 16,
+    "row_stride": 46,
+    "top": 48
+  },
+  "root": {
+    "height": 844,
+    "width": 390,
+    "x": 0,
+    "y": 0
+  },
+  "schema_version": 1,
+  "text_comparison": {
+    "baseline_tolerance": 0.5,
+    "ink_bounds_tolerance": 0.5,
+    "pixel_mask": true
+  },
+  "text_masks": [
+    [
+      16,
+      18,
+      250,
+      22
+    ],
+    [
+      58,
+      48,
+      316,
+      728
+    ]
+  ]
+}

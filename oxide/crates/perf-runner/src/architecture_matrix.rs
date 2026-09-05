@@ -60,6 +60,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
    push_if_allowed(cases, "cpu.architecture.text.new_labels_200", || text_new_labels_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.script_fallback_matrix", || text_script_matrix_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.scale_sdf_matrix", || text_scale_sdf_matrix_case(smoke));
+   push_if_allowed(cases, "cpu.architecture.text.variable_axes_3x", || text_variable_axes_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.atlas_eviction", || text_atlas_eviction_case(smoke));
    push_if_allowed(cases, "cpu.architecture.text.paged_atlas_locality", || {
       text_paged_atlas_locality_case(smoke)
@@ -106,7 +107,7 @@ pub(super) fn push_architecture_matrix_cases(cases: &mut Vec<PerfCaseResult>, sm
       }
    }
 
-   for family in ["rrect", "image", "nine_slice", "spinner", "backdrop", "visual_effect"]
+   for family in ["hard_rect", "rrect", "image", "nine_slice", "spinner", "backdrop", "visual_effect"]
    {
       for count in [1_usize, 64, 1_024, 10_000]
       {
@@ -2747,7 +2748,15 @@ fn metal_text_glyph_instances_case(id: &str, smoke: bool) -> Result<PerfCaseResu
       builder.drawlist().items.len(),
       proof.rasterizations,
    );
-   assert!(has_bitmap && has_sdf, "glyph-instance case requires bitmap and SDF text");
+   assert!(has_bitmap, "glyph-instance case requires bitmap text");
+   if cfg!(target_vendor = "apple")
+   {
+      assert!(!has_sdf, "Apple glyph-instance case must use the native bitmap backend");
+   }
+   else
+   {
+      assert!(has_sdf, "non-Apple glyph-instance case requires SDF text");
+   }
 
    let warmups = if smoke { 1_usize } else { 3 };
    let frames = if smoke { 3_usize } else {
@@ -3084,6 +3093,190 @@ fn text_scale_sdf_matrix_case(smoke: bool) -> PerfCaseResult
    case
 }
 
+#[derive(Default)]
+struct VariableAxesTextStats
+{
+   checksum: u64,
+   cold_cache_hits: u64,
+   cold_cache_misses: u64,
+   cold_rasterizations: u64,
+   cold_dirty_pixels: u64,
+   cold_vertices: u64,
+   warm_cache_hits: u64,
+   warm_cache_misses: u64,
+   warm_rasterizations: u64,
+   warm_dirty_pixels: u64,
+   warm_vertices: u64,
+   resident_glyphs: u64,
+}
+
+fn comparison_variable_font_db() -> (text::FontDb, usize, usize)
+{
+   let latin = text::Font::from_bytes_with_variations(
+      COMPARISON_LATIN_VARIABLE_FONT.to_vec(),
+      &[
+         text::FontVariation {tag: *b"wght", value: 400.0},
+         text::FontVariation {tag: *b"wdth", value: 100.0},
+      ],
+   );
+   let cjk = text::Font::from_bytes_with_variations(
+      COMPARISON_CJK_VARIABLE_FONT.to_vec(),
+      &[text::FontVariation {tag: *b"wght", value: 400.0}],
+   );
+   let mut fonts = text::FontDb::default();
+   let latin_id = fonts.add_font(latin);
+   let cjk_id = fonts.add_font(cjk);
+   (fonts, latin_id, cjk_id)
+}
+
+fn run_variable_axes_text(fonts: &text::FontDb, latin_id: usize, cjk_id: usize, warm_replay: bool) -> VariableAxesTextStats
+{
+   let mut shaper = text::TextShaper::default();
+   let latin_shape = shaper.shape(
+      fonts.font(latin_id).expect("pinned Latin font"),
+      latin_id,
+      "Variable width",
+      15.0,
+   ).expect("shape pinned Latin text").to_owned_shape();
+   let cjk_shape = shaper.shape(
+      fonts.font(cjk_id).expect("pinned CJK font"),
+      cjk_id,
+      "静态视觉对比",
+      15.0,
+   ).expect("shape pinned CJK text").to_owned_shape();
+   let mut raster = text::RasterCtx::default();
+   let mut atlas = text::Atlas::new(512, 512);
+   atlas.set_counters_enabled(true);
+   let mut vertices = Vec::with_capacity(128);
+   let mut indices = Vec::with_capacity(192);
+   let color = api::Color::rgba(0.1, 0.1, 0.1, 1.0);
+   let handle = api::ImageHandle(1);
+
+   let cold_latin = latin_shape.bake_counted_into_with(
+      fonts.font(latin_id).expect("pinned Latin font"),
+      &mut raster,
+      &mut atlas,
+      &mut vertices,
+      &mut indices,
+      color,
+      handle,
+      0.0,
+      30.0,
+      3.0,
+   );
+   let cold_cjk = cjk_shape.bake_counted_into_with(
+      fonts.font(cjk_id).expect("pinned CJK font"),
+      &mut raster,
+      &mut atlas,
+      &mut vertices,
+      &mut indices,
+      color,
+      handle,
+      0.0,
+      60.0,
+      3.0,
+   );
+   let cold_cache_hits = atlas.glyph_cache_hits();
+   let cold_cache_misses = atlas.glyph_cache_misses();
+   let cold_rasterizations = atlas.rasterization_count();
+   let cold_dirty_pixels = atlas.dirty_rect()
+      .map_or(0, |rect| u64::from(rect.w).saturating_mul(u64::from(rect.h)));
+   let cold_vertices = vertices.len() as u64;
+   let mut stats = VariableAxesTextStats {
+      checksum: u64::from(cold_latin.vb.len)
+         .wrapping_add(u64::from(cold_cjk.vb.len))
+         .wrapping_add(vertices.len() as u64)
+         .wrapping_add(indices.len() as u64),
+      cold_cache_hits,
+      cold_cache_misses,
+      cold_rasterizations,
+      cold_dirty_pixels,
+      cold_vertices,
+      resident_glyphs: atlas.glyph_count() as u64,
+      ..VariableAxesTextStats::default()
+   };
+   if !warm_replay
+   {
+      return stats;
+   }
+
+   atlas.clear_dirty();
+   vertices.clear();
+   indices.clear();
+   let warm_latin = latin_shape.bake_counted_into_with(
+      fonts.font(latin_id).expect("pinned Latin font"),
+      &mut raster,
+      &mut atlas,
+      &mut vertices,
+      &mut indices,
+      color,
+      handle,
+      0.0,
+      30.0,
+      3.0,
+   );
+   let warm_cjk = cjk_shape.bake_counted_into_with(
+      fonts.font(cjk_id).expect("pinned CJK font"),
+      &mut raster,
+      &mut atlas,
+      &mut vertices,
+      &mut indices,
+      color,
+      handle,
+      0.0,
+      60.0,
+      3.0,
+   );
+   stats.warm_cache_hits = atlas.glyph_cache_hits().saturating_sub(cold_cache_hits);
+   stats.warm_cache_misses = atlas.glyph_cache_misses().saturating_sub(cold_cache_misses);
+   stats.warm_rasterizations = atlas.rasterization_count().saturating_sub(cold_rasterizations);
+   stats.warm_dirty_pixels = atlas.dirty_rect()
+      .map_or(0, |rect| u64::from(rect.w).saturating_mul(u64::from(rect.h)));
+   stats.warm_vertices = vertices.len() as u64;
+   stats.checksum = stats.checksum
+      .wrapping_add(u64::from(warm_latin.vb.len))
+      .wrapping_add(u64::from(warm_cjk.vb.len))
+      .wrapping_add(vertices.len() as u64)
+      .wrapping_add(indices.len() as u64)
+      .wrapping_add(stats.warm_cache_hits);
+   stats
+}
+
+fn text_variable_axes_case(smoke: bool) -> PerfCaseResult
+{
+   let (proof_fonts, proof_latin, proof_cjk) = comparison_variable_font_db();
+   let proof = run_variable_axes_text(&proof_fonts, proof_latin, proof_cjk, true);
+   let (fonts, latin_id, cjk_id) = comparison_variable_font_db();
+   let mut case = measured_architecture_case(
+      "cpu.architecture.text.variable_axes_3x",
+      smoke,
+      "Cold shaping and 3x rasterization for manifest-equivalent Latin normal-width and CJK regular-weight variable instances; explanatory counters prove an immediate unmeasured replay is atlas-resident.",
+      move || run_variable_axes_text(&fonts, latin_id, cjk_id, false).checksum,
+   );
+   case.cache_state = String::from("cold");
+   case.metrics.insert(String::from("device_scale"), 3.0);
+   case.metrics.insert(String::from("logical_font_px"), 15.0);
+   case.metrics.insert(String::from("physical_raster_px"), 45.0);
+   case.metrics.insert(String::from("cold_shape_runs"), 2.0);
+   case.metrics.insert(String::from("latin_variation_axes"), 2.0);
+   case.metrics.insert(String::from("cjk_variation_axes"), 1.0);
+   case.metrics.insert(String::from("latin_weight"), 400.0);
+   case.metrics.insert(String::from("latin_width"), 100.0);
+   case.metrics.insert(String::from("cjk_weight"), 400.0);
+   case.metrics.insert(String::from("cold_glyph_cache_hits"), proof.cold_cache_hits as f64);
+   case.metrics.insert(String::from("cold_glyph_cache_misses"), proof.cold_cache_misses as f64);
+   case.metrics.insert(String::from("cold_rasterizations"), proof.cold_rasterizations as f64);
+   case.metrics.insert(String::from("cold_dirty_pixels"), proof.cold_dirty_pixels as f64);
+   case.metrics.insert(String::from("cold_vertices"), proof.cold_vertices as f64);
+   case.metrics.insert(String::from("warm_glyph_cache_hits"), proof.warm_cache_hits as f64);
+   case.metrics.insert(String::from("warm_glyph_cache_misses"), proof.warm_cache_misses as f64);
+   case.metrics.insert(String::from("warm_rasterizations"), proof.warm_rasterizations as f64);
+   case.metrics.insert(String::from("warm_dirty_pixels"), proof.warm_dirty_pixels as f64);
+   case.metrics.insert(String::from("warm_vertices"), proof.warm_vertices as f64);
+   case.metrics.insert(String::from("resident_glyphs"), proof.resident_glyphs as f64);
+   case
+}
+
 fn text_atlas_eviction_case(smoke: bool) -> PerfCaseResult
 {
    let mut case = measured_architecture_case(
@@ -3183,7 +3376,7 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
    for ch in 'A'..='Z'
    {
       let label = ch.to_string();
-      encode_matrix_label(&label, labels.len(), 1.0, 16.0, &mut text, &mut uploader, &mut builder);
+      encode_matrix_label(&label, labels.len(), 1.0, 18.0, &mut text, &mut uploader, &mut builder);
       labels.push(label);
    }
    let _ = text.finish_frame(&mut uploader, &mut builder);
@@ -3200,10 +3393,10 @@ fn run_paged_atlas_locality() -> PagedAtlasLocalityStats
 
    builder.clear();
    text.begin_frame();
-   encode_matrix_label(&pinned_label, 0, 1.0, 16.0, &mut text, &mut uploader, &mut builder);
-   'pressure: for label in &labels
+   encode_matrix_label(&pinned_label, 0, 1.0, 18.0, &mut text, &mut uploader, &mut builder);
+   'pressure: for label in ["@", "%", "&", "W", "M", "Q"]
    {
-      encode_matrix_label(label, 0, 2.0, 16.0, &mut text, &mut uploader, &mut builder);
+      encode_matrix_label(label, 0, 1.0, 15.0, &mut text, &mut uploader, &mut builder);
       if text.atlas.eviction_count() > 0
       {
          break 'pressure;
@@ -4420,6 +4613,11 @@ fn analytic_instance_drawlist(
       let rect = api::RectF::new(x, y, 16.0, 16.0);
       match family
       {
+         "hard_rect" => builder.rrect(
+            rect,
+            [0.0; 4],
+            api::Color::rgba(0.2, 0.55, 0.95, 0.9),
+         ),
          "rrect" => builder.rrect(
             rect,
             [3.0; 4],
@@ -6420,5 +6618,16 @@ mod tests
       {
          assert!(source.contains(required), "missing architecture proof scaling point {required}");
       }
+   }
+
+   #[test]
+   fn hard_rectangle_matrix_preserves_zero_radius_payload()
+   {
+      let list = analytic_instance_drawlist("hard_rect", 64, api::ImageHandle(7));
+      assert_eq!(list.items.len(), 64);
+      assert!(list.items.iter().all(|command| matches!(
+         command,
+         api::DrawCmd::RRect { radii, .. } if *radii == [0.0; 4]
+      )));
    }
 }

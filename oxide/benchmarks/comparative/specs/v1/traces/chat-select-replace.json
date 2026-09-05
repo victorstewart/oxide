@@ -1,0 +1,16 @@
+[
+  {
+    "at_us": 0,
+    "op": "focus",
+    "target": "chat:append:16",
+    "value": "0:6",
+    "state_id": "chat:selection-ready"
+  },
+  {
+    "at_us": 500000,
+    "op": "commit-text",
+    "target": "chat:append:16",
+    "value": "Oxide",
+    "state_id": "chat:selection-replaced"
+  }
+]

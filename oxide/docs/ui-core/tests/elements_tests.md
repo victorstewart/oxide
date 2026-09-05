@@ -6,7 +6,7 @@ These integration tests freeze element state and emitted renderer commands. C60 
 
 ## Relation to the rest of the code
 
-The tests construct public UI elements, encode into `DrawListBuilder`, and inspect renderer-api commands. Text and interaction cases also exercise the production UI helpers used by authoring surfaces.
+The tests construct public UI elements, encode into `DrawListBuilder`, and inspect renderer-api commands. Text and interaction cases also exercise the production UI helpers used by authoring surfaces, including deterministic cached width measurement for comparison image-run placement.
 
 ## Entry points list
 
@@ -46,4 +46,6 @@ See `image_region_draw` for extracting destination/source/alpha from the encoded
 
 ## Changelog
 
+- 2026-07-18: covered stable cached label-width measurement and missing-font rejection.
+- 2026-07-18: asserted that existing image-backed elements continue to emit zero-radius image commands.
 - 2026-07-15: added atlas-offset cover-crop coverage for `ImageRegionView`.

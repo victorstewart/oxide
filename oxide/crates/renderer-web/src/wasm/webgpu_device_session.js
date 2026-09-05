@@ -50,11 +50,22 @@ function shutdown(state)
    }
    state.closed = true;
    state.sessionShutdownCount += 1;
+   state.adapterPromises.clear();
    if (state.currentGeneration) {
       destroyGeneration(state, state.currentGeneration);
       state.currentGeneration = null;
    }
    return snapshot(state);
+}
+
+function defineSessionGlobal(symbol, value)
+{
+   Object.defineProperty(globalThis, symbol, {
+      value,
+      configurable: false,
+      enumerable: false,
+      writable: false,
+   });
 }
 
 function createState()
@@ -71,28 +82,14 @@ function createState()
       sessionShutdownCount: 0,
       closed: false,
       gpuPrototype: null,
-      originalRequestAdapter: null,
       patchedRequestAdapter: null,
+      adapterPromises: new Map(),
+      adapterDescriptorKeys: new WeakMap(),
       adapterPatches: new WeakMap(),
    };
-   Object.defineProperty(globalThis, STATE_SYMBOL, {
-      value: state,
-      configurable: false,
-      enumerable: false,
-      writable: false,
-   });
-   Object.defineProperty(globalThis, SNAPSHOT_SYMBOL, {
-      value: () => snapshot(state),
-      configurable: false,
-      enumerable: false,
-      writable: false,
-   });
-   Object.defineProperty(globalThis, SHUTDOWN_SYMBOL, {
-      value: () => shutdown(state),
-      configurable: false,
-      enumerable: false,
-      writable: false,
-   });
+   defineSessionGlobal(STATE_SYMBOL, state);
+   defineSessionGlobal(SNAPSHOT_SYMBOL, () => snapshot(state));
+   defineSessionGlobal(SHUTDOWN_SYMBOL, () => shutdown(state));
    if (typeof globalThis.addEventListener === "function") {
       globalThis.addEventListener("pagehide", (event) => {
          if (!event.persisted) {
@@ -109,6 +106,8 @@ function sharedState()
    if (state.protocolVersion !== PROTOCOL_VERSION) {
       throw new Error("incompatible Oxide WebGPU device-session protocol");
    }
+   state.adapterPromises ??= new Map();
+   state.adapterDescriptorKeys ??= new WeakMap();
    return state;
 }
 
@@ -122,10 +121,29 @@ function descriptorKey(descriptor)
    return JSON.stringify([requiredFeatures, requiredLimits, queueLabel]);
 }
 
+function adapterDescriptorKey(descriptor)
+{
+   const options = descriptor ?? {};
+   const extraOptions = Object.entries(options)
+      .filter(([name, value]) => value !== undefined
+         && name !== "powerPreference"
+         && name !== "forceFallbackAdapter"
+         && name !== "xrCompatible")
+      .map(([name, value]) => [name, typeof value, String(value)])
+      .sort(([left], [right]) => left.localeCompare(right));
+   return JSON.stringify([
+      String(options.powerPreference ?? ""),
+      Boolean(options.forceFallbackAdapter ?? false),
+      Boolean(options.xrCompatible ?? false),
+      extraOptions,
+   ]);
+}
+
 function createGeneration(state)
 {
    const generation = {
       id: state.nextGeneration,
+      adapterDescriptorKey: null,
       descriptorKey: null,
       devicePromise: null,
       device: null,
@@ -145,22 +163,30 @@ function registerDevice(state, generation, device)
    state.liveDeviceCount += 1;
    const lost = device.lost;
    if (lost && typeof lost.then === "function") {
-      lost.then(() => {
+      const markDeviceLost = () => {
          markDeviceNotLive(state, generation);
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
-      }, () => {
-         markDeviceNotLive(state, generation);
-         if (state.currentGeneration === generation) {
-            state.currentGeneration = null;
-         }
-      });
+      };
+      lost.then(markDeviceLost, markDeviceLost);
    }
    if (generation.destroyWhenReady || state.closed) {
       destroyGeneration(state, generation);
    }
    return device;
+}
+
+function registerAdapter(state, key, adapter)
+{
+   let keys = state.adapterDescriptorKeys.get(adapter);
+   if (!keys) {
+      keys = new Set();
+      state.adapterDescriptorKeys.set(adapter, keys);
+   }
+   keys.add(key);
+   installAdapterRequestDevicePatch(state, adapter);
+   return adapter;
 }
 
 function installAdapterRequestDevicePatch(state, adapter)
@@ -188,6 +214,19 @@ function installAdapterRequestDevicePatch(state, adapter)
       if (!generation || state.closed) {
          return Promise.reject(new Error("Oxide WebGPU device requested without an active page session"));
       }
+      const adapterKeys = state.adapterDescriptorKeys.get(this);
+      if (!adapterKeys || adapterKeys.size !== 1) {
+         state.incompatibleAcquireFailureCount += 1;
+         return Promise.reject(new Error("incompatible Oxide WebGPU adapter requirements"));
+      }
+      const adapterKey = adapterKeys.values().next().value;
+      if (generation.adapterDescriptorKey !== null
+         && generation.adapterDescriptorKey !== undefined
+         && generation.adapterDescriptorKey !== adapterKey) {
+         state.incompatibleAcquireFailureCount += 1;
+         return Promise.reject(new Error("incompatible Oxide WebGPU adapter requirements"));
+      }
+      generation.adapterDescriptorKey = adapterKey;
       const key = descriptorKey(deviceDescriptor);
       if (generation.descriptorKey !== null && generation.descriptorKey !== key) {
          state.incompatibleAcquireFailureCount += 1;
@@ -202,6 +241,7 @@ function installAdapterRequestDevicePatch(state, adapter)
                (device) => registerDevice(state, generation, device),
                (error) => {
                   generation.devicePromise = null;
+                  generation.adapterDescriptorKey = null;
                   generation.descriptorKey = null;
                   throw error;
                },
@@ -217,7 +257,6 @@ function installAdapterRequestDevicePatch(state, adapter)
       writable: descriptor?.writable ?? true,
    });
    state.adapterPatches.set(adapterPrototype, {
-      original: originalRequestDevice,
       patched: patchedRequestDevice,
    });
 }
@@ -239,15 +278,38 @@ function installRequestAdapterPatch(state)
 
    const descriptor = Object.getOwnPropertyDescriptor(gpuPrototype, "requestAdapter");
    const originalRequestAdapter = gpuPrototype.requestAdapter;
-   const patchedRequestAdapter = function()
+   const patchedRequestAdapter = function(adapterDescriptor)
    {
-      return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
-         .then((adapter) => {
-            if (adapter) {
-               installAdapterRequestDevicePatch(state, adapter);
-            }
-            return adapter;
-         });
+      const key = adapterDescriptorKey(adapterDescriptor);
+      if (state.closed) {
+         return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
+            .then((adapter) => {
+               if (adapter) {
+                  installAdapterRequestDevicePatch(state, adapter);
+               }
+               return adapter;
+            });
+      }
+      const existing = state.adapterPromises.get(key);
+      if (existing) {
+         return existing;
+      }
+      const adapterPromise = Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
+         .then(
+            (adapter) => {
+               if (!adapter) {
+                  state.adapterPromises.delete(key);
+                  return adapter;
+               }
+               return registerAdapter(state, key, adapter);
+            },
+            (error) => {
+               state.adapterPromises.delete(key);
+               throw error;
+            },
+         );
+      state.adapterPromises.set(key, adapterPromise);
+      return adapterPromise;
    };
    Object.defineProperty(gpuPrototype, "requestAdapter", {
       value: patchedRequestAdapter,
@@ -256,7 +318,6 @@ function installRequestAdapterPatch(state)
       writable: descriptor?.writable ?? true,
    });
    state.gpuPrototype = gpuPrototype;
-   state.originalRequestAdapter = originalRequestAdapter;
    state.patchedRequestAdapter = patchedRequestAdapter;
 }
 
@@ -280,6 +341,5 @@ export function releaseOxideWebGpuDeviceSession(lease)
       return;
    }
    lease.released = true;
-   const state = MODULE_STATE;
-   state.rendererLeaseCount = Math.max(0, state.rendererLeaseCount - 1);
+   MODULE_STATE.rendererLeaseCount = Math.max(0, MODULE_STATE.rendererLeaseCount - 1);
 }

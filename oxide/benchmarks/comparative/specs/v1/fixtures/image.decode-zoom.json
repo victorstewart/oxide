@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "image.decode-zoom",
+  "source": {
+    "artifact": {
+      "path": "assets/image-decode-zoom-source-v1.png",
+      "sha256": "ef64a0ed3d87525d904607414ceafe795c6da9071bae94265a25be8feee5ec17"
+    },
+    "width": 4096,
+    "height": 3072,
+    "format": "png",
+    "color_space": "srgb"
+  },
+  "thumbnail": {
+    "artifact": {
+      "path": "assets/image-decode-zoom-thumbnail-v1.png",
+      "sha256": "05914fd43be375b4612259e955ef1bb06ef303c8b3c32cc27ae7681e99cb1fb9"
+    },
+    "width": 384,
+    "height": 288,
+    "format": "png",
+    "color_space": "srgb"
+  },
+  "pan_distance_millionths": 450000,
+  "pinch_scale_millionths": 2000000
+}

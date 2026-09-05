@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "id": "endurance.churn",
+  "fixture": {
+    "path": "fixtures/endurance.churn.json",
+    "sha256": "b83e223c09881a068581cf831a6f124b3bc146ecce216d1e58d44db0367708ab"
+  },
+  "assets": {
+    "path": "assets/neutral-v1.json",
+    "sha256": "526211b8ad140a772d0f9427184ab32ebfe770c5b61dedbaa7501f8a5c4cd66f"
+  },
+  "font_pack": {
+    "id": "oxide-bench-fonts-v1",
+    "manifest": "font-packs/oxide-bench-fonts-v1.json",
+    "sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "viewport_class": "phone-portrait",
+  "scene": {
+    "roles": [
+      "endurance",
+      "label",
+      "icon-image",
+      "rounded-card",
+      "control",
+      "backdrop-region"
+    ],
+    "style_tokens": {
+      "path": "styles/neutral-v1.json",
+      "sha256": "3fe8e237e670aa0b535a667d5058ed77b1097942755cebeb7f3d3ba3f85d8916"
+    },
+    "layout_assertions": {
+      "path": "layout/dashboard.mixed-static.json",
+      "sha256": "6688dd72c34d50e3fc87663892fdf063ad692b69f7d0921040ab532fd1cfc2ee"
+    }
+  },
+  "phases": [
+    {
+      "id": "setup",
+      "measured": false
+    },
+    {
+      "id": "prewarm",
+      "measured": false,
+      "duration_ms": 2000
+    },
+    {
+      "id": "open-close-heavy-screen",
+      "measured": true,
+      "duration_ms": 120000,
+      "trace": {
+        "path": "traces/endurance-open-close-heavy-screen-100.json",
+        "sha256": "7caf4fbb2000fb55e4f67264b3564471cfb88dbcc26ddcc2561582116bdf3d06"
+      }
+    },
+    {
+      "id": "tab-switch-heavy",
+      "measured": true,
+      "duration_ms": 165000,
+      "trace": {
+        "path": "traces/endurance-tab-switch-heavy-500.json",
+        "sha256": "637c2b1c224b224e05870497eec4138b8100b303f9d795ad8917f1aa76103c16"
+      }
+    },
+    {
+      "id": "idle-animation",
+      "measured": true,
+      "duration_ms": 10000,
+      "trace": {
+        "path": "traces/endurance-idle-animation-600.json",
+        "sha256": "179993c4835cb437d4757c5e76249824034dd14bd0e99acd669d2dbea8b4fede"
+      }
+    },
+    {
+      "id": "recovery",
+      "measured": true,
+      "duration_ms": 5000
+    },
+    {
+      "id": "teardown",
+      "measured": false
+    }
+  ],
+  "primary_metric": "memory.retained_slope_bytes_per_min",
+  "required_metrics": [
+    "frame.present_ms",
+    "first.interactive_ms",
+    "input.event_to_visible_response_ms",
+    "frame.missed_display_opportunities_per_1000",
+    "cpu.main_thread_ms",
+    "memory.resident_bytes",
+    "oxide.dirty_node_count",
+    "oxide.layout_pass_count",
+    "oxide.draw_call_count",
+    "oxide.encoded_bytes",
+    "oxide.texture_bytes",
+    "memory.resident_drift_bytes",
+    "memory.recovery_ms"
+  ],
+  "optional_metrics": [
+    "memory.peak_resident_bytes",
+    "memory.declared_resource_bytes"
+  ],
+  "parity_checkpoints": [
+    {
+      "id": "heavy-screen-recovered",
+      "phase_id": "open-close-heavy-screen",
+      "at_us": 119400000,
+      "state": {
+        "path": "checkpoints/endurance.churn/heavy-screen-recovered/state.json",
+        "sha256": "f56cdc9c6c36d4a73c9b50a484c19cbe38cb15565d8230aaa5cf34934ef9b338"
+      },
+      "accessibility": {
+        "path": "checkpoints/endurance.churn/heavy-screen-recovered/accessibility.json",
+        "sha256": "c455e2d2188983ff533f6d9823cd7e32bcfd71098b60a44bd29e42ccc4819663"
+      },
+      "screenshot": {
+        "path": "checkpoints/dashboard.mixed-static/idle/screenshot.png",
+        "sha256": "560fc361a83413728036242950a1bd9071dbf473f3d342370fedab68bbd0c62a"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "endurance",
+          "count": 1
+        },
+        {
+          "role": "label",
+          "count": 176
+        },
+        {
+          "role": "icon-image",
+          "count": 64
+        },
+        {
+          "role": "rounded-card",
+          "count": 32
+        },
+        {
+          "role": "control",
+          "count": 24
+        },
+        {
+          "role": "backdrop-region",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "id": "tab-restored",
+      "phase_id": "tab-switch-heavy",
+      "at_us": 164670000,
+      "state": {
+        "path": "checkpoints/endurance.churn/tab-restored/state.json",
+        "sha256": "e185d8aaec2641790c108f8ae7e1ff8be9d21fbc5b57b5cc3a4f9070dc7917c9"
+      },
+      "accessibility": {
+        "path": "checkpoints/endurance.churn/tab-restored/accessibility.json",
+        "sha256": "b66fe943d0f4eca585bfb3f6f0a40557e11c4b303098d9c2722f631f0313dd8a"
+      },
+      "screenshot": {
+        "path": "checkpoints/dashboard.mixed-static/idle/screenshot.png",
+        "sha256": "560fc361a83413728036242950a1bd9071dbf473f3d342370fedab68bbd0c62a"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "endurance",
+          "count": 1
+        },
+        {
+          "role": "label",
+          "count": 176
+        },
+        {
+          "role": "icon-image",
+          "count": 64
+        },
+        {
+          "role": "rounded-card",
+          "count": 32
+        },
+        {
+          "role": "control",
+          "count": 24
+        },
+        {
+          "role": "backdrop-region",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "id": "animation-settled",
+      "phase_id": "idle-animation",
+      "at_us": 9983333,
+      "state": {
+        "path": "checkpoints/endurance.churn/animation-settled/state.json",
+        "sha256": "72e3fd11c3959a1cd290b61a6ec493676af98f91b1521a906a9bc5ab24a3ff5e"
+      },
+      "accessibility": {
+        "path": "checkpoints/endurance.churn/animation-settled/accessibility.json",
+        "sha256": "29681e9e5c8395d3368c1513dcaaccea1b2775c0dfded62a43dc28055ad0edfd"
+      },
+      "screenshot": {
+        "path": "checkpoints/dashboard.mixed-static/idle/screenshot.png",
+        "sha256": "560fc361a83413728036242950a1bd9071dbf473f3d342370fedab68bbd0c62a"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "endurance",
+          "count": 1
+        },
+        {
+          "role": "label",
+          "count": 176
+        },
+        {
+          "role": "icon-image",
+          "count": 64
+        },
+        {
+          "role": "rounded-card",
+          "count": 32
+        },
+        {
+          "role": "control",
+          "count": 24
+        },
+        {
+          "role": "backdrop-region",
+          "count": 4
+        }
+      ]
+    },
+    {
+      "id": "recovered",
+      "phase_id": "recovery",
+      "at_us": 5000000,
+      "state": {
+        "path": "checkpoints/endurance.churn/recovered/state.json",
+        "sha256": "a4dfa5443fdfbe559dc970d460bdab8f554f67c48ebbaa6bfa20947340c90db9"
+      },
+      "accessibility": {
+        "path": "checkpoints/endurance.churn/recovered/accessibility.json",
+        "sha256": "fe38b181efb0dfe0d76bc08178bc68b67b5727c6fd3d0d8747bacd955bb68624"
+      },
+      "screenshot": {
+        "path": "checkpoints/dashboard.mixed-static/idle/screenshot.png",
+        "sha256": "560fc361a83413728036242950a1bd9071dbf473f3d342370fedab68bbd0c62a"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "endurance",
+          "count": 1
+        },
+        {
+          "role": "label",
+          "count": 176
+        },
+        {
+          "role": "icon-image",
+          "count": 64
+        },
+        {
+          "role": "rounded-card",
+          "count": 32
+        },
+        {
+          "role": "control",
+          "count": 24
+        },
+        {
+          "role": "backdrop-region",
+          "count": 4
+        }
+      ]
+    }
+  ],
+  "fairness_contract": {
+    "locale": "en_US_POSIX",
+    "timezone": "UTC",
+    "direction": "ltr",
+    "logical_viewport_width": 390,
+    "logical_viewport_height": 844,
+    "expected_visible_role_counts": [
+      {
+        "role": "endurance",
+        "count": 1
+      },
+      {
+        "role": "label",
+        "count": 176
+      },
+      {
+        "role": "icon-image",
+        "count": 64
+      },
+      {
+        "role": "rounded-card",
+        "count": 32
+      },
+      {
+        "role": "control",
+        "count": 24
+      },
+      {
+        "role": "backdrop-region",
+        "count": 4
+      }
+    ],
+    "schedule_tolerance_us": 1000,
+    "coordinate_tolerance_microunits": 1000,
+    "elapsed_time_driven": true
+  }
+}

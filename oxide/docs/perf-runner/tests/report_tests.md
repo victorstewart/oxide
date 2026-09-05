@@ -21,6 +21,8 @@ This integration suite freezes performance-report schemas, filtered execution, c
 - `retained_spatial_queries_have_engine_and_authoring_contracts()` freezes 512-instance smoke cardinality, one-entry CPU selection, zero vertex visits, metadata residency, and authoring routing.
 - `metal_spatial_rows_freeze_small_and_full_damage_contracts()` freezes one selected small-damage instance/command/draw, four shaded pixels, zero vertex/copy/upload work, and full linear 512-draw static-plan replay.
 - `filtered_run_suite_supports_retained_snapshot_authoring_case()` keeps the public retained-snapshot authoring row routable.
+- `filtered_run_suite_supports_variable_font_authoring_construction_case()` requires the public immutable constructor row to retain the committed font bytes and exact two-axis workload.
+- `filtered_run_suite_supports_variable_axes_cold_and_warm_text_evidence()` requires pinned 3x Latin/CJK cold raster work and a separate immediate replay with cache hits but zero new misses, rasterizations, or dirty pixels.
 - Other test functions cover report comparison, contract coverage, architecture rows, authoring rows, and persisted baseline requirements.
 
 ## Logic narrative
@@ -66,6 +68,7 @@ Run `cargo test --locked -p oxide-perf-runner --test report_tests`.
 Set `OXIDE_PERF_RUNNER_FILTER=gpu.architecture.frame_resources.` with `--run-suite --smoke --json-out <path>` to inspect both C18 rows.
 
 ## Changelog
+- 2026-07-18: froze variable-font authoring construction and pinned-axis cold/warm 3x text evidence.
 - 2026-07-15: froze C60 image-store scaling, completed-frame readback, exact page/draw/budget counters, and authoring release/reuse invalidation.
 - 2026-07-15: required C18 frame-resource rows to retain their completed-command-buffer GPU distributions so the complete C61 report satisfies the frame metric contract.
 - 2026-07-15: froze C59 large-static, minified, small-one-use, and public-authoring image policy rows; residency/upload/mip counters; release; indexed samples; and output-quality equivalence.

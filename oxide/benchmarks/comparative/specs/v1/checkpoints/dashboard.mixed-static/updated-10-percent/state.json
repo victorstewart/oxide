@@ -1,0 +1,36 @@
+{
+  "checkpoint_id": "updated-10-percent",
+  "model": {
+    "bulk_update_count": 30,
+    "leaf_update_count": 20,
+    "visible_node_count": 301
+  },
+  "scenario_id": "dashboard.mixed-static",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {
+      "count": 1,
+      "role": "dashboard"
+    },
+    {
+      "count": 176,
+      "role": "label"
+    },
+    {
+      "count": 64,
+      "role": "icon-image"
+    },
+    {
+      "count": 32,
+      "role": "rounded-card"
+    },
+    {
+      "count": 24,
+      "role": "control"
+    },
+    {
+      "count": 4,
+      "role": "backdrop-region"
+    }
+  ]
+}

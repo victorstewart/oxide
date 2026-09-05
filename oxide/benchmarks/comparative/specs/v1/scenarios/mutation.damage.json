@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "id": "mutation.damage",
+  "fixture": {
+    "path": "fixtures/mutation.damage.json",
+    "sha256": "43b6d85aa2b89c3ddf106d8257b7025e315506efc463a6612dc6a317266f8862"
+  },
+  "assets": {
+    "path": "assets/neutral-v1.json",
+    "sha256": "526211b8ad140a772d0f9427184ab32ebfe770c5b61dedbaa7501f8a5c4cd66f"
+  },
+  "font_pack": {
+    "id": "oxide-bench-fonts-v1",
+    "manifest": "font-packs/oxide-bench-fonts-v1.json",
+    "sha256": "d24e5d8260a40cf4f3428eebb3d8cc9ac383e1121823294cb6c7133c81acaabf"
+  },
+  "viewport_class": "phone-portrait",
+  "scene": {
+    "roles": [
+      "mutation-surface",
+      "simple-node"
+    ],
+    "style_tokens": {
+      "path": "styles/neutral-v1.json",
+      "sha256": "3fe8e237e670aa0b535a667d5058ed77b1097942755cebeb7f3d3ba3f85d8916"
+    },
+    "layout_assertions": {
+      "path": "layout/mutation.damage.json",
+      "sha256": "5048c8779db332c6ab07860e5dc64f5edb291d7d11e10b64f71b5d0076dc7ed5"
+    }
+  },
+  "phases": [
+    {
+      "id": "setup",
+      "measured": false
+    },
+    {
+      "id": "prewarm",
+      "measured": false,
+      "duration_ms": 2000
+    },
+    {
+      "id": "mutation-1-percent",
+      "measured": true,
+      "duration_ms": 500,
+      "trace": {
+        "path": "traces/mutation-1-percent.json",
+        "sha256": "2ee3e4c175c6feb4cd6aabbd89d17051c90e77acd67bac6e8587476812706620"
+      }
+    },
+    {
+      "id": "mutation-10-percent",
+      "measured": true,
+      "duration_ms": 500,
+      "trace": {
+        "path": "traces/mutation-10-percent.json",
+        "sha256": "434796987eeabc25f5f47e87ff5f09135081b86de661def7ee69cd7927f29235"
+      }
+    },
+    {
+      "id": "mutation-100-percent",
+      "measured": true,
+      "duration_ms": 500,
+      "trace": {
+        "path": "traces/mutation-100-percent.json",
+        "sha256": "a8536092947721461b62eaf4f61b09def40a4b112cdbb6a6e32909574ce26566"
+      }
+    },
+    {
+      "id": "teardown",
+      "measured": false
+    }
+  ],
+  "primary_metric": "mutation_10pct_to_attributed_presentation_ms",
+  "required_metrics": [
+    "frame.present_ms",
+    "first.interactive_ms",
+    "input.event_to_visible_response_ms",
+    "frame.missed_display_opportunities_per_1000",
+    "cpu.main_thread_ms",
+    "memory.resident_bytes",
+    "oxide.dirty_node_count",
+    "oxide.layout_pass_count",
+    "oxide.draw_call_count",
+    "oxide.encoded_bytes",
+    "oxide.texture_bytes"
+  ],
+  "optional_metrics": [
+    "gpu.device_scope_active_ms",
+    "memory.declared_resource_bytes"
+  ],
+  "parity_checkpoints": [
+    {
+      "id": "initial",
+      "phase_id": "setup",
+      "state": {
+        "path": "checkpoints/mutation.damage/initial/state.json",
+        "sha256": "935fd0038d02f52b378ec4b250b3d80c69a05ba5f29bdab9439ed98847782d9b"
+      },
+      "accessibility": {
+        "path": "checkpoints/mutation.damage/initial/accessibility.json",
+        "sha256": "bd050d889921b7833d56f8e270b1275832c0e5e6b316cdb2f7848de4e824fc09"
+      },
+      "geometry": {
+        "path": "checkpoints/mutation.damage/initial/geometry.json",
+        "sha256": "06200513ce7d76b852c347f89ae66fe8afb12dee82250450aadc6b3742457c6e"
+      },
+      "screenshot": {
+        "path": "checkpoints/mutation.damage/initial/screenshot.png",
+        "sha256": "4430bd1d41e145d7c97207703427f6111b5c2710b46aa507687cfef73b9bb138"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "mutation-surface",
+          "count": 1
+        },
+        {
+          "role": "simple-node",
+          "count": 10000
+        }
+      ]
+    },
+    {
+      "id": "mutated-1-percent",
+      "phase_id": "mutation-1-percent",
+      "at_us": 400000,
+      "state": {
+        "path": "checkpoints/mutation.damage/mutated-1-percent/state.json",
+        "sha256": "2dbf158c6f71daf435fe953a5c6d8c56f6b6f484596bbb46f670d60b6aff01d2"
+      },
+      "accessibility": {
+        "path": "checkpoints/mutation.damage/mutated-1-percent/accessibility.json",
+        "sha256": "63cd3631ed3e613ed508095744b708c05894d56491afc0f82a77d999443123f4"
+      },
+      "geometry": {
+        "path": "checkpoints/mutation.damage/mutated-1-percent/geometry.json",
+        "sha256": "35f84311dfd31b77431e432b6d141899f1690b253d2b1cb662c9201a095eb729"
+      },
+      "screenshot": {
+        "path": "checkpoints/mutation.damage/mutated-1-percent/screenshot.png",
+        "sha256": "738df7c2bdf55dc93d75a94cd98b65aab5b6ce7c0eb869dccca56f024af59b76"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "mutation-surface",
+          "count": 1
+        },
+        {
+          "role": "simple-node",
+          "count": 10000
+        }
+      ]
+    },
+    {
+      "id": "mutated-10-percent",
+      "phase_id": "mutation-10-percent",
+      "at_us": 400000,
+      "state": {
+        "path": "checkpoints/mutation.damage/mutated-10-percent/state.json",
+        "sha256": "0d65a5b8838649d04df6ac3228b01899fadcde081223051960d47ff4bae871e2"
+      },
+      "accessibility": {
+        "path": "checkpoints/mutation.damage/mutated-10-percent/accessibility.json",
+        "sha256": "b481b49adcbe7d53147b2f122ceb4a655a38860e20bc3b35f83c16580daab090"
+      },
+      "geometry": {
+        "path": "checkpoints/mutation.damage/mutated-10-percent/geometry.json",
+        "sha256": "30e0cf951ad8c88b2aef9622b0b44c147ea5ab763ff214ce06749d61b3205764"
+      },
+      "screenshot": {
+        "path": "checkpoints/mutation.damage/mutated-10-percent/screenshot.png",
+        "sha256": "935265a8e6e2d0dd663c8863b6cf5e0dd66a8c4acda89eb0b1e30f546d0ebc4f"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "mutation-surface",
+          "count": 1
+        },
+        {
+          "role": "simple-node",
+          "count": 10000
+        }
+      ]
+    },
+    {
+      "id": "mutated-100-percent",
+      "phase_id": "mutation-100-percent",
+      "at_us": 400000,
+      "state": {
+        "path": "checkpoints/mutation.damage/mutated-100-percent/state.json",
+        "sha256": "ad39b5cd27eb9e9ead7cac639760bce6ff2dbc0b4c63809490bb803acf16d708"
+      },
+      "accessibility": {
+        "path": "checkpoints/mutation.damage/mutated-100-percent/accessibility.json",
+        "sha256": "5f9b5ed4ff9fd31c7042b0f2feec2c27ffe5202a585293f478ca2d3846c064f0"
+      },
+      "geometry": {
+        "path": "checkpoints/mutation.damage/mutated-100-percent/geometry.json",
+        "sha256": "06200513ce7d76b852c347f89ae66fe8afb12dee82250450aadc6b3742457c6e"
+      },
+      "screenshot": {
+        "path": "checkpoints/mutation.damage/mutated-100-percent/screenshot.png",
+        "sha256": "d1fee68af2a201be8dae0d65e8ec7d7697bb202051206fa135103ba1c34fd72c"
+      },
+      "expected_visible_role_counts": [
+        {
+          "role": "mutation-surface",
+          "count": 1
+        },
+        {
+          "role": "simple-node",
+          "count": 10000
+        }
+      ]
+    }
+  ],
+  "fairness_contract": {
+    "locale": "en_US_POSIX",
+    "timezone": "UTC",
+    "direction": "ltr",
+    "logical_viewport_width": 390,
+    "logical_viewport_height": 844,
+    "expected_visible_role_counts": [
+      {
+        "role": "mutation-surface",
+        "count": 1
+      },
+      {
+        "role": "simple-node",
+        "count": 10000
+      }
+    ],
+    "schedule_tolerance_us": 1000,
+    "coordinate_tolerance_microunits": 1000,
+    "elapsed_time_driven": true
+  }
+}

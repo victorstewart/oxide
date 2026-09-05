@@ -1,0 +1,8 @@
+[
+  {
+    "at_us": 0,
+    "op": "resource-arrival",
+    "target": "image:texture",
+    "state_id": "image:upload-complete"
+  }
+]

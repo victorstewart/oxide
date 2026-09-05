@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "web-release-claim-complete",
+  "platform": "web",
+  "tier": "claim-complete",
+  "correctness_install_pulls_seconds": 1200,
+  "primary_dynamic_presentation_seconds": 6960,
+  "launch_or_startup_delivery_seconds": 6480,
+  "idle_endurance_seconds": 8640,
+  "energy_seconds": 0,
+  "attribution_seconds": 4578,
+  "pre_reserve_seconds": 27858,
+  "reserve_seconds": 5572,
+  "hard_total_seconds": 33430,
+  "campaign_critical_wall_seconds": 33430,
+  "campaign_aggregate_seconds": 33430
+}

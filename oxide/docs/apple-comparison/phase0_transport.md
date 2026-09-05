@@ -1,0 +1,11 @@
+# Apple comparison Phase-0 transport
+
+`host/apple-comparison` is the isolated Apple comparison target graph. It contains two comparator applications, one UI-test controller with exactly `testManifestCampaign` and `testLaunchCampaign`, and a hostless helper-test target.
+
+The preferred Phase-0 manifest method proves the App Group transport before scenario timing is added. The runner durably writes a generation-bound seed. Oxide then writes an artifact and acknowledgement; the UIKit reference validates that predecessor and extends the hash chain; the runner validates both and durably commits `pair.complete.json` to the shared group and its own host-pullable Documents container. Darwin notifications are wakeups only and never carry evidence.
+
+`DurableArtifactStore` writes a same-directory temporary file, handles partial writes and `EINTR`, synchronizes the file, renames it atomically, and synchronizes the parent directory. The physical-device acceptance step must inspect effective executable and provisioning-profile entitlements for both apps and the generated runner. If any participant lacks `group.com.oxide.comparison-bench`, App Group mode is unavailable and the host preregisters `per-app-container`: each comparator writes its generation-bound artifact and ACK in its own Documents container, Darwin notification remains a control wakeup, the host pulls and validates that container after each side, and an atomic host checkpoint is authoritative. The host passes the validated Oxide artifact hash into the native launch so the chain cannot silently cross generations. Accessibility, console output, and `.xcresult` are not telemetry fallbacks.
+
+On the Phase-0 device, automatic signing failed closed because the installed wildcard profile lacks App Groups and the configured Xcode account has no usable token. The target graph therefore omits unsupported App Group entitlements and freezes `per-app-container` for the transport spike. App Group mode remains implemented but must not be selected until all three effective executable profiles prove the fixed group entitlement.
+
+This Phase-0 surface is transport evidence only. It does not provide comparison scenarios, parity, acquisition statistics, or framework performance claims.

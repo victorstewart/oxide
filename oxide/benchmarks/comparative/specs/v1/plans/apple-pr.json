@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "apple-pr",
+  "platform": "apple",
+  "tier": "pr",
+  "acquisition": {
+    "path": "acquisition/apple-pr.json",
+    "sha256": "030c62888bd20aacced1ae93b6f7d041c743622e6fa54fa77532757642aaa6f1"
+  },
+  "budget": {
+    "path": "budgets/apple-pr.json",
+    "sha256": "015bea22968e30dd8b05484ebb4795d899a9f42947ebcb6fee1d18c5946de424"
+  },
+  "comparator_audits": [
+    {
+      "identity": {
+        "platform": "macos",
+        "framework": "appkit",
+        "implementation": "appkit-production",
+        "variant": "native.production"
+      },
+      "audit": {
+        "path": "audits/macos-appkit-native-production.json",
+        "sha256": "cb68cf9847b719666ff7b393f1a20447e5c341d1c9341401d7b129f54595e74c"
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "startup.first-screen",
+      "artifact": {
+        "path": "scenarios/startup.first-screen.json",
+        "sha256": "bfc034c10956e7caf13d909da52f8a988ccbbeca35d3a5a8ffce71ee20f3fa0c"
+      }
+    },
+    {
+      "id": "dashboard.mixed-static",
+      "artifact": {
+        "path": "scenarios/dashboard.mixed-static.json",
+        "sha256": "aa66fdb461e69ab44ef9571aa963e3823f14a48bf21460b3f6ed7269f8cff946"
+      }
+    },
+    {
+      "id": "feed.variable-scroll",
+      "artifact": {
+        "path": "scenarios/feed.variable-scroll.json",
+        "sha256": "6e597a7513042cf7cccf3ca9a8cfeadd1861dc984bb82739609fe0993f920b5e"
+      }
+    },
+    {
+      "id": "chat.live-update",
+      "artifact": {
+        "path": "scenarios/chat.live-update.json",
+        "sha256": "c2b13345fbc604341d914062beb88777d8af03bb39c834d8c5eda562545c3353"
+      }
+    },
+    {
+      "id": "navigation.modal",
+      "artifact": {
+        "path": "scenarios/navigation.modal.json",
+        "sha256": "1062108924081c7b286ebd5de0f27755209cefc43dc29f373a75c9ed91d17847"
+      }
+    },
+    {
+      "id": "image.decode-zoom",
+      "artifact": {
+        "path": "scenarios/image.decode-zoom.json",
+        "sha256": "229bd8a0d41abff229d0cc6f8edd11ddf32ccc59bbfe5a6dfcbfbe6eea6cf15d"
+      }
+    }
+  ]
+}

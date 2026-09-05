@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scenario_id": "image.decode-zoom",
+  "scale": "two_x",
+  "dimension": "operation_cardinality",
+  "transform": "isolated_operation_shadow",
+  "base_cardinality": 1,
+  "effective_cardinality": 2,
+  "fixture": {
+    "path": "fixtures/image.decode-zoom.json",
+    "sha256": "dccbd5cd88e35234fec31c288dec2f35ccaa0934b6fc7d8f50fa134e2773532e"
+  }
+}

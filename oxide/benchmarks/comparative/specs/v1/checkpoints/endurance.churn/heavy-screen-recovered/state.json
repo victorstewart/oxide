@@ -1,0 +1,41 @@
+{
+  "checkpoint_id": "heavy-screen-recovered",
+  "model": {
+    "active_tab_index": 0,
+    "animation_frame_count": 0,
+    "animation_frame_index": 0,
+    "heavy_screen_transition_count": 200,
+    "heavy_screen_visible": true,
+    "open_close_cycle_count": 100,
+    "tab_switch_count": 0,
+    "visible_node_count": 301
+  },
+  "scenario_id": "endurance.churn",
+  "schema_version": 2,
+  "visible_role_counts": [
+    {
+      "count": 1,
+      "role": "endurance"
+    },
+    {
+      "count": 176,
+      "role": "label"
+    },
+    {
+      "count": 64,
+      "role": "icon-image"
+    },
+    {
+      "count": 32,
+      "role": "rounded-card"
+    },
+    {
+      "count": 24,
+      "role": "control"
+    },
+    {
+      "count": 4,
+      "role": "backdrop-region"
+    }
+  ]
+}

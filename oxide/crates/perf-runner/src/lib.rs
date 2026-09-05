@@ -23,7 +23,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+mod paired_statistics;
 pub mod paired;
+pub mod comparative;
+pub mod comparison_report;
+pub mod density_acquisition;
+pub mod density_calibration;
+pub mod instrumentation_calibration;
 mod architecture_matrix;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
@@ -40,6 +46,8 @@ const DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS: usize = 16_384;
 const LINEAR_COMPARE_BASELINE_CASE_LIMIT: usize = 32;
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
+const COMPARISON_LATIN_VARIABLE_FONT: &[u8] = include_bytes!("../../../benchmarks/comparative/specs/v1/font-packs/oxide-bench-fonts-v1/NotoSans-VF.ttf");
+const COMPARISON_CJK_VARIABLE_FONT: &[u8] = include_bytes!("../../../benchmarks/comparative/specs/v1/font-packs/oxide-bench-fonts-v1/NotoSansSC-VF.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 const DAMAGE_USE_THRESH: f32 = 0.75;
 const DAMAGE_PREFILTER_THRESH: f32 = 0.25;
@@ -223,6 +231,10 @@ const POPUP_WHEEL_PICKER_CASE_ID: &str = "cpu.authoring.popup_wheel_picker.inter
 
 const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec { id: "cpu.authoring.text_fields.edit_cycle", name: "Text Fields" },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.font.variable_instance_construct",
+        name: "Variable Font Instance Construction",
+    },
     AuthoringPerfSpec { id: POPUP_WHEEL_PICKER_CASE_ID, name: "Popup Wheel Picker" },
     AuthoringPerfSpec { id: "cpu.authoring.burst_emitter.sample", name: "Burst Emitter" },
     AuthoringPerfSpec {
@@ -3355,6 +3367,9 @@ fn push_authoring_cases(
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.authoring.text_fields.edit_cycle" => authoring_text_fields_case(smoke),
+            "cpu.authoring.font.variable_instance_construct" => {
+                authoring_variable_font_instance_case(smoke)
+            }
             POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
@@ -5268,6 +5283,39 @@ fn authoring_text_fields_case(smoke: bool) -> PerfCaseResult {
                 + secure.caret_index() as u64
         },
     )
+}
+
+fn authoring_variable_font_instance_case(smoke: bool) -> PerfCaseResult
+{
+   let mut case = measure_cpu_case(
+      "cpu.authoring.font.variable_instance_construct",
+      "authoring",
+      smoke,
+      true,
+      0.12,
+      1,
+      vec![String::from(
+         "Font construction over the committed Noto Sans variable font at its pinned manifest coordinates.",
+      )],
+      move || {
+         let font = text::Font::from_bytes_with_variations(
+            COMPARISON_LATIN_VARIABLE_FONT.to_vec(),
+            &[
+               text::FontVariation {tag: *b"wght", value: 400.0},
+               text::FontVariation {tag: *b"wdth", value: 100.0},
+            ],
+         );
+         u64::from(font.supports_cluster("Variable font"))
+      },
+   );
+   case.metrics.insert(String::from("font_bytes"), COMPARISON_LATIN_VARIABLE_FONT.len() as f64);
+   case.metrics.insert(String::from("font_instances_per_op"), 1.0);
+   case.metrics.insert(String::from("variation_axes_per_instance"), 2.0);
+   case.metrics.insert(String::from("pinned_weight"), 400.0);
+   case.metrics.insert(String::from("pinned_width"), 100.0);
+   case.metrics.insert(String::from("constructor_validation"), 1.0);
+   case.cache_state = String::from("cold");
+   case
 }
 
 fn authoring_popup_wheel_picker_case(smoke: bool) -> PerfCaseResult {
@@ -9856,7 +9904,7 @@ fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> 
     }
 
     out.push_str("\n## Baseline Workflow\n\n");
-    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline`\n");
+    out.push_str("- Update the committed baseline only with review: `PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --bin oxide-perf-runner -- --run-suite --write-baseline`\n");
     let _ = std::fmt::Write::write_fmt(
         &mut out,
         format_args!("- Latest JSON baseline: `{}`\n", DEFAULT_BASELINE_JSON)

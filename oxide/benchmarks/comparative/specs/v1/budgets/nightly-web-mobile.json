@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "nightly-web-mobile",
+  "platform": "web",
+  "tier": "nightly",
+  "correctness_install_pulls_seconds": 0,
+  "primary_dynamic_presentation_seconds": 0,
+  "launch_or_startup_delivery_seconds": 1200,
+  "idle_endurance_seconds": 0,
+  "energy_seconds": 0,
+  "attribution_seconds": 0,
+  "pre_reserve_seconds": 1200,
+  "reserve_seconds": 240,
+  "hard_total_seconds": 1440,
+  "campaign_critical_wall_seconds": 4968,
+  "campaign_aggregate_seconds": 6408
+}

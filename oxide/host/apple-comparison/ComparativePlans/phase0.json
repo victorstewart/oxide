@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "plan_id": "apple-phase0-transport",
+  "transport_modes": [
+    "app-group",
+    "per-app-container"
+  ]
+}

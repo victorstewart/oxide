@@ -1,0 +1,118 @@
+{
+  "checkpoint_id": "initial",
+  "nodes": [
+    {
+      "actions": [],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        0,
+        0,
+        390,
+        52
+      ],
+      "name": "navigation-bar",
+      "order": 0,
+      "role": "navigation-bar",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [
+        "scroll"
+      ],
+      "count": 1,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        792
+      ],
+      "name": "feed",
+      "order": 1,
+      "role": "feed",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "1",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 9,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        792
+      ],
+      "name": "feed-card",
+      "order": 2,
+      "role": "feed-card",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "9",
+      "visible": true
+    },
+    {
+      "actions": [],
+      "count": 9,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        792
+      ],
+      "name": "thumbnail",
+      "order": 3,
+      "role": "thumbnail",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "9",
+      "visible": true
+    },
+    {
+      "actions": [
+        "activate"
+      ],
+      "count": 9,
+      "focused": false,
+      "frame": [
+        0,
+        52,
+        390,
+        792
+      ],
+      "name": "favorite-control",
+      "order": 4,
+      "role": "favorite-control",
+      "state": [
+        "enabled",
+        "visible"
+      ],
+      "value": "9",
+      "visible": true
+    }
+  ],
+  "raw_tree_source": "runtime-semantic-tree",
+  "root_frame": [
+    0,
+    0,
+    390,
+    844
+  ],
+  "scenario_id": "feed.variable-scroll",
+  "schema_version": 2
+}

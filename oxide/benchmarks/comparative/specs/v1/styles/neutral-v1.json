@@ -1,0 +1,30 @@
+{
+  "accent": "#3d6eefff",
+  "backdrop_blur_radius": 12,
+  "backdrop_tint": "#e1e5ee38",
+  "background": "#f3f5f8ff",
+  "color_space": "srgb",
+  "corner_curve": "circular",
+  "corner_radius": 12,
+  "font_size_body": 15,
+  "font_size_heading": 20,
+  "id": "neutral-v1",
+  "logical_viewport": {
+    "height": 844,
+    "scale": 3,
+    "width": 390
+  },
+  "modal_overlay": "#191c23b0",
+  "muted_surface": "#eef1f6ff",
+  "rtl_surface": "#eaeef7ff",
+  "schema_version": 1,
+  "secondary_text": "#697181ff",
+  "shadow": {
+    "blur_radius": 0,
+    "offset_y": 2,
+    "opacity": 0.16
+  },
+  "surface": "#ffffffff",
+  "text": "#20242cff",
+  "text_pixel_policy": "normalized-srgb8-exact-static-full-frame"
+}

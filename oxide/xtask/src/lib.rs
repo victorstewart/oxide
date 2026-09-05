@@ -1,23 +1,66 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
+use oxide_benchmark_spec::{
+   apple_campaign_plan_sha256, apple_pr_plan_sha256, canonical_apple_campaign_plan_json,
+   canonical_instrumentation_calibration_input_json,
+   detection_coverage_sha256, explain_macos_detection_coverage,
+   load_apple_pr_acquisition, load_apple_pr_plan, load_macos_detection_coverage,
+   load_apple_pr_scenarios, load_default_budgets, load_default_font_pack,
+   load_pr_vertical_scenarios, load_scenario_schema_fixture,
+   compare_calibrated_static_pngs, compare_exact_static_pngs,
+   reduce_instrumentation_calibration, reduce_normalized_png_visual_parity,
+   validate_apple_pr_acquisition,
+   validate_apple_pr_plan, validate_apple_pr_scenario_set, validate_default_budget_set,
+   validate_font_pack_manifest, validate_pr_vertical_slice, validate_scenario,
+   materialize_default_macos_campaign_plan, validate_apple_campaign_contract,
+   validate_budget, validate_runnable_apple_campaign_plan,
+   validate_macos_detection_coverage, AppleCampaignBudgetComponent, AppleCampaignPlanSpec,
+   ApplePrAcquisitionSpec, ApplePrPlanSpec, BudgetSpec, DetectionCoverageExplanation, DetectionCoverageManifest,
+   canonical_macos_full_attribution_plan_json, materialize_macos_full_attribution_plan,
+   InstrumentationCalibrationInput, MacOsGpuCounterConfiguration,
+   Platform as ComparisonPlatform, Tier as ComparisonTier,
+   CalibratedStaticVisualThresholds, TextGeometryEvidence, VisualThresholds,
+   APPLE_NIGHTLY_SCENARIO_IDS, APPLE_RELEASE_SCENARIO_IDS,
+};
+use oxide_apple_comparison_controller::{capture_macos_release_candidates, compare_apple_correctness_evidence, build_generic_macos_campaign_plan, comparison_tree_manifest, materialize_macos_analyzer_bundle, run_macos_campaign, run_macos_rapid, MacOsCampaignConfig, MacOsCampaignScope, MacOsRapidMode, MacOsRapidRunConfig, MacOsRapidSide, MacOsReleaseCandidateCaptureConfig};
 use oxide_perf_runner::{
     compare_reports, render_report_markdown, AuditFinding, ContractCoverageEntry,
     ContractCoverageReport, CoverageReport, PerfCaseResult, PerfComparison, PerfReport,
 };
+use oxide_perf_runner::comparative::{
+   classify_comparison, exact_sign_test, hierarchical_block_bootstrap_ci,
+   normalized_pair_effect, ClassificationEvidence, ComparisonClassification,
+   DecisionAlternative, MetricDirection, PairEffectKind, PairedSessionSamples,
+   WithinSessionEstimator,
+};
+use oxide_perf_runner::comparison_report::{
+   analyze_comparison_bundle, render_comparison_report_markdown, ComparisonReport,
+};
+use oxide_perf_runner::density_acquisition::acquire_macos_density;
+use oxide_perf_runner::density_calibration::{reduce_density_calibration, DensityCalibrationInput};
+use oxide_perf_runner::paired::{balanced_pair_order, PairOrder};
 use plist::{Dictionary, Value as PlValue};
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::ErrorKind;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+pub mod apple_comparison;
+pub mod legacy_migration;
+pub mod xctrace_record;
+
+use xctrace_record::{XctraceRecordProcess, XCTRACE_RECORD_WORKING_SET_LIMIT_BYTES};
 
 const DEFAULT_OXIDE_DEVICE_BASELINE_JSON: &str = "benchmarks/oxide-device/latest.json";
 const DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/oxide-device/latest.md";
@@ -33,6 +76,8 @@ const DEFAULT_EXPERIMENT_MANIFEST: &str = "perf-experiments.toml";
 const EXPERIMENT_PERF_AB_GATE_PREFIX: &str = "perf-ab";
 const COMPARE_DEVICE_PROOF_STATUS_FILE: &str = "proof-status.json";
 const COMPARE_DEVICE_PROOF_STATUS_MARKDOWN_FILE: &str = "proof-status.md";
+const COMPARE_UI_XCODE_BUILD_ROOT_LIMIT_BYTES: u64 = 4 * 1_024 * 1_024 * 1_024;
+const COMPARE_UI_XCODE_BUILD_ROOT_MARKER: &str = ".oxide-comparison-build-root-v1";
 const DEFAULT_UIKIT_SCHEME: &str = "OxideUIKitPerf";
 const DEFAULT_UIKIT_TEST_TARGET: &str = "OxideHostPerfTests";
 const DEFAULT_UIKIT_TEST_CLASS: &str = "OxideHostPerfTests";
@@ -2130,6 +2175,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
     let second = args.get(1).map(String::as_str);
     match (first, second) {
         (Some("experiments"), Some("check")) => experiments_check(&args[2..]),
+        (Some("compare-ui"), _) => compare_ui(&args[1..]),
         (Some("ios"), Some("prepare")) => ios_prepare(),
         (Some("ios"), Some("perf")) => ios_perf(&args[2..]),
         (Some("ios"), Some("device-perf")) => ios_device_perf(&args[2..]),
@@ -2139,12 +2185,1454 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("ios"), Some("time-profiler-summary")) => ios_time_profiler_summary(&args[2..]),
         (Some("test-all"), _) => test_all(),
         _ => {
+            eprintln!("macOS analysis: cargo xtask compare-ui materialize-macos-analyzer --campaign-root DIR --plan PATH --out DIR");
             eprintln!(
-                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask compare-ui validate\n  cargo xtask compare-ui self-test\n  cargo xtask compare-ui plan --platform ios|macos|web --tier pr|nightly|release-core|claim-complete|extended|full-attribution [--out PATH] [--explain-budget] [--explain-coverage]\n  cargo xtask compare-ui plan --platform macos --tier extended|full-attribution --plan PATH --budget PATH [--explain-budget] [--explain-coverage]\n  cargo xtask compare-ui materialize-macos-deep-attribution --gpu-config PATH --out PATH\n  cargo xtask compare-ui build --platform macos [--out PATH] [--build-root ABSOLUTE_PATH]\n  cargo xtask compare-ui rapid --platform macos --build-manifest PATH --spec-root DIR --out DIR --scenario ID --checkpoint ID --side oxide|native|both --visual|--timing [--iterations N]\n  cargo xtask compare-ui capture-release-candidates --platform macos --build-manifest PATH --out DIR --promoted-spec-root DIR\n  cargo xtask compare-ui calibrate-density --platform macos --plan PATH --driver PATH --out DIR [--resume]\n  cargo xtask compare-ui calibrate-density --input PATH --output PATH\n  cargo xtask compare-ui run --platform macos --plan PATH --build-manifest PATH --out DIR --run-id ID --instrumentation-calibration PATH [--correctness-only] [--no-presentation-traces]\n  cargo xtask compare-ui run --plan PATH --out PATH --dry-run\n  cargo xtask compare-ui analyze --input DIR --out PATH\n  cargo xtask compare-ui render --report PATH [--out PATH]\n  cargo xtask compare-ui reduce-visual --reference PATH --candidate PATH --layout PATH --canonical-scale N [--calibrated | --text-geometry PATH] [--output PATH] [--diagnostic]\n  cargo xtask compare-ui compare-static-exact --oxide PATH --uikit PATH --layout PATH --canonical-scale N [--output PATH] [--diagnostic]\n  cargo xtask compare-ui compare-apple-correctness --oxide-root DIR --native-root DIR --spec-root DIR --output PATH [--diagnostic]\n  cargo xtask compare-ui finalize-apple-transport --oxide-artifact PATH --oxide-ack PATH --native-artifact PATH --native-ack PATH --output PATH --run-id ID --plan-sha SHA256 --pass-id ID --pair-index N --generation ID\n  cargo xtask ios prepare\n  cargo xtask ios perf [disabled: use `ios device-perf`]\n  cargo xtask ios device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR]\n    note: `--trace-seconds 0` skips the attached Metal trace and collects only xcodebuild CPU metrics plus parked console summaries.\n  cargo xtask ios compare-device-perf [--write-baseline] [--uikit-compare PATH] [--oxide-compare PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--trace-seconds N] [--refresh-mode native] [--power-trace PATH | --power-trace-root DIR] [--watchable-smoke|--smoke] [--family component|animation|navigation|journey|camera]\n    staged flow: run watchable smoke first, then `--family ...` proofs, then `--write-baseline` from the same result root once proof status is green.\n  cargo xtask ios react-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--reuse-derived-data PATH] [--trace-seconds N]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
     }
+}
+
+fn compare_ui(args: &[String]) -> Result<()>
+{
+   let root = locate_workspace_root()?;
+   let budgets = load_default_budgets(&root)?;
+   validate_default_budget_set(&budgets)?;
+   let (_, apple_pr_acquisition) = load_apple_pr_acquisition(&root)?;
+   let apple_pr_budget = budgets.iter().find(|(_, budget)| budget.id == "apple-pr").map(|(_, budget)| budget).context("validated budget set has no Apple PR budget")?;
+   validate_apple_pr_acquisition(&apple_pr_acquisition, apple_pr_budget)?;
+   let (_, apple_pr_plan) = load_apple_pr_plan(&root)?;
+   validate_apple_pr_plan(&root.join("benchmarks/comparative/specs/v1"), &apple_pr_plan, &apple_pr_acquisition, apple_pr_budget)?;
+   let (_, macos_detection_coverage) = load_macos_detection_coverage(&root)?;
+   validate_macos_detection_coverage(&macos_detection_coverage)?;
+   let (_, font_pack) = load_default_font_pack(&root)?;
+   validate_font_pack_manifest(&root.join("benchmarks/comparative/specs/v1"), &font_pack, "oxide-bench-fonts-v1")?;
+   let (_, scenario_fixture) = load_scenario_schema_fixture(&root)?;
+   validate_scenario(&scenario_fixture)?;
+   let vertical_scenarios = load_pr_vertical_scenarios(&root)?;
+   validate_pr_vertical_slice(&root.join("benchmarks/comparative/specs/v1"), &vertical_scenarios)?;
+   let apple_pr_scenarios = load_apple_pr_scenarios(&root)?;
+   validate_apple_pr_scenario_set(&root.join("benchmarks/comparative/specs/v1"), &apple_pr_scenarios)?;
+   let (legacy_method_count, legacy_group_count) = legacy_migration::validate_workspace_legacy_disposition(&root)?;
+   match args.first().map(String::as_str)
+   {
+      Some("validate") if args.len() == 1 =>
+      {
+         println!("compare-ui benchmark-spec v1 contracts OK: {} budgets, Apple PR plan {}, macOS detection {} ({} expectations/{} cases), 1 acquisition expansion, 1 pinned font pack, {}/{} Apple PR scenario contracts and {} runnable adapter vertical scenarios, 1 scenario schema fixture, {} legacy methods in {} reviewed groups", budgets.len(), apple_pr_plan_sha256(&apple_pr_plan)?, detection_coverage_sha256(&macos_detection_coverage)?, macos_detection_coverage.expectations.len(), macos_detection_coverage.expected_case_count, apple_pr_scenarios.len(), apple_pr_acquisition.selected_scenario_ids.len(), vertical_scenarios.len(), legacy_method_count, legacy_group_count);
+         Ok(())
+      }
+      Some("plan") => compare_ui_plan(&args[1..], &budgets, &apple_pr_plan, &apple_pr_acquisition, &macos_detection_coverage),
+      Some("self-test") if args.len() == 1 => compare_ui_self_test(&root, &apple_pr_scenarios),
+      Some("run") => compare_ui_run(&args[1..], &budgets),
+      Some("rapid") => compare_ui_rapid(&args[1..]),
+      Some("build") => compare_ui_build(&root, &args[1..]),
+      Some("capture-release-candidates") => compare_ui_capture_release_candidates(&root, &args[1..]),
+      Some("materialize-macos-deep-attribution") => compare_ui_materialize_macos_deep_attribution(&args[1..]),
+      Some("materialize-macos-analyzer") => compare_ui_materialize_macos_analyzer(&args[1..]),
+      Some("analyze") => compare_ui_analyze(&args[1..]),
+      Some("render") => compare_ui_render(&args[1..]),
+      Some("reduce-visual") => compare_ui_reduce_visual(&args[1..]),
+      Some("compare-static-exact") => compare_ui_compare_static_exact(&args[1..]),
+      Some("compare-apple-correctness") => compare_ui_compare_apple_correctness(&args[1..]),
+      Some("finalize-apple-transport") => apple_comparison::finalize_apple_transport_cli(&args[1..]),
+      Some("calibrate-density") => compare_ui_calibrate_density(&args[1..]),
+      Some("calibrate-presentation") => compare_ui_calibrate_presentation(&args[1..]),
+      Some(command) => bail!("unknown compare-ui command `{}`", command),
+      None => bail!("compare-ui campaign acquisition is not implemented yet; use `compare-ui validate` or `compare-ui plan`")
+   }
+}
+
+fn compare_ui_materialize_macos_analyzer(args: &[String]) -> Result<()>
+{
+   let mut campaign_root = None;
+   let mut plan = None;
+   let mut output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--campaign-root" =>
+         {
+            index += 1;
+            campaign_root = Some(PathBuf::from(args.get(index).context("--campaign-root requires a directory")?));
+         }
+         "--plan" =>
+         {
+            index += 1;
+            plan = Some(PathBuf::from(args.get(index).context("--plan requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a directory")?));
+         }
+         other => bail!("unknown compare-ui materialize-macos-analyzer argument `{}`", other),
+      }
+      index += 1;
+   }
+   let campaign_root = campaign_root.context("compare-ui materialize-macos-analyzer requires --campaign-root")?;
+   let plan = plan.context("compare-ui materialize-macos-analyzer requires --plan")?;
+   let output = output.context("compare-ui materialize-macos-analyzer requires --out")?;
+   let manifest = materialize_macos_analyzer_bundle(&campaign_root, &plan, &output)?;
+   println!("compare-ui macOS analyzer bundle: sessions={} output={}", manifest.session_count.0, output.display());
+   Ok(())
+}
+
+fn compare_ui_capture_release_candidates(root: &Path, args: &[String]) -> Result<()>
+{
+   let mut platform = None;
+   let mut build_manifest = None;
+   let mut output = None;
+   let mut promoted_output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            platform = Some(args.get(index).context("--platform requires macos")?.as_str());
+         }
+         "--build-manifest" =>
+         {
+            index += 1;
+            build_manifest = Some(PathBuf::from(args.get(index).context("--build-manifest requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         "--promoted-spec-root" =>
+         {
+            index += 1;
+            promoted_output = Some(PathBuf::from(args.get(index).context("--promoted-spec-root requires a path")?));
+         }
+         other => bail!("unknown compare-ui capture-release-candidates argument `{}`", other),
+      }
+      index += 1;
+   }
+   ensure!(platform == Some("macos"), "compare-ui release-candidate capture is currently macOS-only");
+   let config = MacOsReleaseCandidateCaptureConfig {
+      build_manifest_path: build_manifest.context("compare-ui capture-release-candidates requires --build-manifest")?,
+      capture_plan_path: root.join("benchmarks/comparative/specs/v1/plans/macos-release-candidate-capture.json"),
+      spec_root: root.join("benchmarks/comparative/specs/v1"),
+      output_root: output.context("compare-ui capture-release-candidates requires --out")?,
+      promoted_spec_root: promoted_output.context("compare-ui capture-release-candidates requires --promoted-spec-root")?,
+   };
+   let report = capture_macos_release_candidates(&config)?;
+   println!(
+      "compare-ui macOS release-candidate capture: scenarios={} checkpoints={} evidence={} promoted={}",
+      report.captured_scenario_ids.len(),
+      report.captured_checkpoint_count,
+      config.output_root.display(),
+      config.promoted_spec_root.display(),
+   );
+   Ok(())
+}
+
+fn compare_ui_materialize_macos_deep_attribution(args: &[String]) -> Result<()>
+{
+   let mut gpu_config = None;
+   let mut output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--gpu-config" =>
+         {
+            index += 1;
+            gpu_config = Some(PathBuf::from(args.get(index).context("--gpu-config requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         other => bail!("unknown compare-ui materialize-macos-deep-attribution argument `{}`", other),
+      }
+      index += 1;
+   }
+   let gpu_config = gpu_config.context("compare-ui materialize-macos-deep-attribution requires --gpu-config")?;
+   let output = output.context("compare-ui materialize-macos-deep-attribution requires --out")?;
+   let configurations: Vec<MacOsGpuCounterConfiguration> = serde_json::from_slice(&fs::read(&gpu_config).with_context(|| format!("reading {}", gpu_config.display()))?).with_context(|| format!("decoding {}", gpu_config.display()))?;
+   let plan = materialize_macos_full_attribution_plan(configurations)?;
+   let bytes = canonical_macos_full_attribution_plan_json(&plan)?;
+   write_atomic_file(&bytes, &output)?;
+   println!("compare-ui macOS deep-attribution plan: replays={} sessions={} unavailable_gpu_configurations={} hard={}s output={}", plan.replays.len(), plan.replays.len() as u64 * u64::from(plan.replays[0].pair_count) * 2, plan.gpu_counter_configurations.iter().filter(|configuration| configuration.availability != oxide_benchmark_spec::MacOsAttributionAvailability::Available).count(), plan.budget.hard_total_seconds, output.display());
+   Ok(())
+}
+
+fn compare_ui_calibrate_presentation(args: &[String]) -> Result<()>
+{
+   let (input, output) = comparison_calibration_paths(args, "calibrate-presentation")?;
+   let input_bytes = fs::read(&input).with_context(|| format!("reading {}", input.display()))?;
+   let evidence: InstrumentationCalibrationInput = serde_json::from_slice(&input_bytes).with_context(|| format!("parsing {}", input.display()))?;
+   ensure!(canonical_instrumentation_calibration_input_json(&evidence)? == input_bytes, "presentation-calibration input is not canonical JSON");
+   let report = reduce_instrumentation_calibration(&evidence)?;
+   let encoded = serde_json::to_vec_pretty(&report).context("encoding presentation-calibration report")?;
+   write_atomic_file(&encoded, &output)?;
+   println!("compare-ui presentation calibration: accepted={} pairs={} output={}", report.accepted, report.pair_count, output.display());
+   Ok(())
+}
+
+fn compare_ui_calibrate_density(args: &[String]) -> Result<()>
+{
+   if args.iter().any(|argument| argument == "--input" || argument == "--output")
+   {
+      let (input, output) = comparison_calibration_paths(args, "calibrate-density")?;
+      let evidence: DensityCalibrationInput = serde_json::from_slice(&fs::read(&input).with_context(|| format!("reading {}", input.display()))?).with_context(|| format!("parsing {}", input.display()))?;
+      let report = reduce_density_calibration(&evidence)?;
+      let encoded = serde_json::to_vec_pretty(&report).context("encoding density-calibration report")?;
+      write_atomic_file(&encoded, &output)?;
+      println!("compare-ui density calibration reduction: selected_pack={} selected_size={} output={}", report.selected_pack_id.as_deref().unwrap_or("none"), report.selected_pack_size.map(|size| size.to_string()).unwrap_or_else(|| "none".into()), output.display());
+      return Ok(());
+   }
+   let mut platform = None;
+   let mut plan = None;
+   let mut driver = None;
+   let mut output = None;
+   let mut resume = false;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            platform = Some(args.get(index).context("--platform requires macos")?.as_str());
+         }
+         "--plan" =>
+         {
+            index += 1;
+            plan = Some(PathBuf::from(args.get(index).context("--plan requires a path")?));
+         }
+         "--driver" =>
+         {
+            index += 1;
+            driver = Some(PathBuf::from(args.get(index).context("--driver requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         "--resume" => resume = true,
+         other => bail!("unknown compare-ui calibrate-density argument `{}`", other),
+      }
+      index += 1;
+   }
+   ensure!(platform == Some("macos"), "compare-ui density acquisition currently requires --platform macos");
+   let output = output.context("compare-ui calibrate-density requires --out")?;
+   let report = acquire_macos_density(
+      &plan.context("compare-ui calibrate-density requires --plan")?,
+      &driver.context("compare-ui calibrate-density requires --driver")?,
+      &output,
+      resume,
+   )?;
+   println!("compare-ui macOS density acquisition: candidates={} pairs_per_candidate={} selected_pack={} selected_size={} output={}", report.candidate_sizes.len(), report.pair_count_per_candidate, report.selected_pack_id.as_deref().unwrap_or("none"), report.selected_pack_size.map(|size| size.to_string()).unwrap_or_else(|| "none".into()), output.display());
+   Ok(())
+}
+
+fn comparison_calibration_paths(args: &[String], command: &str) -> Result<(PathBuf, PathBuf)>
+{
+   let mut input = None;
+   let mut output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--input" =>
+         {
+            index += 1;
+            input = Some(PathBuf::from(args.get(index).context("--input requires a path")?));
+         }
+         "--output" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--output requires a path")?));
+         }
+         other => bail!("unknown compare-ui {} argument `{}`", command, other),
+      }
+      index += 1;
+   }
+   let input = input.with_context(|| format!("compare-ui {} requires --input", command))?;
+   let output = output.with_context(|| format!("compare-ui {} requires --output", command))?;
+   Ok((input, output))
+}
+
+fn compare_ui_self_test(root: &Path, scenarios: &[(PathBuf, oxide_benchmark_spec::ScenarioSpec)]) -> Result<()>
+{
+   let scenario = scenarios.iter().find(|(_, scenario)| scenario.id == "feed.variable-scroll").context("self-test has no feed scenario")?;
+   let checkpoint = scenario.1.parity_checkpoints.first().context("self-test feed scenario has no parity checkpoint")?;
+   let spec_root = root.join("benchmarks/comparative/specs/v1");
+   let image = fs::read(spec_root.join(&checkpoint.screenshot.path)).context("reading self-test screenshot")?;
+   let layout = fs::read(spec_root.join(&scenario.1.scene.layout_assertions.path)).context("reading self-test layout")?;
+   let identical = compare_exact_static_pngs(&image, &image, &layout, 3)?;
+   ensure!(identical.accepted && identical.differing_pixel_count == 0 && identical.differing_channel_count == 0, "exact static self-test rejected identical canonical pixels");
+   let calibrated_identical = compare_calibrated_static_pngs(&image, &image, &layout, 3, CalibratedStaticVisualThresholds::default())?;
+   ensure!(calibrated_identical.accepted, "calibrated static self-test rejected identical canonical pixels");
+   let alternate_scenario = scenarios.iter().find(|(_, scenario)| scenario.id == "dashboard.mixed-static").context("self-test has no dashboard scenario")?;
+   let alternate_checkpoint = alternate_scenario.1.parity_checkpoints.first().context("self-test dashboard scenario has no parity checkpoint")?;
+   let changed = fs::read(spec_root.join(&alternate_checkpoint.screenshot.path)).context("reading alternate self-test screenshot")?;
+   let mismatch = compare_exact_static_pngs(&image, &changed, &layout, 3)?;
+   ensure!(!mismatch.accepted && mismatch.differing_pixel_count > 0 && mismatch.differing_channel_count > 0, "exact static self-test did not reject changed canonical pixels");
+   let calibrated_mismatch = compare_calibrated_static_pngs(&image, &changed, &layout, 3, CalibratedStaticVisualThresholds::default())?;
+   ensure!(!calibrated_mismatch.accepted, "calibrated static self-test did not reject a changed frame");
+
+   let order = balanced_pair_order(0x5eed, 12);
+   ensure!(order == balanced_pair_order(0x5eed, 12), "balanced pair order is not deterministic");
+   ensure!(order.iter().filter(|side| **side == PairOrder::Ab).count() == 6, "balanced pair order does not contain six AB pairs");
+   ensure!(order.iter().filter(|side| **side == PairOrder::Ba).count() == 6, "balanced pair order does not contain six BA pairs");
+
+   let lower = normalized_pair_effect(8.0, 10.0, MetricDirection::LowerIsBetter, PairEffectKind::StrictlyPositiveRatio)?;
+   let higher = normalized_pair_effect(120.0, 100.0, MetricDirection::HigherIsBetter, PairEffectKind::StrictlyPositiveRatio)?;
+   ensure!(lower < 0.0 && higher < 0.0, "direction-normalized effects do not make an Oxide win negative");
+   let exact = exact_sign_test(&vec![-0.10; 12], -0.05, DecisionAlternative::Lower)?;
+   ensure!(exact.numerator == "1" && exact.denominator == "4096", "exact sign-test release vector changed");
+
+   let pairs = vec![
+      PairedSessionSamples {oxide: vec![8.0, 8.1, 7.9, 8.0], reference: vec![10.0, 10.1, 9.9, 10.0]},
+      PairedSessionSamples {oxide: vec![7.8, 8.0, 8.2, 8.0], reference: vec![9.8, 10.0, 10.2, 10.0]},
+      PairedSessionSamples {oxide: vec![8.1, 8.0, 7.9, 8.0], reference: vec![10.1, 10.0, 9.9, 10.0]},
+      PairedSessionSamples {oxide: vec![7.9, 8.0, 8.1, 8.0], reference: vec![9.9, 10.0, 10.1, 10.0]},
+   ];
+   let first = hierarchical_block_bootstrap_ci(&pairs, MetricDirection::LowerIsBetter, PairEffectKind::StrictlyPositiveRatio, WithinSessionEstimator::P95, 2, 0x1234, 2_000)?;
+   let second = hierarchical_block_bootstrap_ci(&pairs, MetricDirection::LowerIsBetter, PairEffectKind::StrictlyPositiveRatio, WithinSessionEstimator::P95, 2, 0x1234, 2_000)?;
+   ensure!(first == second && first[1] < 0.0, "whole-pair block bootstrap is not deterministic or lost the known improvement");
+
+   let hard_failure = classify_comparison(true, true, 0.05, ClassificationEvidence {
+      oxide_superiority_adjusted_p: Some(0.001),
+      reference_superiority_adjusted_p: None,
+      equivalence_lower_adjusted_p: None,
+      equivalence_upper_adjusted_p: None,
+   })?;
+   ensure!(hard_failure == ComparisonClassification::HardFailureNoPerformanceClaim, "hard outcome produced a performance classification");
+
+   println!("compare-ui deterministic self-tests OK: exact diagnostics, calibrated identity and changed-frame rejection, 12 balanced pairs, both metric directions, exact sign-test vector, whole-pair block bootstrap, and hard-failure classification");
+   Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompareUiBuildManifest
+{
+   schema_version: u32,
+   platform: String,
+   configuration: String,
+   architecture: String,
+   workspace_git_head: String,
+   workspace_status_sha256: String,
+   benchmark_source_manifest_sha256: String,
+   specification_manifest_sha256: String,
+   xcode_version: String,
+   swift_version: String,
+   rust_version: String,
+   build_command_sha256: String,
+   controller: CompareUiBuildController,
+   products: Vec<CompareUiBuildProduct>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompareUiBuildController
+{
+   scheme: String,
+   xctestrun_path: String,
+   xctestrun_sha256: String,
+   runner_bundle_path: String,
+   runner_bundle_manifest_sha256: String,
+   runner_bundle_file_count: u64,
+   runner_bundle_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompareUiBuildProduct
+{
+   implementation_id: String,
+   scheme: String,
+   bundle_path: String,
+   executable_path: String,
+   executable_sha256: String,
+   bundle_manifest_sha256: String,
+   bundle_file_count: u64,
+   bundle_bytes: u64,
+}
+
+fn compare_ui_build(root: &Path, args: &[String]) -> Result<()>
+{
+   let mut platform = None;
+   let mut output = None;
+   let mut build_root = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            platform = Some(args.get(index).context("--platform requires ios, macos, or web")?.as_str());
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         "--build-root" =>
+         {
+            index += 1;
+            build_root = Some(PathBuf::from(args.get(index).context("--build-root requires an absolute path")?));
+         }
+         other => bail!("unknown compare-ui build argument `{}`", other),
+      }
+      index += 1;
+   }
+   let platform = platform.context("compare-ui build requires --platform")?;
+   ensure!(platform == "macos", "compare-ui build currently implements macOS first; `{}` remains pending in the required macOS -> web -> iOS order", platform);
+   let output = output.unwrap_or_else(|| PathBuf::from("/tmp/oxide-comparison-build-macos.json"));
+   let requested_build_root = build_root.unwrap_or_else(|| PathBuf::from("/private/tmp/oxide-comparison-build-macos"));
+   ensure!(requested_build_root.is_absolute(), "compare-ui macOS build root must be absolute");
+   let workspace_root = fs::canonicalize(root).context("resolving production workspace root")?;
+   let build_root = if requested_build_root.exists()
+   {
+      ensure!(requested_build_root.is_dir(), "compare-ui macOS build root exists but is not a directory");
+      fs::canonicalize(&requested_build_root).context("resolving compare-ui macOS build root")?
+   }
+   else
+   {
+      let parent = requested_build_root.parent().context("compare-ui macOS build root has no parent")?;
+      ensure!(parent.is_dir(), "compare-ui macOS build-root parent must already exist");
+      fs::canonicalize(parent).context("resolving compare-ui macOS build-root parent")?
+         .join(requested_build_root.file_name().context("compare-ui macOS build root has no final component")?)
+   };
+   ensure!(!build_root.starts_with(&workspace_root), "compare-ui macOS build root must remain outside the production workspace");
+   let project_root = root.join("host/apple-comparison");
+   let common_args = [
+      String::from("-project"),
+      String::from("AppleComparison.xcodeproj"),
+      String::from("-configuration"),
+      String::from("Release"),
+      String::from("-destination"),
+      String::from("platform=macOS,arch=arm64"),
+      String::from("ONLY_ACTIVE_ARCH=YES"),
+      format!("SYMROOT={}", build_root.display()),
+      format!("OBJROOT={}", build_root.display()),
+      String::from("build-for-testing"),
+   ];
+   let mut command_args = vec![String::from("-scheme"), String::from("MacOSComparisonController")];
+   command_args.extend(common_args.iter().cloned());
+   let status = compare_ui_run_bounded_xcodebuild(&project_root, &command_args, &build_root)?;
+   ensure!(status.success(), "macOS comparison build-for-testing failed with status {}", status);
+   let invocations = vec![command_args];
+
+   let xctestrun_path = compare_ui_macos_xctestrun(&build_root)?;
+   let xctestrun_sha256 = compare_ui_sha256(&fs::read(&xctestrun_path).with_context(|| format!("reading {}", xctestrun_path.display()))?);
+   let runner_bundle_path = build_root.join("Release/MacOSComparisonControllerUITests-Runner.app");
+   ensure!(runner_bundle_path.is_dir(), "xcodebuild did not produce {}", runner_bundle_path.display());
+   let (runner_bundle_manifest_sha256, runner_bundle_file_count, runner_bundle_bytes) = comparison_tree_manifest(&runner_bundle_path, false)?;
+   let controller = CompareUiBuildController {
+      scheme: String::from("MacOSComparisonController"),
+      xctestrun_path: xctestrun_path.to_string_lossy().into_owned(),
+      xctestrun_sha256,
+      runner_bundle_path: runner_bundle_path.to_string_lossy().into_owned(),
+      runner_bundle_manifest_sha256,
+      runner_bundle_file_count,
+      runner_bundle_bytes,
+   };
+
+   let products = [
+      ("native.production", "AppKitComparison", "AppKitBenchMacOS.app", "AppKitBenchMacOS"),
+      ("oxide.production", "OxideMacComparison", "OxideBenchMacOS.app", "OxideBenchMacOS"),
+   ].into_iter().map(|(implementation_id, scheme, bundle_name, executable_name)| -> Result<CompareUiBuildProduct> {
+      let bundle = build_root.join("Release").join(bundle_name);
+      let executable = bundle.join("Contents/MacOS").join(executable_name);
+      ensure!(bundle.is_dir() && executable.is_file(), "xcodebuild did not produce {}", bundle.display());
+      let executable_bytes = fs::read(&executable).with_context(|| format!("reading {}", executable.display()))?;
+      let (bundle_manifest_sha256, bundle_file_count, bundle_bytes) = comparison_tree_manifest(&bundle, false)?;
+      Ok(CompareUiBuildProduct {
+         implementation_id: String::from(implementation_id),
+         scheme: String::from(scheme),
+         bundle_path: bundle.to_string_lossy().into_owned(),
+         executable_path: executable.to_string_lossy().into_owned(),
+         executable_sha256: compare_ui_sha256(&executable_bytes),
+         bundle_manifest_sha256,
+         bundle_file_count,
+         bundle_bytes,
+      })
+   }).collect::<Result<Vec<_>>>()?;
+   let git_head = compare_ui_command_stdout(root, "git", &["rev-parse", "HEAD"])?;
+   let git_status = Command::new("git").current_dir(root).args(["status", "--porcelain=v1", "--untracked-files=all"]).output().context("reading workspace Git status")?;
+   ensure!(git_status.status.success(), "git status failed with status {}", git_status.status);
+   let (benchmark_source_manifest_sha256, _, _) = comparison_tree_manifest(&project_root, true)?;
+   let (specification_manifest_sha256, _, _) = comparison_tree_manifest(&root.join("benchmarks/comparative/specs/v1"), false)?;
+   let manifest = CompareUiBuildManifest {
+      schema_version: 2,
+      platform: String::from("macos"),
+      configuration: String::from("Release"),
+      architecture: String::from("arm64"),
+      workspace_git_head: git_head.trim().to_owned(),
+      workspace_status_sha256: compare_ui_sha256(&git_status.stdout),
+      benchmark_source_manifest_sha256,
+      specification_manifest_sha256,
+      xcode_version: compare_ui_command_stdout(root, "xcodebuild", &["-version"])?.trim().replace('\n', "; "),
+      swift_version: compare_ui_command_stdout(root, "swiftc", &["--version"])?.trim().replace('\n', "; "),
+      rust_version: compare_ui_command_stdout(root, "rustc", &["-Vv"])?.trim().replace('\n', "; "),
+      build_command_sha256: compare_ui_sha256(&serde_json::to_vec(&invocations).context("encoding comparison build commands")?),
+      controller,
+      products,
+   };
+   write_atomic_file(&serde_json::to_vec_pretty(&manifest).context("encoding comparison build manifest")?, &output)?;
+   println!("macOS comparison Release products and controller built in one build-for-testing; identity manifest: {}", output.display());
+   Ok(())
+}
+
+fn compare_ui_run_bounded_xcodebuild(project_root: &Path, arguments: &[String], build_root: &Path) -> Result<ExitStatus>
+{
+   compare_ui_claim_build_root(build_root)?;
+   compare_ui_enforce_build_root_limit(build_root, None)?;
+   let mut command = Command::new("xcodebuild");
+   command.current_dir(project_root).args(arguments).process_group(0);
+   let mut child = command.spawn().context("launching the single frozen macOS build-for-testing")?;
+   let process_group = child.id();
+   let mut next_size_check = Instant::now();
+   loop
+   {
+      if let Some(status) = child.try_wait().context("polling the frozen macOS build-for-testing")?
+      {
+         compare_ui_enforce_build_root_limit(build_root, None)?;
+         return Ok(status);
+      }
+      if Instant::now() >= next_size_check
+      {
+         if let Err(error) = compare_ui_enforce_build_root_limit(build_root, Some(process_group))
+         {
+            let _ = child.wait();
+            return Err(error);
+         }
+         next_size_check = Instant::now() + Duration::from_secs(1);
+      }
+      thread::sleep(Duration::from_millis(100));
+   }
+}
+
+fn compare_ui_claim_build_root(build_root: &Path) -> Result<()>
+{
+   fs::create_dir_all(build_root).with_context(|| format!("creating compare-ui Xcode build root {}", build_root.display()))?;
+   let marker = build_root.join(COMPARE_UI_XCODE_BUILD_ROOT_MARKER);
+   let expected = b"oxide compare-ui owned Xcode build root v1\n";
+   if marker.is_file()
+   {
+      ensure!(fs::read(&marker).with_context(|| format!("reading {}", marker.display()))? == expected, "compare-ui Xcode build-root ownership marker is invalid: {}", marker.display());
+      return Ok(());
+   }
+   ensure!(fs::read_dir(build_root).with_context(|| format!("reading {}", build_root.display()))?.next().is_none(), "compare-ui refuses a nonempty unowned Xcode build root: {}", build_root.display());
+   fs::write(&marker, expected).with_context(|| format!("writing {}", marker.display()))?;
+   Ok(())
+}
+
+fn compare_ui_enforce_build_root_limit(build_root: &Path, process_group: Option<u32>) -> Result<()>
+{
+   let output = Command::new("/usr/bin/du").args(["-sk", build_root.to_str().context("compare-ui Xcode build root path is not UTF-8")?]).output().context("measuring compare-ui Xcode build root")?;
+   ensure!(output.status.success(), "measuring compare-ui Xcode build root failed with {}", output.status);
+   let kibibytes = String::from_utf8(output.stdout).context("compare-ui Xcode build-root size is not UTF-8")?.split_whitespace().next().context("compare-ui Xcode build-root size is empty")?.parse::<u64>().context("parsing compare-ui Xcode build-root size")?;
+   let bytes = kibibytes.checked_mul(1_024).context("compare-ui Xcode build-root size overflow")?;
+   if bytes <= COMPARE_UI_XCODE_BUILD_ROOT_LIMIT_BYTES
+   {
+      return Ok(());
+   }
+   if let Some(process_group) = process_group
+   {
+      let group = format!("-{}", process_group);
+      let _ = Command::new("/bin/kill").args(["-TERM", &group]).status();
+      thread::sleep(Duration::from_millis(250));
+      let _ = Command::new("/bin/kill").args(["-KILL", &group]).status();
+   }
+   fs::remove_dir_all(build_root).with_context(|| format!("cleaning oversized compare-ui Xcode build root {}", build_root.display()))?;
+   bail!("compare-ui Xcode build root exceeded the 4 GiB limit ({} bytes); the owned root was removed", bytes)
+}
+
+fn compare_ui_macos_xctestrun(build_root: &Path) -> Result<PathBuf>
+{
+   let mut matches = fs::read_dir(build_root)
+      .with_context(|| format!("reading {}", build_root.display()))?
+      .filter_map(std::result::Result::ok)
+      .map(|entry| entry.path())
+      .filter(|path| {
+         path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+            name.starts_with("MacOSComparisonController_") && name.ends_with(".xctestrun")
+         })
+      })
+      .collect::<Vec<_>>();
+   matches.sort();
+   if matches.len() != 1
+   {
+      bail!("expected exactly one MacOSComparisonController xctestrun under {}, observed {}", build_root.display(), matches.len());
+   }
+   Ok(matches.remove(0))
+}
+
+fn compare_ui_command_stdout(root: &Path, program: &str, args: &[&str]) -> Result<String>
+{
+   let output = Command::new(program).current_dir(root).args(args).output().with_context(|| format!("launching {}", program))?;
+   ensure!(output.status.success(), "{} failed with status {}", program, output.status);
+   String::from_utf8(output.stdout).with_context(|| format!("{} output is not UTF-8", program))
+}
+
+fn compare_ui_sha256(bytes: &[u8]) -> String
+{
+   format!("{:x}", Sha256::digest(bytes))
+}
+
+fn compare_ui_analyze(args: &[String]) -> Result<()>
+{
+   let mut input = None;
+   let mut output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--input" =>
+         {
+            index += 1;
+            input = Some(PathBuf::from(args.get(index).context("--input requires a directory")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         other => bail!("unknown compare-ui analyze argument `{}`", other),
+      }
+      index += 1;
+   }
+   let input = input.context("compare-ui analyze requires --input")?;
+   let output = output.context("compare-ui analyze requires --out")?;
+   let report = analyze_comparison_bundle(&input)?;
+   let encoded = serde_json::to_vec_pretty(&report).context("encoding comparison report")?;
+   write_atomic_file(&encoded, &output)?;
+   println!("comparison analysis report: {} cells={} ledger_rows={} backlog_rows={}", output.display(), report.cells.len(), report.superiority_ledger.len(), report.optimization_backlog.len());
+   Ok(())
+}
+
+fn compare_ui_render(args: &[String]) -> Result<()>
+{
+   let mut report = None;
+   let mut output = None;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--report" =>
+         {
+            index += 1;
+            report = Some(PathBuf::from(args.get(index).context("--report requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         other => bail!("unknown compare-ui render argument `{}`", other),
+      }
+      index += 1;
+   }
+   let report_path = report.context("compare-ui render requires --report")?;
+   let bytes = fs::read(&report_path).with_context(|| format!("reading comparison report {}", report_path.display()))?;
+   let report: ComparisonReport = serde_json::from_slice(&bytes).with_context(|| format!("decoding comparison report {}", report_path.display()))?;
+   ensure!(report.schema_version == oxide_perf_runner::comparison_report::COMPARISON_REPORT_SCHEMA_VERSION, "unsupported comparison report schema version {}", report.schema_version);
+   ensure!(report.analyzer_version == oxide_perf_runner::comparison_report::COMPARISON_ANALYZER_VERSION, "unsupported comparison analyzer version {}", report.analyzer_version);
+   let markdown = render_comparison_report_markdown(&report);
+   if let Some(output) = output
+   {
+      write_atomic_file(markdown.as_bytes(), &output)?;
+      println!("comparison Markdown report: {}", output.display());
+   }
+   else
+   {
+      print!("{}", markdown);
+   }
+   Ok(())
+}
+
+fn compare_ui_compare_static_exact(args: &[String]) -> Result<()>
+{
+   let mut oxide = None;
+   let mut uikit = None;
+   let mut layout = None;
+   let mut canonical_scale = None;
+   let mut output = None;
+   let mut diagnostic = false;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--oxide" =>
+         {
+            index += 1;
+            oxide = Some(PathBuf::from(args.get(index).context("--oxide requires a path")?));
+         }
+         "--uikit" =>
+         {
+            index += 1;
+            uikit = Some(PathBuf::from(args.get(index).context("--uikit requires a path")?));
+         }
+         "--layout" =>
+         {
+            index += 1;
+            layout = Some(PathBuf::from(args.get(index).context("--layout requires a path")?));
+         }
+         "--canonical-scale" =>
+         {
+            index += 1;
+            canonical_scale = Some(args.get(index).context("--canonical-scale requires a positive integer")?.parse::<u32>().context("--canonical-scale must be a positive integer")?);
+         }
+         "--output" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--output requires a path")?));
+         }
+         "--diagnostic" => diagnostic = true,
+         other => bail!("unknown compare-ui compare-static-exact argument `{}`", other),
+      }
+      index += 1;
+   }
+
+   let oxide = oxide.context("compare-ui compare-static-exact requires --oxide")?;
+   let uikit = uikit.context("compare-ui compare-static-exact requires --uikit")?;
+   let layout = layout.context("compare-ui compare-static-exact requires --layout")?;
+   let canonical_scale = canonical_scale.context("compare-ui compare-static-exact requires --canonical-scale")?;
+   let oxide_png = fs::read(&oxide).with_context(|| format!("reading Oxide PNG {}", oxide.display()))?;
+   let uikit_png = fs::read(&uikit).with_context(|| format!("reading UIKit PNG {}", uikit.display()))?;
+   let layout_json = fs::read(&layout).with_context(|| format!("reading visual layout {}", layout.display()))?;
+   let report = compare_exact_static_pngs(&oxide_png, &uikit_png, &layout_json, canonical_scale)?;
+   let report_json = serde_json::to_vec_pretty(&report).context("encoding exact static visual parity report")?;
+   if let Some(output) = output.as_ref()
+   {
+      write_atomic_file(&report_json, output)?;
+      println!("exact static visual parity report: {} accepted={}", output.display(), report.accepted);
+   }
+   else
+   {
+      println!("{}", String::from_utf8(report_json).context("exact static visual parity report is not UTF-8")?);
+   }
+   if !report.accepted && !diagnostic
+   {
+      bail!("exact static visual parity rejected: differing_pixels={} differing_channels={} maximum_channel_delta={}", report.differing_pixel_count, report.differing_channel_count, report.maximum_channel_delta);
+   }
+   Ok(())
+}
+
+fn compare_ui_compare_apple_correctness(args: &[String]) -> Result<()>
+{
+   let mut oxide_root = None;
+   let mut native_root = None;
+   let mut spec_root = None;
+   let mut pack_id = None;
+   let mut output = None;
+   let mut diagnostic = false;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--oxide-root" =>
+         {
+            index += 1;
+            oxide_root = Some(PathBuf::from(args.get(index).context("--oxide-root requires a path")?));
+         }
+         "--native-root" =>
+         {
+            index += 1;
+            native_root = Some(PathBuf::from(args.get(index).context("--native-root requires a path")?));
+         }
+         "--spec-root" =>
+         {
+            index += 1;
+            spec_root = Some(PathBuf::from(args.get(index).context("--spec-root requires a path")?));
+         }
+         "--pack" =>
+         {
+            index += 1;
+            pack_id = Some(args.get(index).context("--pack requires an id")?.clone());
+         }
+         "--output" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--output requires a path")?));
+         }
+         "--diagnostic" => diagnostic = true,
+         other => bail!("unknown compare-ui compare-apple-correctness argument `{}`", other),
+      }
+      index += 1;
+   }
+   let oxide_root = oxide_root.context("compare-ui compare-apple-correctness requires --oxide-root")?;
+   let native_root = native_root.context("compare-ui compare-apple-correctness requires --native-root")?;
+   let spec_root = spec_root.context("compare-ui compare-apple-correctness requires --spec-root")?;
+   let output = output.context("compare-ui compare-apple-correctness requires --output")?;
+   let report = compare_apple_correctness_evidence(&oxide_root, &native_root, &spec_root, pack_id.as_deref(), &output)?;
+   println!("Apple correctness calibrated-static matrix: {} accepted={} accepted_checkpoints={} rejected_checkpoints={}", output.display(), report.accepted, report.accepted_checkpoint_count, report.rejected_checkpoint_count);
+   if !report.accepted && !diagnostic
+   {
+      bail!("Apple correctness calibrated-static matrix rejected {} checkpoints", report.rejected_checkpoint_count);
+   }
+   Ok(())
+}
+
+fn compare_ui_reduce_visual(args: &[String]) -> Result<()>
+{
+   let mut reference = None;
+   let mut candidate = None;
+   let mut layout = None;
+   let mut canonical_scale = None;
+   let mut text_geometry = None;
+   let mut output = None;
+   let mut calibrated = false;
+   let mut diagnostic = false;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--reference" =>
+         {
+            index += 1;
+            reference = Some(PathBuf::from(args.get(index).context("--reference requires a path")?));
+         }
+         "--candidate" =>
+         {
+            index += 1;
+            candidate = Some(PathBuf::from(args.get(index).context("--candidate requires a path")?));
+         }
+         "--layout" =>
+         {
+            index += 1;
+            layout = Some(PathBuf::from(args.get(index).context("--layout requires a path")?));
+         }
+         "--canonical-scale" =>
+         {
+            index += 1;
+            canonical_scale = Some(args.get(index).context("--canonical-scale requires a positive integer")?.parse::<u32>().context("--canonical-scale must be a positive integer")?);
+         }
+         "--text-geometry" =>
+         {
+            index += 1;
+            text_geometry = Some(PathBuf::from(args.get(index).context("--text-geometry requires a path")?));
+         }
+         "--output" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--output requires a path")?));
+         }
+         "--calibrated" => calibrated = true,
+         "--diagnostic" => diagnostic = true,
+         other => bail!("unknown compare-ui reduce-visual argument `{}`", other),
+      }
+      index += 1;
+   }
+
+   let reference = reference.context("compare-ui reduce-visual requires --reference")?;
+   let candidate = candidate.context("compare-ui reduce-visual requires --candidate")?;
+   let layout = layout.context("compare-ui reduce-visual requires --layout")?;
+   let canonical_scale = canonical_scale.context("compare-ui reduce-visual requires --canonical-scale")?;
+   let reference_png = fs::read(&reference).with_context(|| format!("reading reference PNG {}", reference.display()))?;
+   let candidate_png = fs::read(&candidate).with_context(|| format!("reading candidate PNG {}", candidate.display()))?;
+   let layout_json = fs::read(&layout).with_context(|| format!("reading visual layout {}", layout.display()))?;
+   ensure!(!calibrated || text_geometry.is_none(), "--calibrated does not accept --text-geometry");
+   let text_geometry = text_geometry.map(|path| -> Result<TextGeometryEvidence> {
+      let bytes = fs::read(&path).with_context(|| format!("reading text geometry {}", path.display()))?;
+      serde_json::from_slice(&bytes).with_context(|| format!("decoding text geometry {}", path.display()))
+   }).transpose()?;
+   let (report_json, accepted, rejection) = if calibrated
+   {
+      let report = compare_calibrated_static_pngs(&reference_png, &candidate_png, &layout_json, canonical_scale, CalibratedStaticVisualThresholds::default())?;
+      (
+         serde_json::to_vec_pretty(&report).context("encoding calibrated visual parity report")?,
+         report.accepted,
+         format!("calibrated visual parity rejected: full_frame_ssim={} stable_interior_differing_ratio={} maximum_voxel_delta={}", report.full_frame.windowed_ssim, report.stable_interior.differing_pixel_ratio, report.voxels.maximum_mean_absolute_channel_delta),
+      )
+   }
+   else
+   {
+      let report = reduce_normalized_png_visual_parity(
+         &reference_png,
+         &candidate_png,
+         &layout_json,
+         canonical_scale,
+         text_geometry.as_ref(),
+         VisualThresholds::default(),
+      )?;
+      (
+         serde_json::to_vec_pretty(&report).context("encoding visual parity report")?,
+         report.accepted,
+         format!("visual parity rejected or pending: non_text_accepted={} text_validation={:?}", report.non_text_accepted, report.text_validation),
+      )
+   };
+   if let Some(output) = output.as_ref()
+   {
+      write_atomic_file(&report_json, output)?;
+      println!("visual parity report: {} accepted={}", output.display(), accepted);
+   }
+   else
+   {
+      println!("{}", String::from_utf8(report_json).context("visual parity report is not UTF-8")?);
+   }
+   if !accepted && !diagnostic
+   {
+      bail!("{rejection}");
+   }
+   Ok(())
+}
+
+fn write_atomic_file(bytes: &[u8], destination: &Path) -> Result<()>
+{
+   let directory = destination.parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+   fs::create_dir_all(directory).with_context(|| format!("creating {}", directory.display()))?;
+   let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).context("system clock precedes Unix epoch")?.as_nanos();
+   let file_name = destination.file_name().and_then(|value| value.to_str()).context("atomic output must have a UTF-8 file name")?;
+   let temporary = directory.join(format!(".{}.{}.{}.tmp", file_name, std::process::id(), timestamp));
+   let result = (|| -> Result<()> {
+      let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary).with_context(|| format!("creating {}", temporary.display()))?;
+      file.write_all(bytes).with_context(|| format!("writing {}", temporary.display()))?;
+      if !bytes.ends_with(b"\n")
+      {
+         file.write_all(b"\n").with_context(|| format!("terminating {}", temporary.display()))?;
+      }
+      file.sync_all().with_context(|| format!("synchronizing {}", temporary.display()))?;
+      fs::rename(&temporary, destination).with_context(|| format!("renaming {} to {}", temporary.display(), destination.display()))?;
+      fs::File::open(directory).with_context(|| format!("opening {}", directory.display()))?.sync_all().with_context(|| format!("synchronizing {}", directory.display()))?;
+      Ok(())
+   })();
+   if result.is_err()
+   {
+      let _ = fs::remove_file(&temporary);
+   }
+   result
+}
+
+fn compare_ui_rapid(args: &[String]) -> Result<()>
+{
+   let mut platform = None;
+   let mut build_manifest = None;
+   let mut spec_root = None;
+   let mut output = None;
+   let mut scenario_id = None;
+   let mut checkpoint_id = None;
+   let mut side = None;
+   let mut mode = None;
+   let mut iterations = 1_u32;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            platform = Some(args.get(index).context("--platform requires macos")?.clone());
+         }
+         "--build-manifest" =>
+         {
+            index += 1;
+            build_manifest = Some(PathBuf::from(args.get(index).context("--build-manifest requires a path")?));
+         }
+         "--spec-root" =>
+         {
+            index += 1;
+            spec_root = Some(PathBuf::from(args.get(index).context("--spec-root requires a directory")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a directory")?));
+         }
+         "--scenario" =>
+         {
+            index += 1;
+            scenario_id = Some(args.get(index).context("--scenario requires an id")?.clone());
+         }
+         "--checkpoint" =>
+         {
+            index += 1;
+            checkpoint_id = Some(args.get(index).context("--checkpoint requires an id")?.clone());
+         }
+         "--side" =>
+         {
+            index += 1;
+            side = Some(match args.get(index).context("--side requires oxide, native, or both")?.as_str()
+            {
+               "oxide" => MacOsRapidSide::Oxide,
+               "native" => MacOsRapidSide::Native,
+               "both" => MacOsRapidSide::Both,
+               other => bail!("unknown compare-ui rapid side `{}`", other),
+            });
+         }
+         "--visual" =>
+         {
+            ensure!(mode.replace(MacOsRapidMode::Visual).is_none(), "compare-ui rapid requires exactly one of --visual or --timing");
+         }
+         "--timing" =>
+         {
+            ensure!(mode.replace(MacOsRapidMode::Timing).is_none(), "compare-ui rapid requires exactly one of --visual or --timing");
+         }
+         "--iterations" =>
+         {
+            index += 1;
+            iterations = args.get(index).context("--iterations requires a count")?.parse().context("invalid --iterations count")?;
+         }
+         other => bail!("unknown compare-ui rapid argument `{}`", other),
+      }
+      index += 1;
+   }
+   ensure!(platform.as_deref() == Some("macos"), "compare-ui rapid currently implements --platform macos");
+   let selected_side = side.context("compare-ui rapid requires --side")?;
+   let selected_mode = mode.context("compare-ui rapid requires exactly one of --visual or --timing")?;
+   let config = MacOsRapidRunConfig {
+      build_manifest_path: build_manifest.context("compare-ui rapid requires --build-manifest")?,
+      spec_root: spec_root.context("compare-ui rapid requires --spec-root")?,
+      output_root: output.context("compare-ui rapid requires --out")?,
+      scenario_id: scenario_id.context("compare-ui rapid requires --scenario")?,
+      checkpoint_id: checkpoint_id.context("compare-ui rapid requires --checkpoint")?,
+      side: selected_side,
+      mode: selected_mode,
+      iterations,
+   };
+   let report = run_macos_rapid(&config)?;
+   println!(
+      "compare-ui rapid macOS: mode={:?} scenario={} checkpoint={} sides={} iterations={} accepted={} output={}",
+      report.mode,
+      report.scenario_id,
+      report.checkpoint_id,
+      report.sides.len(),
+      report.iterations,
+      report.accepted,
+      config.output_root.display(),
+   );
+   if selected_mode == MacOsRapidMode::Visual && selected_side == MacOsRapidSide::Both && !report.accepted
+   {
+      bail!("rapid macOS visual equivalence rejected {}/{}", report.scenario_id, report.checkpoint_id);
+   }
+   Ok(())
+}
+
+fn compare_ui_run(args: &[String], budgets: &[(PathBuf, BudgetSpec)]) -> Result<()>
+{
+   let mut platform = None;
+   let mut plan = None;
+   let mut build_manifest = None;
+   let mut output = None;
+   let mut run_id = None;
+   let mut dry_run = false;
+   let mut capture_presentation_traces = true;
+   let mut correctness_only = false;
+   let mut qualification_only = false;
+   let mut resume = false;
+   let mut energy_meter_config = None;
+   let mut instrumentation_calibration = None;
+   let mut xctrace_template = String::from("Animation Hitches");
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            platform = Some(args.get(index).context("--platform requires macos")?.clone());
+         }
+         "--plan" =>
+         {
+            index += 1;
+            plan = Some(PathBuf::from(args.get(index).context("--plan requires a path")?));
+         }
+         "--build-manifest" =>
+         {
+            index += 1;
+            build_manifest = Some(PathBuf::from(args.get(index).context("--build-manifest requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         "--run-id" =>
+         {
+            index += 1;
+            run_id = Some(args.get(index).context("--run-id requires an id")?.clone());
+         }
+         "--xctrace-template" =>
+         {
+            index += 1;
+            xctrace_template = args.get(index).context("--xctrace-template requires a template name")?.clone();
+         }
+         "--energy-meter-config" =>
+         {
+            index += 1;
+            energy_meter_config = Some(PathBuf::from(args.get(index).context("--energy-meter-config requires a path")?));
+         }
+         "--instrumentation-calibration" =>
+         {
+            index += 1;
+            instrumentation_calibration = Some(PathBuf::from(args.get(index).context("--instrumentation-calibration requires a path")?));
+         }
+         "--dry-run" => dry_run = true,
+         "--correctness-only" => correctness_only = true,
+         "--qualification-only" => qualification_only = true,
+         "--resume" => resume = true,
+         "--no-presentation-traces" => capture_presentation_traces = false,
+         other => bail!("unknown compare-ui run argument `{}`", other),
+      }
+      index += 1;
+   }
+   let plan = plan.context("compare-ui run requires --plan")?;
+   let output = output.context("compare-ui run requires --out")?;
+   let bytes = fs::read(&plan).with_context(|| format!("reading {}", plan.display()))?;
+   let spec_root = plan.parent().and_then(Path::parent).context("compare-ui run plan must be under the spec plans directory")?;
+   let acquisition_path = spec_root.join("acquisition/apple-pr.json");
+   let identity: serde_json::Value = serde_json::from_slice(&bytes).with_context(|| format!("decoding {} identity", plan.display()))?;
+   let tier = identity.get("tier").and_then(serde_json::Value::as_str).context("compare-ui run plan has no tier")?;
+   let mut apple_pr_acquisition = None;
+   let mut generic_plan_and_budget = None;
+   if tier == "pr"
+   {
+      let plan_spec: ApplePrPlanSpec = serde_json::from_slice(&bytes).with_context(|| format!("decoding {}", plan.display()))?;
+      let acquisition_bytes = fs::read(&acquisition_path).with_context(|| format!("reading {}", acquisition_path.display()))?;
+      let acquisition: ApplePrAcquisitionSpec = serde_json::from_slice(&acquisition_bytes).with_context(|| format!("decoding {}", acquisition_path.display()))?;
+      let budget = budgets.iter().find(|(_, budget)| budget.id == plan_spec.id).map(|(_, budget)| budget).context("compare-ui run plan has no matching committed budget")?;
+      validate_apple_pr_plan(spec_root, &plan_spec, &acquisition, budget)?;
+      validate_apple_pr_acquisition(&acquisition, budget)?;
+      apple_pr_acquisition = Some(acquisition);
+   }
+   else
+   {
+      let plan_spec: AppleCampaignPlanSpec = serde_json::from_slice(&bytes).with_context(|| format!("decoding generic Apple campaign plan {}", plan.display()))?;
+      ensure!(canonical_apple_campaign_plan_json(&plan_spec)? == bytes, "compare-ui run generic Apple plan is not canonical benchmark-spec JSON");
+      let budget = compare_ui_generic_plan_budget(&plan_spec, budgets)?;
+      validate_apple_campaign_contract(&plan_spec, &budget)?;
+      validate_runnable_apple_campaign_plan(spec_root, &plan_spec, &budget)?;
+      generic_plan_and_budget = Some((plan_spec, budget));
+   }
+   if dry_run
+   {
+      ensure!(platform.is_none() && build_manifest.is_none() && run_id.is_none() && energy_meter_config.is_none() && instrumentation_calibration.is_none() && !correctness_only && !qualification_only && !resume, "compare-ui dry run does not accept live acquisition arguments");
+      if let Some(acquisition) = apple_pr_acquisition
+      {
+         let expanded = apple_comparison::write_apple_pr_dry_run(&acquisition, &output)?;
+         println!("compare-ui Apple PR dry run: builds={} acquisitions={} session-slots={} hard={}s", expanded.build_for_testing_count, expanded.acquisitions.len(), expanded.session_slots.len(), expanded.hard_total_seconds);
+      }
+      else
+      {
+         let (plan_spec, budget) = generic_plan_and_budget.context("compare-ui generic dry run has no validated plan")?;
+         let resource_path = plan.strip_prefix(spec_root).context("compare-ui generic plan is outside its specification root")?.to_str().context("compare-ui generic plan path is not UTF-8")?;
+         let expanded = build_generic_macos_campaign_plan(&plan_spec, &budget, spec_root, resource_path, "dry-run", &apple_campaign_plan_sha256(&plan_spec)?)?;
+         write_atomic_file(&serde_json::to_vec_pretty(&expanded).context("encoding generic macOS dry-run plan")?, &output)?;
+         println!("compare-ui generic macOS dry run: sessions={} output={}", expanded.sessions.len(), output.display());
+      }
+      return Ok(());
+   }
+
+   ensure!(platform.as_deref() == Some("macos"), "compare-ui live run currently implements macOS first");
+   ensure!(!(correctness_only && qualification_only), "compare-ui macOS run cannot combine --correctness-only and --qualification-only");
+   let config = MacOsCampaignConfig {
+      build_manifest_path: build_manifest.context("compare-ui macOS run requires --build-manifest")?,
+      plan_path: plan,
+      acquisition_path,
+      output_root: output,
+      run_id: run_id.context("compare-ui macOS run requires --run-id")?,
+      capture_presentation_traces: capture_presentation_traces && !qualification_only,
+      xctrace_template,
+      scope: if correctness_only
+      {
+         MacOsCampaignScope::CorrectnessOnly
+      }
+      else if qualification_only
+      {
+         MacOsCampaignScope::QualificationOnly
+      }
+      else
+      {
+         MacOsCampaignScope::Full
+      },
+      resume,
+      require_live_gui_session: true,
+      energy_meter_config_path: energy_meter_config,
+      instrumentation_calibration_path: instrumentation_calibration,
+   };
+   let report = run_macos_campaign(&config)?;
+   println!(
+      "compare-ui macOS campaign: scope={:?} acquisition_complete={} correctness_accepted={} measured_acquisition_eligible={} authoritative_eligible={} sessions={} output={}",
+      report.scope,
+      report.acquisition_complete,
+      report.correctness_accepted,
+      report.correctness_eligible_for_measured_acquisition,
+      report.authoritative_eligible,
+      report.sessions.len(),
+      config.output_root.display(),
+   );
+   Ok(())
+}
+
+fn compare_ui_generic_plan_budget(plan: &AppleCampaignPlanSpec, budgets: &[(PathBuf, BudgetSpec)]) -> Result<BudgetSpec>
+{
+   if let Some((_, budget)) = budgets.iter().find(|(_, budget)| budget.id == plan.budget_id)
+   {
+      return Ok(budget.clone());
+   }
+   ensure!(
+      plan.id == "macos-comparator-qualification"
+         && plan.budget_id == plan.id
+         && plan.platform == ComparisonPlatform::Apple
+         && plan.tier == ComparisonTier::Extended,
+      "compare-ui run generic plan has no matching committed budget",
+   );
+   let component = |target| plan.budget_components.iter()
+      .find(|component| component.component == target)
+      .map(|component| component.occupied_seconds)
+      .unwrap_or(0);
+   let attribution_seconds = component(AppleCampaignBudgetComponent::Attribution);
+   let pre_reserve_seconds = component(AppleCampaignBudgetComponent::CorrectnessInstallPulls)
+      .checked_add(component(AppleCampaignBudgetComponent::PrimaryDynamicPresentation)).context("qualification budget overflow")?
+      .checked_add(component(AppleCampaignBudgetComponent::LaunchOrStartupDelivery)).context("qualification budget overflow")?
+      .checked_add(component(AppleCampaignBudgetComponent::IdleEndurance)).context("qualification budget overflow")?
+      .checked_add(component(AppleCampaignBudgetComponent::Energy)).context("qualification budget overflow")?
+      .checked_add(attribution_seconds).context("qualification budget overflow")?;
+   let reserve_seconds = pre_reserve_seconds.checked_add(4).context("qualification reserve overflow")? / 5;
+   let hard_total_seconds = pre_reserve_seconds.checked_add(reserve_seconds).context("qualification total overflow")?;
+   let budget = BudgetSpec {
+      schema_version: 1,
+      id: plan.id.clone(),
+      platform: ComparisonPlatform::Apple,
+      tier: ComparisonTier::Extended,
+      correctness_install_pulls_seconds: component(AppleCampaignBudgetComponent::CorrectnessInstallPulls),
+      primary_dynamic_presentation_seconds: component(AppleCampaignBudgetComponent::PrimaryDynamicPresentation),
+      launch_or_startup_delivery_seconds: component(AppleCampaignBudgetComponent::LaunchOrStartupDelivery),
+      idle_endurance_seconds: component(AppleCampaignBudgetComponent::IdleEndurance),
+      energy_seconds: component(AppleCampaignBudgetComponent::Energy),
+      attribution_seconds,
+      pre_reserve_seconds,
+      reserve_seconds,
+      hard_total_seconds,
+      campaign_critical_wall_seconds: hard_total_seconds,
+      campaign_aggregate_seconds: hard_total_seconds,
+   };
+   validate_budget(&budget)?;
+   Ok(budget)
+}
+
+fn compare_ui_plan(args: &[String], budgets: &[(PathBuf, BudgetSpec)], apple_pr_plan: &ApplePrPlanSpec, apple_pr_acquisition: &ApplePrAcquisitionSpec, macos_detection_coverage: &DetectionCoverageManifest) -> Result<()>
+{
+   let mut platform = None;
+   let mut platform_name = None;
+   let mut tier = None;
+   let mut explicit_plan = None;
+   let mut explicit_budget = None;
+   let mut output = None;
+   let mut explain_budget = false;
+   let mut explain_coverage = false;
+   let mut index = 0;
+   while index < args.len()
+   {
+      match args[index].as_str()
+      {
+         "--platform" =>
+         {
+            index += 1;
+            let value = args.get(index).context("--platform requires ios, macos, or web")?;
+            platform = Some(parse_comparison_platform(value)?);
+            platform_name = Some(value.clone());
+         }
+         "--tier" =>
+         {
+            index += 1;
+            tier = Some(parse_comparison_tier(args.get(index).context("--tier requires pr, nightly, release-core, claim-complete, extended, or full-attribution")?)?);
+         }
+         "--plan" =>
+         {
+            index += 1;
+            explicit_plan = Some(PathBuf::from(args.get(index).context("--plan requires a path")?));
+         }
+         "--budget" =>
+         {
+            index += 1;
+            explicit_budget = Some(PathBuf::from(args.get(index).context("--budget requires a path")?));
+         }
+         "--out" =>
+         {
+            index += 1;
+            output = Some(PathBuf::from(args.get(index).context("--out requires a path")?));
+         }
+         "--explain-budget" => explain_budget = true,
+         "--explain-coverage" => explain_coverage = true,
+         "--optimize-design" => bail!("compare-ui design optimization requires two valid baseline campaigns, which are not available yet"),
+         other => bail!("unknown compare-ui plan argument `{}`", other),
+      }
+      index += 1;
+   }
+
+   let platform = platform.context("compare-ui plan requires --platform ios, macos, or web")?;
+   let tier = tier.context("compare-ui plan requires --tier pr, nightly, release-core, claim-complete, extended, or full-attribution")?;
+   ensure!(!explain_coverage || platform_name.as_deref() == Some("macos"), "compare-ui detection coverage explanation is currently defined only for macOS");
+   if matches!(tier, ComparisonTier::Extended | ComparisonTier::FullAttribution)
+   {
+      ensure!(output.is_none(), "compare-ui explicit extended/full-attribution planning validates its supplied plan and does not materialize --out");
+      ensure!(platform_name.as_deref() == Some("macos"), "compare-ui {:?} planning is currently defined only for macOS", tier);
+      let plan_path = explicit_plan.context("compare-ui extended/full-attribution planning requires --plan PATH")?;
+      let budget_path = explicit_budget.context("compare-ui extended/full-attribution planning requires --budget PATH")?;
+      return compare_ui_explicit_apple_plan(tier, &plan_path, &budget_path, explain_budget, explain_coverage, macos_detection_coverage);
+   }
+   ensure!(explicit_plan.is_none() && explicit_budget.is_none(), "--plan and --budget are reserved for extended/full-attribution planning");
+   let selected = select_comparison_budgets(platform, tier, budgets)?;
+   println!("compare-ui budget plan: platform={:?} tier={:?} shards={}", platform, tier, selected.len());
+   println!("  runnable scenario contracts: Apple PR vertical slice 6/6; platform adapter and authoritative acquisition status is reported separately");
+   for budget in &selected
+   {
+      println!("  {}: hard={}s critical-wall={}s aggregate={}s", budget.id, budget.hard_total_seconds, budget.campaign_critical_wall_seconds, budget.campaign_aggregate_seconds);
+      if explain_budget
+      {
+         println!("    correctness/install/pulls={}s primary={}s launch/startup={}s idle/endurance={}s energy={}s attribution={}s pre-reserve={}s reserve={}s", budget.correctness_install_pulls_seconds, budget.primary_dynamic_presentation_seconds, budget.launch_or_startup_delivery_seconds, budget.idle_endurance_seconds, budget.energy_seconds, budget.attribution_seconds, budget.pre_reserve_seconds, budget.reserve_seconds);
+      }
+      if budget.id == "apple-pr"
+      {
+         println!("    plan-sha256={}", apple_pr_plan_sha256(apple_pr_plan)?);
+         println!("    acquisition expansion: build-for-testing={} public-xctest-methods={} controller-acquisitions={} hard={}s", apple_pr_acquisition.build_for_testing_count, apple_pr_acquisition.public_xctest_methods.len(), apple_pr_acquisition.controller_chunks.len(), apple_pr_acquisition.hard_total_seconds);
+         for pack in &apple_pr_acquisition.packs
+         {
+            println!("      pack {}: scenarios={} pairs={} sides={} side={}s campaign={}s", pack.id, pack.ordered_scenario_ids.len(), pack.pair_count, pack.sides_per_pair, pack.side_seconds, pack.computed_campaign_seconds().expect("validated Apple PR pack campaign seconds"));
+         }
+         for chunk in &apple_pr_acquisition.controller_chunks
+         {
+            println!("      chunk {}: method={} pass={} pairs={:?} occupied<={}s pull={}", chunk.id, chunk.xctest_method, chunk.pass_id, chunk.ordered_pair_indices, chunk.max_occupied_seconds, chunk.artifact_pull_after);
+         }
+         println!("      separate-lean-replay=false pulls={}x{}s reserve={}s", apple_pr_acquisition.artifact_pull_count, apple_pr_acquisition.artifact_pull_seconds_each, apple_pr_acquisition.reserve_seconds);
+      }
+   }
+   if explain_coverage
+   {
+      let selected_scenarios: Vec<String> = match tier
+      {
+         ComparisonTier::Pr => apple_pr_plan.scenarios.iter().map(|scenario| scenario.id.clone()).collect(),
+         ComparisonTier::Nightly => APPLE_NIGHTLY_SCENARIO_IDS.iter().map(|id| (*id).to_string()).collect(),
+         ComparisonTier::ReleaseCore | ComparisonTier::ClaimComplete => APPLE_RELEASE_SCENARIO_IDS.iter().map(|id| (*id).to_string()).collect(),
+         ComparisonTier::Extended | ComparisonTier::FullAttribution => unreachable!("explicit tiers returned above"),
+      };
+      let explanation = explain_macos_detection_coverage(macos_detection_coverage, tier, &selected_scenarios)?;
+      print_macos_detection_coverage(macos_detection_coverage, &explanation)?;
+   }
+   if platform_name.as_deref() == Some("macos") && matches!(tier, ComparisonTier::Nightly | ComparisonTier::ReleaseCore | ComparisonTier::ClaimComplete)
+   {
+      let spec_root = locate_workspace_root()?.join("benchmarks/comparative/specs/v1");
+      let plan = materialize_default_macos_campaign_plan(&spec_root, selected[0])?;
+      let available = plan.scenarios.iter().filter(|scenario| scenario.artifact.is_some()).count();
+      println!("  macOS campaign contract: scenarios={}/{} packs={} passes={}", available, plan.scenarios.len(), plan.packs.len(), plan.passes.len());
+      let runnable = validate_runnable_apple_campaign_plan(&spec_root, &plan, selected[0]);
+      if let Some(output) = output
+      {
+         let bytes = canonical_apple_campaign_plan_json(&plan)?;
+         write_atomic_file(&bytes, &output)?;
+         let persisted = fs::read(&output).with_context(|| format!("reading persisted Apple campaign plan {}", output.display()))?;
+         ensure!(persisted == bytes, "persisted Apple campaign plan differs from canonical benchmark-spec bytes");
+         println!("  canonical-plan={} sha256={}", output.display(), apple_campaign_plan_sha256(&plan)?);
+      }
+      runnable?;
+   }
+   else
+   {
+      ensure!(output.is_none(), "--out is supported only for materialized macOS nightly/release plans");
+   }
+   Ok(())
+}
+
+fn compare_ui_explicit_apple_plan(tier: ComparisonTier, plan_path: &Path, budget_path: &Path, explain_budget: bool, explain_coverage: bool, macos_detection_coverage: &DetectionCoverageManifest) -> Result<()>
+{
+   let plan_bytes = fs::read(plan_path).with_context(|| format!("reading explicit Apple campaign plan {}", plan_path.display()))?;
+   let plan = serde_json::from_slice::<AppleCampaignPlanSpec>(&plan_bytes).with_context(|| format!("parsing explicit Apple campaign plan {}", plan_path.display()))?;
+   let budget_bytes = fs::read(budget_path).with_context(|| format!("reading explicit Apple campaign budget {}", budget_path.display()))?;
+   let budget = serde_json::from_slice::<BudgetSpec>(&budget_bytes).with_context(|| format!("parsing explicit Apple campaign budget {}", budget_path.display()))?;
+   validate_budget(&budget)?;
+   ensure!(plan.tier == tier && budget.tier == tier, "explicit Apple campaign plan/budget tier differs from {:?}", tier);
+   validate_apple_campaign_contract(&plan, &budget)?;
+   let spec_root = plan_path.parent().and_then(Path::parent).context("explicit Apple campaign plan must be located under a spec-root plans directory")?;
+   validate_runnable_apple_campaign_plan(spec_root, &plan, &budget)?;
+   println!("compare-ui explicit Apple plan: id={} tier={:?} scenarios={} packs={} passes={} hard={}s", plan.id, plan.tier, plan.scenarios.len(), plan.packs.len(), plan.passes.len(), budget.hard_total_seconds);
+   if explain_budget
+   {
+      println!("  correctness/install/pulls={}s primary={}s launch/startup={}s idle/endurance={}s energy={}s attribution={}s pre-reserve={}s reserve={}s", budget.correctness_install_pulls_seconds, budget.primary_dynamic_presentation_seconds, budget.launch_or_startup_delivery_seconds, budget.idle_endurance_seconds, budget.energy_seconds, budget.attribution_seconds, budget.pre_reserve_seconds, budget.reserve_seconds);
+   }
+   if explain_coverage
+   {
+      let selected_scenarios = plan.scenarios.iter().map(|scenario| scenario.id.clone()).collect::<Vec<_>>();
+      let explanation = explain_macos_detection_coverage(macos_detection_coverage, tier, &selected_scenarios)?;
+      print_macos_detection_coverage(macos_detection_coverage, &explanation)?;
+   }
+   Ok(())
+}
+
+fn print_macos_detection_coverage(manifest: &DetectionCoverageManifest, explanation: &DetectionCoverageExplanation) -> Result<()>
+{
+   println!("  macOS planned detection coverage: manifest={} sha256={} expectations={} injected-cases={} must-detect={}/{}bp weighted={}/{}bp", explanation.manifest_id, detection_coverage_sha256(manifest)?, explanation.expectation_count, explanation.injected_case_count, explanation.planned_must_detect_rate_basis_points, manifest.required_must_detect_rate_basis_points, explanation.planned_weighted_detection_rate_basis_points, manifest.required_weighted_detection_rate_basis_points);
+   println!("    pre-acquisition qualification only; empirical detection and false-positive scores remain pending");
+   for risk in &explanation.risk_coverage
+   {
+      println!("    risk {}: {}", risk.risk_dimension_id, risk.selected_scenario_ids.join(","));
+   }
+   for omitted in &explanation.omitted_scenarios
+   {
+      println!("    omitted {}: redundant={} marginal-expectations={} marginal-seconds={} marginal-minutes={:.2}; {}", omitted.scenario_id, omitted.marginal_risk_dimension_ids.join(","), omitted.marginal_expectation_count, omitted.marginal_occupied_seconds, omitted.marginal_occupied_seconds as f64 / 60.0, omitted.reason);
+   }
+   Ok(())
+}
+
+fn parse_comparison_platform(value: &str) -> Result<ComparisonPlatform>
+{
+   match value
+   {
+      "ios" | "macos" => Ok(ComparisonPlatform::Apple),
+      "web" => Ok(ComparisonPlatform::Web),
+      _ => bail!("unknown compare-ui platform `{}`; expected ios, macos, or web", value),
+   }
+}
+
+fn parse_comparison_tier(value: &str) -> Result<ComparisonTier>
+{
+   match value
+   {
+      "pr" => Ok(ComparisonTier::Pr),
+      "nightly" => Ok(ComparisonTier::Nightly),
+      "release-core" => Ok(ComparisonTier::ReleaseCore),
+      "claim-complete" => Ok(ComparisonTier::ClaimComplete),
+      "extended" => Ok(ComparisonTier::Extended),
+      "full-attribution" => Ok(ComparisonTier::FullAttribution),
+      _ => bail!("unknown compare-ui tier `{}`; expected pr, nightly, release-core, claim-complete, extended, or full-attribution", value),
+   }
+}
+
+fn select_comparison_budgets<'a>(platform: ComparisonPlatform, tier: ComparisonTier, budgets: &'a [(PathBuf, BudgetSpec)]) -> Result<Vec<&'a BudgetSpec>>
+{
+   let selected = budgets.iter().filter_map(|(_, budget)| {
+      if budget.platform == platform && budget.tier == tier
+      {
+         Some(budget)
+      }
+      else
+      {
+         None
+      }
+   }).collect::<Vec<_>>();
+   if selected.is_empty()
+   {
+      bail!("benchmark-spec v1 has no budget for platform {:?} tier {:?}", platform, tier);
+   }
+   Ok(selected)
 }
 
 fn ios_prepare() -> Result<()> {
@@ -6061,12 +7549,14 @@ fn run_react_device_perf_case(
         String::from("--instrument"),
         String::from("Points of Interest"),
     ];
-    let mut trace_child = spawn_command_owned_with_output_paths(
+    let mut trace_child = XctraceRecordProcess::spawn(
         root,
         "xcrun",
         &trace_args,
+        &trace_path,
         &trace_stdout_path,
         &trace_stderr_path,
+        XCTRACE_RECORD_WORKING_SET_LIMIT_BYTES,
     )?;
     thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
     wait_for_trace_started_or_trace_exit(
@@ -6097,13 +7587,13 @@ fn run_react_device_perf_case(
     let xcodebuild_status = xcodebuild_child
         .wait()
         .with_context(|| format!("waiting for xcodebuild {}", xcodebuild_args.join(" ")))?;
-    wait_for_child_with_output_paths(
-        root,
+    wait_for_xctrace_record_with_timeout(
         "xcrun",
         &trace_args,
         &mut trace_child,
         &trace_stdout_path,
         &trace_stderr_path,
+        Duration::from_secs(trace_seconds.saturating_add(XCTRACE_RECORD_TIMEOUT_GRACE_SECS)),
     )?;
     drain_uikit_processes(
         root,
@@ -6113,6 +7603,7 @@ fn run_react_device_perf_case(
         "react trace cleanup",
     )?;
     wait_for_xctrace_bundle_settle(&trace_path)?;
+    trace_child.commit()?;
 
     Ok(ReactDevicePerfRun {
         result_bundle,
@@ -8292,12 +9783,14 @@ fn run_uikit_device_launched_trace(
     trace_args.push(String::from("--launch"));
     trace_args.push(String::from("--"));
     trace_args.push(built_app.bundle_identifier.clone());
-    let mut trace_child = spawn_command_owned_with_output_paths(
+    let mut trace_child = XctraceRecordProcess::spawn(
         root,
         "xcrun",
         &trace_args,
+        &trace_path,
         &stdout_path,
         &stderr_path,
+        XCTRACE_RECORD_WORKING_SET_LIMIT_BYTES,
     )?;
     thread::sleep(Duration::from_millis(XCTRACE_STARTUP_DELAY_MS));
 
@@ -8367,6 +9860,7 @@ fn run_uikit_device_launched_trace(
     trace_result?;
     clear_result?;
     wait_for_xctrace_bundle_settle(&trace_path)?;
+    trace_child.cleanup_scratch()?;
     if !autostart && !observed_completion {
         if !launched_trace_has_bounded_workload_windows(
             root,
@@ -8390,6 +9884,7 @@ fn run_uikit_device_launched_trace(
             built_app.executable_name
         );
     }
+    trace_child.commit()?;
 
     Ok((trace_path, target_stdout_path, stderr_path))
 }
@@ -8409,7 +9904,7 @@ fn launched_trace_has_bounded_workload_windows(
 fn observe_trace_completion_before_exit(
     _program: &str,
     _args: &[String],
-    trace_child: &mut Child,
+    trace_child: &mut XctraceRecordProcess,
     trace_stdout_path: &Path,
     trace_stderr_path: &Path,
     _failed_args: &[String],
@@ -8482,7 +9977,7 @@ fn observe_trace_completion_before_exit(
                 failed_observer_finished = true;
             }
         }
-        if trace_child.try_wait()?.is_some() {
+        if trace_child.try_wait_checked()?.is_some() {
             let _ = complete_child.kill();
             let _ = complete_child.wait();
             let _ = failed_child.kill();
@@ -8698,7 +10193,7 @@ fn wait_for_device_completion_or_failure(
 fn wait_for_trace_started_or_trace_exit(
     program: &str,
     args: &[String],
-    trace_child: &mut Child,
+    trace_child: &mut XctraceRecordProcess,
     trace_stdout_path: &Path,
     trace_stderr_path: &Path,
     started_child: &mut Child,
@@ -8741,7 +10236,7 @@ fn wait_for_trace_started_or_trace_exit(
             );
         }
         if let Some(status) = trace_child
-            .try_wait()
+            .try_wait_checked()
             .with_context(|| format!("probing {} {}", program, args.join(" ")))?
         {
             let stdout = fs::read_to_string(trace_stdout_path).unwrap_or_default();
@@ -9655,7 +11150,7 @@ fn wait_for_child_with_output_paths(
 fn wait_for_xctrace_record_with_timeout(
     program: &str,
     args: &[String],
-    child: &mut Child,
+    child: &mut XctraceRecordProcess,
     stdout_path: &Path,
     stderr_path: &Path,
     wall_timeout: Duration,
@@ -9663,7 +11158,7 @@ fn wait_for_xctrace_record_with_timeout(
     let deadline = Instant::now() + wall_timeout;
     loop {
         if let Some(status) = child
-            .try_wait()
+            .try_wait_checked()
             .with_context(|| format!("waiting for {} {}", program, args.join(" ")))?
         {
             let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
@@ -9704,7 +11199,7 @@ fn wait_for_xctrace_record_with_timeout(
                 Instant::now() + Duration::from_secs(XCTRACE_RECORD_INTERRUPT_GRACE_SECS);
             while Instant::now() < interrupt_deadline {
                 if let Some(status) = child
-                    .try_wait()
+                    .try_wait_checked()
                     .with_context(|| format!("waiting for {} {}", program, args.join(" ")))?
                 {
                     let stdout = fs::read_to_string(stdout_path).unwrap_or_default();
@@ -13353,7 +14848,7 @@ fn write_oxide_device_report_markdown(
     markdown =
         markdown.replacen("# Oxide Performance Report", "# Oxide Device Performance Report", 1);
     markdown = markdown.replace(
-        "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline",
+        "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --bin oxide-perf-runner -- --run-suite --write-baseline",
         "PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline",
     );
     markdown =
@@ -13383,7 +14878,7 @@ fn write_react_device_report_markdown(
         1,
     );
     markdown = markdown.replace(
-        "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline",
+        "PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner --bin oxide-perf-runner -- --run-suite --write-baseline",
         "PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios react-device-perf --write-baseline",
     );
     markdown =

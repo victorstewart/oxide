@@ -1,0 +1,9 @@
+[
+  {
+    "at_us": 0,
+    "op": "resource-arrival",
+    "state_id": "effects:cold-built",
+    "target": "effects:layer-resources",
+    "value": "build-100-32-8"
+  }
+]
