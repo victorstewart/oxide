@@ -2620,6 +2620,7 @@ pub struct WebGpuRenderer {
     memory_stats_interval: u64,
     memory_stats_enabled: bool,
     memory_snapshot: WebGpuMemorySnapshot,
+    _instance: wgpu::Instance,
     _device_session: BrowserWebGpuDeviceSessionLease,
 }
 
@@ -3157,6 +3158,7 @@ impl WebGpuRenderer {
             memory_stats_interval: 60,
             memory_stats_enabled: true,
             memory_snapshot: WebGpuMemorySnapshot::default(),
+            _instance: instance,
             _device_session: device_session,
         })
     }
