@@ -1,9 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "mutate",
-    "target": "dashboard:update-count",
-    "value": 30,
-    "state_id": "dashboard:updated-30"
-  }
-]

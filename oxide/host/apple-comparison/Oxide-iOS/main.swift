@@ -1,8 +1,8 @@
 import UIKit
 
-func makeBenchmarkScenarioAdapter(window: UIWindow) -> BenchmarkScenarioAdapter?
+func makeCoreProbeAdapter(window: UIWindow) throws -> CoreProbeAdapter
 {
-   OxideScenarioAdapter(window: window)
+   try OxideScenarioAdapter(window: window)
 }
 
 UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(TransportProbeAppDelegate.self))

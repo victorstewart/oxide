@@ -1,8 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "resource-arrival",
-    "target": "image:presented",
-    "state_id": "image:first-visible"
-  }
-]

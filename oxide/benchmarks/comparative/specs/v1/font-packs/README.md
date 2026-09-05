@@ -1,5 +1,0 @@
-# Comparison font pack
-
-`oxide-bench-fonts-v1.json` pins the exact font bytes used by every comparison implementation. The pack contains Noto Sans, Noto Sans Arabic, and the Simplified Chinese subset of Noto Sans CJK. Each file is tied to an upstream repository commit, source path, SHA-256, bundled SIL Open Font License, and its complete `fvar`-ordered coordinate list. Latin and Arabic pin `wght=400,wdth=100`; Simplified CJK pins `wght=400`. Coordinates are serialized as integer millionths so every adapter receives identical values without JSON floating-point ambiguity.
-
-The pack intentionally excludes platform system fonts. Comparator adapters must load these bytes directly, apply every ordered axis before shaping/rasterization, and record the manifest hash; a system fallback, omitted axis, reordered axis, or platform-default variable instance is a parity failure. Emoji in v1 PR fixtures uses separately pinned image assets until a common outline/color-font path passes all comparator acceptance gates.

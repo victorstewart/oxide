@@ -1,8 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "foreground",
-    "target": "terminated-warm-cache",
-    "state_id": "startup:launch-requested"
-  }
-]

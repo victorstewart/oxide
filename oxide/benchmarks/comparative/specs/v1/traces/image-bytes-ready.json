@@ -1,8 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "resource-arrival",
-    "target": "image:source-bytes",
-    "state_id": "image:bytes-ready"
-  }
-]

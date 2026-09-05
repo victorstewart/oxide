@@ -6,8 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
-oxide-benchmark-spec = { path = "../crates/benchmark-spec" }
-oxide-apple-comparison-controller = { path = "../host/apple-comparison/comparison-controller" }
 oxide-perf-runner = { path = "../crates/perf-runner" }
 roxmltree = "0.20"
 serde = { version = "1.0", features = ["derive"] }

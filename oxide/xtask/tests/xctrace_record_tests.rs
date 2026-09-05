@@ -107,13 +107,7 @@ fn dropping_record_owner_terminates_child_and_removes_scratch_and_partial_trace(
 fn every_xtask_xctrace_record_launch_uses_the_owned_record_process()
 {
    let source = include_str!("../src/lib.rs");
-   assert_eq!(source.matches("String::from(\"record\")").count(), 2);
-   let react_start = source.find("fn run_react_device_perf_case(").expect("React trace function");
-   let react_end = source[react_start..]
-      .find("fn install_uikit_device_app(")
-      .map(|offset| react_start + offset)
-      .expect("React trace function end");
-   assert!(source[react_start..react_end].contains("XctraceRecordProcess::spawn("));
+   assert_eq!(source.matches("String::from(\"record\")").count(), 1);
    let launched_start = source
       .find("fn run_uikit_device_launched_trace(")
       .expect("launched UIKit trace function");

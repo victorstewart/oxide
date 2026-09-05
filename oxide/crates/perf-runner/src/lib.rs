@@ -25,11 +25,6 @@ use std::time::{Duration, Instant};
 
 mod paired_statistics;
 pub mod paired;
-pub mod comparative;
-pub mod comparison_report;
-pub mod density_acquisition;
-pub mod density_calibration;
-pub mod instrumentation_calibration;
 mod architecture_matrix;
 
 const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
@@ -46,8 +41,8 @@ const DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS: usize = 16_384;
 const LINEAR_COMPARE_BASELINE_CASE_LIMIT: usize = 32;
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
-const COMPARISON_LATIN_VARIABLE_FONT: &[u8] = include_bytes!("../../../benchmarks/comparative/specs/v1/font-packs/oxide-bench-fonts-v1/NotoSans-VF.ttf");
-const COMPARISON_CJK_VARIABLE_FONT: &[u8] = include_bytes!("../../../benchmarks/comparative/specs/v1/font-packs/oxide-bench-fonts-v1/NotoSansSC-VF.ttf");
+const COMPARISON_LATIN_VARIABLE_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/NotoSans-VF.ttf");
+const COMPARISON_CJK_VARIABLE_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/NotoSansSC-VF.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 const DAMAGE_USE_THRESH: f32 = 0.75;
 const DAMAGE_PREFILTER_THRESH: f32 = 0.25;

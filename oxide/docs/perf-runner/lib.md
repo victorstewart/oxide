@@ -20,7 +20,7 @@
   - Main callers: `oxide/crates/perf-runner/src/main.rs`.
 - `oxide_perf_runner::run_cli(args: &[String]) -> anyhow::Result<()>`
   - Handles the suite CLI, baseline writes, comparisons, and legacy fallback.
-  - Also exposes `--paired-run PLAN --paired-json-out PATH`, which executes fresh-process workspace CPU, Metal, WebGPU, browser-startup, or device A/B commands through the shared source/artifact identity and raw-evidence contract, plus `--paired-analyze INPUT --paired-json-out PATH` for byte-deterministic reanalysis and `--paired-create-instrumentation-patch` for a hashed binary patch applied identically to both sides. Direction-aware ordering and distribution mechanics live in [`paired_statistics`](paired_statistics.md), and the separate [`comparative`](comparative.md) boundary exposes exact framework-comparison decisions without changing paired schema v1.
+  - Also exposes `--paired-run PLAN --paired-json-out PATH`, which executes fresh-process workspace CPU, Metal, WebGPU, browser-startup, or device A/B commands through the shared source/artifact identity and raw-evidence contract, plus `--paired-analyze INPUT --paired-json-out PATH` for byte-deterministic reanalysis and `--paired-create-instrumentation-patch` for a hashed binary patch applied identically to both sides. Direction-aware ordering and distribution mechanics live in [`paired_statistics`](paired_statistics.md).
   - Also exposes `--bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and optional comparison baseline, then repeatedly renders Markdown so report-generation changes can be A/B tested without rerunning the suite workloads.
   - Also exposes `--bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and optional comparison baseline, then repeatedly exercises the latest-plus-dated Markdown output path so baseline-write changes can be A/B tested without rerunning the suite workloads.
   - Also exposes `--bench-json-render PATH [--bench-json-iters N]`, a non-default measurement harness that loads an existing `PerfReport` JSON and repeatedly exercises the shared pre-sized pretty JSON serializer used by the persisted JSON write path so report schema and artifact-density changes can be A/B tested without rerunning the suite workloads.
@@ -72,9 +72,7 @@
 
 ## Logic narrative
 
-The benchmark-only [`density_acquisition`](density_acquisition.md) module executes the macOS `k=1,2,4,8,all` isolated-versus-packed schedule through a bounded driver protocol, then hands canonical evidence to the versioned `density_calibration` reducer. Neither module enters a production Oxide runtime path.
 
-The benchmark-only `instrumentation_calibration` module re-exports the benchmark-spec-owned external-sensor trace-on/off equivalence reducer for compatibility. It cannot manufacture acceptance without the required sensor evidence.
 
 C60 registers the renderer-independent `ImageStore` architecture scaling matrix and the public `ImageRegionView` scroll/release/reuse authoring journey through the same filter and report pipeline. Variable-font coverage adds `cpu.authoring.font.variable_instance_construct`, which constructs the public immutable font with pinned `wght`/`wdth` coordinates, and `cpu.architecture.text.variable_axes_3x`, which constructs pinned Latin/CJK instances before cold shaping and physical-resolution rasterization with an immediate warm-cache proof.
 

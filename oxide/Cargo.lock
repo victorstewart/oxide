@@ -907,49 +907,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxide-apple-comparison-controller"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "oxide-benchmark-spec",
- "oxide-perf-runner",
- "plist",
- "roxmltree",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
-name = "oxide-benchmark-spec"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "png",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "ttf-parser 0.20.0",
-]
-
-[[package]]
 name = "oxide-comparison-runtime"
 version = "0.1.0"
 dependencies = [
- "libc",
- "oxide-benchmark-spec",
  "oxide-renderer-api",
  "oxide-renderer-metal",
- "oxide-test-scenes",
- "oxide-text",
- "oxide-timing",
  "oxide-ui-core",
- "png",
- "serde",
- "serde_json",
 ]
 
 [[package]]
@@ -1020,16 +983,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oxide-image-sampling-diagnostic"
-version = "0.1.0"
-dependencies = [
- "png",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "oxide-image-store"
 version = "0.1.0"
 dependencies = [
@@ -1072,7 +1025,6 @@ dependencies = [
  "core-graphics-types",
  "foreign-types",
  "metal",
- "oxide-benchmark-spec",
  "oxide-harness-registry",
  "oxide-image-store",
  "oxide-input",
@@ -1246,7 +1198,6 @@ name = "oxide-test-scenes"
 version = "0.1.0"
 dependencies = [
  "once_cell",
- "oxide-benchmark-spec",
  "oxide-input",
  "oxide-permissions",
  "oxide-platform-api",
@@ -1271,18 +1222,6 @@ dependencies = [
  "swash",
  "ttf-parser 0.20.0",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "oxide-text-compositing-diagnostic"
-version = "0.1.0"
-dependencies = [
- "oxide-renderer-api",
- "oxide-text",
- "oxide-ui-core",
- "serde",
- "serde_json",
- "sha2",
 ]
 
 [[package]]
@@ -1327,28 +1266,6 @@ dependencies = [
 [[package]]
 name = "oxide-wasm-alloc-counter"
 version = "0.1.0"
-
-[[package]]
-name = "oxide-web-comparison"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "js-sys",
- "oxide-benchmark-spec",
- "oxide-renderer-api",
- "oxide-renderer-web",
- "oxide-test-scenes",
- "oxide-text",
- "oxide-ui-core",
- "png",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
 
 [[package]]
 name = "parking_lot"
@@ -2553,8 +2470,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
- "oxide-apple-comparison-controller",
- "oxide-benchmark-spec",
  "oxide-perf-runner",
  "plist",
  "png",

@@ -1,77 +1,24 @@
 name: AppleComparison
 options:
-  developmentLanguage: en
-  minimumXcodeGenVersion: 2.44.1
   deploymentTarget:
     iOS: 18.0
-    macOS: 15.0
 settings:
   base:
     SWIFT_VERSION: 5.0
 schemes:
-  AppleComparisonPhase0:
+  CoreComparison:
     build:
       targets:
-        OxideBenchIOS:
-          - test
-        UIKitBenchIOS:
-          - test
-        ComparisonControllerUITests:
-          - test
-      buildImplicitDependencies: false
-    test:
-      config: Release
-      targets:
-        - ComparisonControllerUITests
-  ComparisonHarnessUnitTests:
-    build:
-      targets:
-        ComparisonHarnessUnitTests:
-          - test
-    test:
-      targets:
-        - ComparisonHarnessUnitTests
-  AppKitComparison:
-    build:
-      targets:
-        AppKitBenchMacOS:
-          - run
-        AppKitComparisonUnitTests:
-          - test
-    test:
-      targets:
-        - AppKitComparisonUnitTests
-  OxideMacComparison:
-    build:
-      targets:
-        OxideBenchMacOS:
-          - run
-  MacOSComparisonController:
-    build:
-      targets:
-        AppKitBenchMacOS:
-          - test
-        OxideBenchMacOS:
-          - test
-        MacOSComparisonControllerUITests:
-          - test
-      buildImplicitDependencies: false
-    test:
-      config: Release
-      targets:
-        - MacOSComparisonControllerUITests
+        OxideBenchIOS: all
+        UIKitBenchIOS: all
 targets:
   OxideBenchIOS:
     type: application
     platform: iOS
     sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: Shared/ComparatorApp
+      - path: Shared/ComparatorApp/TransportProbeAppDelegate.swift
+      - path: Shared/ComparatorApp/CorePresentationProbe.swift
       - path: Oxide-iOS
-      - path: ../../benchmarks/comparative/specs/v1
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.oxidebenchios
@@ -145,13 +92,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: Shared/ComparatorApp
+      - path: Shared/ComparatorApp/TransportProbeAppDelegate.swift
+      - path: Shared/ComparatorApp/CorePresentationProbe.swift
       - path: UIKit-iOS
-      - path: ../../benchmarks/comparative/specs/v1
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.uikitbenchios
@@ -159,164 +102,3 @@ targets:
         INFOPLIST_FILE: UIKit-iOS/Info.plist
         TARGETED_DEVICE_FAMILY: "1,2"
         IPHONEOS_DEPLOYMENT_TARGET: 18.0
-  ComparisonControllerUITests:
-    type: bundle.ui-testing
-    platform: iOS
-    sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: ComparisonControllerUITests
-      - path: ComparativePlans
-        buildPhase: resources
-    dependencies:
-      - target: OxideBenchIOS
-      - target: UIKitBenchIOS
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.controlleruitests
-        INFOPLIST_FILE: ComparisonControllerUITests/Info.plist
-        TEST_TARGET_NAME: OxideBenchIOS
-        TARGETED_DEVICE_FAMILY: "1,2"
-        IPHONEOS_DEPLOYMENT_TARGET: 18.0
-  ComparisonHarnessUnitTests:
-    type: bundle.unit-test
-    platform: macOS
-    sources:
-      - path: Shared/Foundation
-      - path: ComparisonHarnessUnitTests
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.harnessunittests
-        INFOPLIST_FILE: ComparisonHarnessUnitTests/Info.plist
-        MACOSX_DEPLOYMENT_TARGET: 15.0
-  AppKitBenchMacOS:
-    type: application
-    platform: macOS
-    sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: Shared/ComparatorApp/BenchmarkCampaignExecutor.swift
-      - path: Shared/ComparatorApp/MacOSCanonicalLaunchExecutor.swift
-      - path: Shared/ComparatorApp/MacOSCampaignControl.swift
-      - path: Shared/ComparatorApp/MacOSTrustedInputControl.swift
-      - path: AppKit-macOS/AppKitProductionReferenceFoundation.swift
-      - path: AppKit-macOS/AppKitProductionEdgeRaster.swift
-      - path: AppKit-macOS/AppKitProductionVisualComponents.swift
-      - path: AppKit-macOS/AppKitProductionReferenceDataSources.swift
-      - path: AppKit-macOS/AppKitProductionReferenceScenes.swift
-      - path: AppKit-macOS/AppKitProductionReleaseScenes.swift
-      - path: AppKit-macOS/AppKitProductionReferenceScenarioModel.swift
-      - path: AppKit-macOS/AppKitProductionScenarioAdapter.swift
-      - path: AppKit-macOS/main.swift
-      - path: ../../benchmarks/comparative/specs/v1
-        type: folder
-        buildPhase: resources
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.appkitbenchmacos
-        PRODUCT_NAME: AppKitBenchMacOS
-        INFOPLIST_FILE: AppKit-macOS/Info.plist
-        MACOSX_DEPLOYMENT_TARGET: 15.0
-  OxideBenchMacOS:
-    type: application
-    platform: macOS
-    sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: Shared/ComparatorApp/BenchmarkCampaignExecutor.swift
-      - path: Shared/ComparatorApp/MacOSCanonicalLaunchExecutor.swift
-      - path: Shared/ComparatorApp/MacOSCampaignControl.swift
-      - path: Shared/ComparatorApp/MacOSTrustedInputControl.swift
-      - path: Oxide-macOS
-      - path: ../../benchmarks/comparative/specs/v1
-        type: folder
-        buildPhase: resources
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.oxidebenchmacos
-        PRODUCT_NAME: OxideBenchMacOS
-        INFOPLIST_FILE: Oxide-macOS/Info.plist
-        MACOSX_DEPLOYMENT_TARGET: 15.0
-        ARCHS: arm64
-        OTHER_LDFLAGS:
-          - "-ObjC"
-          - "-lc++"
-          - "-framework"
-          - AppKit
-          - "-framework"
-          - Foundation
-          - "-framework"
-          - QuartzCore
-          - "-framework"
-          - Metal
-          - "-framework"
-          - CoreGraphics
-          - "$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a"
-    prebuildScripts:
-      - name: Build and Embed Comparison Runtime
-        shell: /bin/sh
-        basedOnDependencyAnalysis: false
-        outputFiles:
-          - "$(BUILT_PRODUCTS_DIR)/liboxide_comparison_runtime.a"
-        script: |
-          set -euo pipefail
-          REPO_ROOT="$(cd "${PROJECT_DIR}/../.." && pwd)"
-          export CARGO_TARGET_DIR="${OBJROOT}/oxide-comparison-cargo/${PLATFORM_NAME}"
-          TARGET_GUARD="${REPO_ROOT}/host/apple-comparison/scripts/guard-cargo-target.sh"
-          /bin/sh "${TARGET_GUARD}" "${CARGO_TARGET_DIR}" "${REPO_ROOT}/Cargo.toml"
-          mkdir -p "${CARGO_TARGET_DIR}"
-          HOST_LINKER_WRAPPER="${CARGO_TARGET_DIR}/comparison-host-clang.sh"
-          cat > "${HOST_LINKER_WRAPPER}" <<'EOF'
-          #!/bin/sh
-          exec xcrun --sdk macosx clang "$@"
-          EOF
-          chmod +x "${HOST_LINKER_WRAPPER}"
-          (cd "${REPO_ROOT}/host/apple-comparison/oxide-comparison-runtime" && \
-             export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="${HOST_LINKER_WRAPPER}" && \
-             unset SDKROOT SDK_DIR SDK_NAME MACOSX_DEPLOYMENT_TARGET && \
-             cargo build --locked -p oxide-comparison-runtime --release)
-          /bin/sh "${TARGET_GUARD}" "${CARGO_TARGET_DIR}" "${REPO_ROOT}/Cargo.toml"
-          mkdir -p "${BUILT_PRODUCTS_DIR}"
-          cp -v "${CARGO_TARGET_DIR}/release/liboxide_comparison_runtime.a" "${BUILT_PRODUCTS_DIR}/liboxide_comparison_runtime.a"
-  MacOSComparisonControllerUITests:
-    type: bundle.ui-testing
-    platform: macOS
-    sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: Shared/ComparatorApp/MacOSTrustedInputControl.swift
-      - path: MacOSComparisonControllerUITests
-    dependencies:
-      - target: AppKitBenchMacOS
-      - target: OxideBenchMacOS
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.macoscontrolleruitests
-        INFOPLIST_FILE: MacOSComparisonControllerUITests/Info.plist
-        TEST_TARGET_NAME: AppKitBenchMacOS
-        MACOSX_DEPLOYMENT_TARGET: 15.0
-  AppKitComparisonUnitTests:
-    type: bundle.unit-test
-    platform: macOS
-    sources:
-      - path: Shared/Foundation
-      - path: Shared/iOSControl
-      - path: AppKit-macOS/AppKitScenarioAdapter.swift
-      - path: AppKit-macOS/AppKitProductionReferenceFoundation.swift
-      - path: AppKit-macOS/AppKitProductionEdgeRaster.swift
-      - path: AppKit-macOS/AppKitProductionVisualComponents.swift
-      - path: AppKit-macOS/AppKitProductionReferenceDataSources.swift
-      - path: AppKit-macOS/AppKitProductionReferenceScenes.swift
-      - path: AppKit-macOS/AppKitProductionReleaseScenes.swift
-      - path: AppKit-macOS/AppKitProductionReferenceScenarioModel.swift
-      - path: AppKit-macOS/AppKitProductionScenarioAdapter.swift
-      - path: Shared/ComparatorApp/MacOSCanonicalLaunchExecutor.swift
-      - path: Shared/ComparatorApp/BenchmarkCampaignExecutor.swift
-      - path: Shared/ComparatorApp/MacOSTrustedInputControl.swift
-      - path: MacOSComparisonControllerUITests/MacOSTrustedInputXCUIController.swift
-      - path: AppKitComparisonUnitTests
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.comparison.appkitunittests
-        INFOPLIST_FILE: AppKitComparisonUnitTests/Info.plist
-        MACOSX_DEPLOYMENT_TARGET: 15.0

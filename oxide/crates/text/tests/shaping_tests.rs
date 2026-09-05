@@ -3,7 +3,7 @@ use oxide_text::{Atlas, CaretAffinity, Font, FontDb, FontVariation, PagedAtlas, 
 
 const LATIN_FONT: &[u8] = include_bytes!("fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("fixtures/test_text_cjk.ttf");
-const VARIABLE_LATIN_FONT: &[u8] = include_bytes!("../../../benchmarks/comparative/specs/v1/font-packs/oxide-bench-fonts-v1/NotoSans-VF.ttf");
+const VARIABLE_LATIN_FONT: &[u8] = include_bytes!("fixtures/NotoSans-VF.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 
 fn load_font(data: &[u8]) -> Font {

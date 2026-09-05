@@ -1,8 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "resource-arrival",
-    "target": "image:decoded",
-    "state_id": "image:decode-complete"
-  }
-]

@@ -1,9 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "mutate",
-    "target": "chat:prepend-count",
-    "value": 50,
-    "state_id": "chat:prepended-50"
-  }
-]

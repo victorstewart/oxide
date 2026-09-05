@@ -34,7 +34,7 @@
 			<array>
 				<dict>
 					<key>UISceneDelegateClassName</key>
-					<string>OxideSceneMuxDelegate</string>
+					<string>RustSceneDelegate</string>
 				</dict>
 			</array>
 		</dict>

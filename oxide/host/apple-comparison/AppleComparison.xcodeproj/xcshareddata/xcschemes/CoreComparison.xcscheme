@@ -15,10 +15,24 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6304642090109E5662143E4E"
-               BuildableName = "OxideHost.app"
-               BlueprintName = "OxideHost"
-               ReferencedContainer = "container:OxideHost.xcodeproj">
+               BlueprintIdentifier = "849B9F7C604D921FF55A7872"
+               BuildableName = "OxideBenchIOS.app"
+               BlueprintName = "OxideBenchIOS"
+               ReferencedContainer = "container:AppleComparison.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C42D25FB10B65EF9D392644B"
+               BuildableName = "UIKitBenchIOS.app"
+               BlueprintName = "UIKitBenchIOS"
+               ReferencedContainer = "container:AppleComparison.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +46,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6304642090109E5662143E4E"
-            BuildableName = "OxideHost.app"
-            BlueprintName = "OxideHost"
-            ReferencedContainer = "container:OxideHost.xcodeproj">
+            BlueprintIdentifier = "849B9F7C604D921FF55A7872"
+            BuildableName = "OxideBenchIOS.app"
+            BlueprintName = "OxideBenchIOS"
+            ReferencedContainer = "container:AppleComparison.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -55,14 +69,12 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6304642090109E5662143E4E"
-            BuildableName = "OxideHost.app"
-            BlueprintName = "OxideHost"
-            ReferencedContainer = "container:OxideHost.xcodeproj">
+            BlueprintIdentifier = "849B9F7C604D921FF55A7872"
+            BuildableName = "OxideBenchIOS.app"
+            BlueprintName = "OxideBenchIOS"
+            ReferencedContainer = "container:AppleComparison.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <CommandLineArguments>
-      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -74,10 +86,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6304642090109E5662143E4E"
-            BuildableName = "OxideHost.app"
-            BlueprintName = "OxideHost"
-            ReferencedContainer = "container:OxideHost.xcodeproj">
+            BlueprintIdentifier = "849B9F7C604D921FF55A7872"
+            BuildableName = "OxideBenchIOS.app"
+            BlueprintName = "OxideBenchIOS"
+            ReferencedContainer = "container:AppleComparison.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

@@ -1,8 +1,8 @@
 import UIKit
 
-func makeBenchmarkScenarioAdapter(window: UIWindow) -> BenchmarkScenarioAdapter?
+func makeCoreProbeAdapter(window: UIWindow) throws -> CoreProbeAdapter
 {
-   UIKitScenarioAdapter(window: window)
+   try UIKitScenarioAdapter(window: window)
 }
 
 UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(TransportProbeAppDelegate.self))

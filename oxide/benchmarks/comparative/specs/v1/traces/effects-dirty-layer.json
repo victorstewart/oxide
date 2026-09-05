@@ -1,9 +1,0 @@
-[
-  {
-    "at_us": 0,
-    "op": "mutate",
-    "state_id": "effects:layer:037:generation:1",
-    "target": "effects:layer:037:dirty-generation",
-    "value": 1
-  }
-]

@@ -1,0 +1,14 @@
+15:24:16  Acquired tunnel connection to device.
+15:24:16  Enabling developer disk image services.
+15:24:16  Acquired usage assertion.
+ERROR: The application failed to launch. (com.apple.dt.CoreDeviceError error 10002 (0x2712))
+       BundleIdentifier = com.oxide.comparison.uikitbenchios
+       ----------------------------------------
+           The request to open "com.oxide.comparison.uikitbenchios" failed. (FBSOpenApplicationServiceErrorDomain error 1 (0x01))
+           BSErrorCodeDescription = RequestDenied
+           FBSOpenApplicationRequestID = 0xe353
+           NSLocalizedFailureReason = The request was denied by service delegate (SBMainWorkspace) for reason: Locked ("Unable to launch com.oxide.comparison.uikitbenchios because the device was not, or could not be, unlocked").
+       ----------------------------------------
+               The operation couldn’t be completed. Unable to launch com.oxide.comparison.uikitbenchios because the device was not, or could not be, unlocked. (FBSOpenApplicationErrorDomain error 7 (0x07))
+               BSErrorCodeDescription = Locked
+               NSLocalizedFailureReason = Unable to launch com.oxide.comparison.uikitbenchios because the device was not, or could not be, unlocked.

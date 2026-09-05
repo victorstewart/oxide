@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "status": "Verification Pending",
+  "comparison_valid": false,
+  "reason": "Physical iPhone launch denied as Locked; Instruments timed out waiting for device. No presentation measurement acquired.",
+  "release_build": "passed",
+  "workload": "64 changing rounded tiles; measurement-feasibility diagnostic only",
+  "planned_validation": [
+    "normal presentation trace",
+    "100 ms injected main-thread delay trace"
+  ],
+  "captured_at": "2026-09-05"
+}

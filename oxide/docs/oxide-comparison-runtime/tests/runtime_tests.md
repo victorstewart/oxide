@@ -1,3 +1,0 @@
-# `runtime_tests.rs`
-
-The macOS test exercises the public comparison-only FFI against a real Metal renderer and the committed canonical benchmark specification. It proves scenario validation, render submission, out-of-measurement readback quiescence through the existing renderer API, role evidence, checkpoint JSON, reset, teardown, click-on-release semantics, drag-without-click behavior, text ingestion, and generation advancement only for real Rust state changes without invoking either production host crate. It also proves all five blocked release candidates prepare and reset only through `oxide_comparison_prepare_release_candidate`, while the normal runnable entry point rejects every candidate.
