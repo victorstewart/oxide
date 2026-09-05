@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
+const DEVICE_LABEL = "oxide-webgpu-renderer-device-v2";
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 
-test("separate wasm modules reuse one page-session device across route transitions", async () => {
+test("separate wasm modules own compatible page-scoped devices without crossing wgpu instances", async () => {
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
    let nativeDeviceDestroys = 0;
@@ -69,21 +69,21 @@ test("separate wasm modules reuse one page-session device across route transitio
       requiredFeatures: ["timestamp-query"],
       requiredLimits: { maxTextureDimension2D: 8_192, maxBindGroups: 4 },
    });
-   assert.strictEqual(landingDevicePromise, foundationDevicePromise);
+   assert.notStrictEqual(landingDevicePromise, foundationDevicePromise);
    const [landingDevice, foundationDevice] = await Promise.all([
       landingDevicePromise,
       foundationDevicePromise,
    ]);
-   assert.strictEqual(landingDevice, foundationDevice);
+   assert.notStrictEqual(landingDevice, foundationDevice);
 
    const readSnapshot = globalThis[SNAPSHOT_SYMBOL];
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 1,
-      generation: 1,
-      device_request_count: 1,
-      live_device_count: 1,
+      protocol_version: 2,
+      generation: 2,
+      device_request_count: 2,
+      live_device_count: 2,
       renderer_lease_count: 2,
       device_destroy_count: 0,
       incompatible_acquire_failure_count: 0,
@@ -94,6 +94,8 @@ test("separate wasm modules reuse one page-session device across route transitio
 
    landingModule.releaseOxideWebGpuDeviceSession(landingLease);
    foundationModule.releaseOxideWebGpuDeviceSession(foundationLease);
+   assert.equal(readSnapshot().live_device_count, 0);
+   assert.equal(readSnapshot().device_destroy_count, 2);
    for (let transition = 0; transition < 128; transition += 1) {
       const module = transition % 2 === 0 ? landingModule : foundationModule;
       const lease = module.acquireOxideWebGpuDeviceSession();
@@ -103,11 +105,11 @@ test("separate wasm modules reuse one page-session device across route transitio
          requiredFeatures: ["timestamp-query"],
          requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
       });
-      assert.strictEqual(device, landingDevice);
+      assert(device);
       module.releaseOxideWebGpuDeviceSession(lease);
    }
    assert.equal(nativeAdapterRequests, 130);
-   assert.equal(nativeDeviceRequests, 1);
+   assert.equal(nativeDeviceRequests, 130);
    assert.deepEqual(
       {
          requests: readSnapshot().device_request_count,
@@ -115,33 +117,40 @@ test("separate wasm modules reuse one page-session device across route transitio
          leases: readSnapshot().renderer_lease_count,
          destroys: readSnapshot().device_destroy_count,
       },
-      { requests: 1, live: 1, leases: 0, destroys: 0 },
+      { requests: 130, live: 0, leases: 0, destroys: 130 },
    );
 
    const incompatibleLease = foundationModule.acquireOxideWebGpuDeviceSession();
    const incompatibleAdapter = await globalThis.navigator.gpu.requestAdapter();
-   await assert.rejects(
-      incompatibleAdapter.requestDevice({
-         label: DEVICE_LABEL,
-         requiredFeatures: ["timestamp-query"],
-         requiredLimits: { maxBindGroups: 8, maxTextureDimension2D: 8_192 },
-      }),
-      /incompatible Oxide WebGPU device requirements/,
-   );
+   await incompatibleAdapter.requestDevice({
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxBindGroups: 8, maxTextureDimension2D: 8_192 },
+   });
    assert.equal(nativeAdapterRequests, 131);
    foundationModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
-   assert.equal(readSnapshot().incompatible_acquire_failure_count, 1);
+   assert.equal(readSnapshot().incompatible_acquire_failure_count, 0);
 
    const persistedPageHide = new Event("pagehide");
    Object.defineProperty(persistedPageHide, "persisted", { value: true });
    globalThis.dispatchEvent(persistedPageHide);
    assert.equal(readSnapshot().closed, false);
-   assert.equal(readSnapshot().live_device_count, 1);
+   assert.equal(readSnapshot().live_device_count, 0);
+
+   const terminalLandingLease = landingModule.acquireOxideWebGpuDeviceSession();
+   const terminalFoundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   const terminalLandingAdapter = await globalThis.navigator.gpu.requestAdapter();
+   const terminalFoundationAdapter = await globalThis.navigator.gpu.requestAdapter();
+   await Promise.all([
+      terminalLandingAdapter.requestDevice({ label: DEVICE_LABEL }),
+      terminalFoundationAdapter.requestDevice({ label: DEVICE_LABEL }),
+   ]);
+   assert.equal(readSnapshot().live_device_count, 2);
 
    const terminalPageHide = new Event("pagehide");
    Object.defineProperty(terminalPageHide, "persisted", { value: false });
    globalThis.dispatchEvent(terminalPageHide);
-   assert.equal(nativeDeviceDestroys, 1);
+   assert.equal(nativeDeviceDestroys, 133);
    assert.deepEqual(
       {
          requests: readSnapshot().device_request_count,
@@ -151,7 +160,7 @@ test("separate wasm modules reuse one page-session device across route transitio
          shutdowns: readSnapshot().session_shutdown_count,
          closed: readSnapshot().closed,
       },
-      { requests: 1, live: 0, leases: 0, destroys: 1, shutdowns: 1, closed: true },
+      { requests: 133, live: 0, leases: 2, destroys: 133, shutdowns: 1, closed: true },
    );
    assert.throws(
       () => landingModule.acquireOxideWebGpuDeviceSession(),
@@ -160,9 +169,12 @@ test("separate wasm modules reuse one page-session device across route transitio
    const repeatedTerminalPageHide = new Event("pagehide");
    Object.defineProperty(repeatedTerminalPageHide, "persisted", { value: false });
    globalThis.dispatchEvent(repeatedTerminalPageHide);
-   assert.equal(nativeDeviceDestroys, 1);
+   landingModule.releaseOxideWebGpuDeviceSession(terminalLandingLease);
+   foundationModule.releaseOxideWebGpuDeviceSession(terminalFoundationLease);
+   assert.equal(readSnapshot().renderer_lease_count, 0);
+   assert.equal(nativeDeviceDestroys, 133);
    assert.equal(readSnapshot().session_shutdown_count, 1);
    globalThis[SHUTDOWN_SYMBOL]();
-   assert.equal(nativeDeviceDestroys, 1);
+   assert.equal(nativeDeviceDestroys, 133);
    assert.equal(readSnapshot().session_shutdown_count, 1);
 });

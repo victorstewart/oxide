@@ -212,7 +212,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
    ));
-   assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
+   assert!(rust.contains("label: Some(\"oxide-webgpu-renderer-device-v2\")"));
    assert!(!rust.contains("thread_local!"));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
 
@@ -230,7 +230,8 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
    assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
    assert!(javascript.contains("generation.devicePromise"));
-   assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
+   assert!(javascript.contains("state.generations.add(generation)"));
+   assert!(javascript.contains("state.adapterLeases.set(adapter, lease)"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
    assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
@@ -242,11 +243,8 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    let release = javascript
       .split("export function releaseOxideWebGpuDeviceSession")
       .nth(1)
-      .expect("device-session release")
-      .split('}')
-      .next()
-      .expect("device-session release body");
-   assert!(!release.contains("destroyGeneration"));
+      .expect("device-session release");
+   assert!(release.contains("destroyGeneration"));
 }
 
 #[test]

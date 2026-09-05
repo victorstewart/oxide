@@ -2889,7 +2889,7 @@ impl WebGpuRenderer {
         };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("oxide-webgpu-shared-device-v1"),
+                label: Some("oxide-webgpu-renderer-device-v2"),
                 required_features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()

@@ -1,8 +1,8 @@
-const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
+const DEVICE_LABEL = "oxide-webgpu-renderer-device-v2";
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 
 function snapshot(state)
 {
@@ -50,10 +50,11 @@ function shutdown(state)
    }
    state.closed = true;
    state.sessionShutdownCount += 1;
-   if (state.currentGeneration) {
-      destroyGeneration(state, state.currentGeneration);
-      state.currentGeneration = null;
+   for (const generation of state.generations) {
+      destroyGeneration(state, generation);
    }
+   state.generations.clear();
+   state.currentGeneration = null;
    return snapshot(state);
 }
 
@@ -70,6 +71,9 @@ function createState()
       incompatibleAcquireFailureCount: 0,
       sessionShutdownCount: 0,
       closed: false,
+      generations: new Set(),
+      pendingLeases: [],
+      adapterLeases: new WeakMap(),
       gpuPrototype: null,
       originalRequestAdapter: null,
       patchedRequestAdapter: null,
@@ -122,7 +126,7 @@ function descriptorKey(descriptor)
    return JSON.stringify([requiredFeatures, requiredLimits, queueLabel]);
 }
 
-function createGeneration(state)
+function createGeneration(state, lease)
 {
    const generation = {
       id: state.nextGeneration,
@@ -134,7 +138,9 @@ function createGeneration(state)
       destroyWhenReady: false,
    };
    state.nextGeneration += 1;
+   state.generations.add(generation);
    state.currentGeneration = generation;
+   lease.generation = generation;
    return generation;
 }
 
@@ -147,11 +153,13 @@ function registerDevice(state, generation, device)
    if (lost && typeof lost.then === "function") {
       lost.then(() => {
          markDeviceNotLive(state, generation);
+         state.generations.delete(generation);
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
       }, () => {
          markDeviceNotLive(state, generation);
+         state.generations.delete(generation);
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
@@ -184,29 +192,25 @@ function installAdapterRequestDevicePatch(state, adapter)
       if (!deviceDescriptor || deviceDescriptor.label !== DEVICE_LABEL) {
          return Reflect.apply(originalRequestDevice, this, arguments);
       }
-      const generation = state.currentGeneration;
-      if (!generation || state.closed) {
+      const lease = state.adapterLeases.get(this);
+      if (!lease || lease.released || lease.generation || state.closed) {
          return Promise.reject(new Error("Oxide WebGPU device requested without an active page session"));
       }
-      const key = descriptorKey(deviceDescriptor);
-      if (generation.descriptorKey !== null && generation.descriptorKey !== key) {
-         state.incompatibleAcquireFailureCount += 1;
-         return Promise.reject(new Error("incompatible Oxide WebGPU device requirements"));
-      }
-      generation.descriptorKey = key;
-      if (!generation.devicePromise) {
-         state.deviceRequestCount += 1;
-         generation.devicePromise = Promise.resolve()
-            .then(() => Reflect.apply(originalRequestDevice, this, [deviceDescriptor]))
-            .then(
-               (device) => registerDevice(state, generation, device),
-               (error) => {
-                  generation.devicePromise = null;
-                  generation.descriptorKey = null;
-                  throw error;
-               },
-            );
-      }
+      const generation = createGeneration(state, lease);
+      generation.descriptorKey = descriptorKey(deviceDescriptor);
+      state.deviceRequestCount += 1;
+      generation.devicePromise = Promise.resolve()
+         .then(() => Reflect.apply(originalRequestDevice, this, [deviceDescriptor]))
+         .then(
+            (device) => registerDevice(state, generation, device),
+            (error) => {
+               state.generations.delete(generation);
+               lease.generation = null;
+               generation.devicePromise = null;
+               generation.descriptorKey = null;
+               throw error;
+            },
+         );
       return generation.devicePromise;
    };
 
@@ -244,6 +248,13 @@ function installRequestAdapterPatch(state)
       return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
          .then((adapter) => {
             if (adapter) {
+               while (state.pendingLeases[0]?.released) {
+                  state.pendingLeases.shift();
+               }
+               const lease = state.pendingLeases.shift();
+               if (lease) {
+                  state.adapterLeases.set(adapter, lease);
+               }
                installAdapterRequestDevicePatch(state, adapter);
             }
             return adapter;
@@ -269,9 +280,10 @@ export function acquireOxideWebGpuDeviceSession()
       throw new Error("Oxide WebGPU page session is shut down");
    }
    installRequestAdapterPatch(state);
-   const generation = state.currentGeneration ?? createGeneration(state);
+   const lease = { generation: null, released: false };
+   state.pendingLeases.push(lease);
    state.rendererLeaseCount += 1;
-   return { generation, released: false };
+   return lease;
 }
 
 export function releaseOxideWebGpuDeviceSession(lease)
@@ -281,5 +293,12 @@ export function releaseOxideWebGpuDeviceSession(lease)
    }
    lease.released = true;
    const state = MODULE_STATE;
+   if (lease.generation) {
+      destroyGeneration(state, lease.generation);
+      state.generations.delete(lease.generation);
+      if (state.currentGeneration === lease.generation) {
+         state.currentGeneration = null;
+      }
+   }
    state.rendererLeaseCount = Math.max(0, state.rendererLeaseCount - 1);
 }
