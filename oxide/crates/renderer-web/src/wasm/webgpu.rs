@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use web_sys::HtmlCanvasElement;
 use wgpu::util::DeviceExt;
 
@@ -2142,8 +2143,8 @@ struct PendingIdMaskReadback
 ///
 /// WebGPU device creation is asynchronous in browsers. If WebGPU is unavailable, construction
 /// returns `RenderError::Unsupported` instead of falling back to a CPU/Canvas2D visual path. All
-/// renderers in one JavaScript page realm share one page-session device while retaining distinct
-/// surfaces and renderer-owned resources.
+/// renderers in one JavaScript page realm retain distinct wgpu instances, adapters, devices,
+/// surfaces, and renderer-owned resources.
 pub struct BrowserRenderer {
    inner: WebGpuRenderer,
 }
@@ -2195,6 +2196,16 @@ impl BrowserRenderer {
     #[must_use]
     pub fn last_stats(&self) -> WebRendererStats {
         self.inner.last_stats()
+    }
+
+    /// Resolves after all work submitted to this renderer's queue has completed.
+    ///
+    /// The renderer exposes the fence directly so browser hosts do not need to
+    /// intercept `requestAdapter`/`requestDevice` or retain wgpu's external
+    /// JavaScript objects outside the instance that owns them.
+    pub async fn submitted_work_done(&self)
+    {
+       self.inner.submitted_work_done().await;
     }
 
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
@@ -2742,6 +2753,8 @@ pub struct WebGpuRenderer {
     memory_stats_enabled: bool,
     #[cfg(feature = "diagnostic-instrumentation")]
     memory_snapshot: WebGpuMemorySnapshot,
+    _adapter: wgpu::Adapter,
+    _instance: wgpu::Instance,
     _device_session: BrowserWebGpuDeviceSessionLease,
 }
 
@@ -3090,7 +3103,7 @@ impl WebGpuRenderer {
         let required_features = wgpu::Features::empty();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("oxide-webgpu-shared-device-v1"),
+                label: Some("oxide-webgpu-renderer-device-v2"),
                 required_features,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
@@ -3321,6 +3334,8 @@ impl WebGpuRenderer {
             memory_stats_enabled: true,
             #[cfg(feature = "diagnostic-instrumentation")]
             memory_snapshot: WebGpuMemorySnapshot::default(),
+            _adapter: adapter,
+            _instance: instance,
             _device_session: device_session,
         })
     }
@@ -3333,6 +3348,16 @@ impl WebGpuRenderer {
     #[must_use]
     pub fn last_stats(&self) -> WebRendererStats {
         self.stats
+    }
+
+    pub async fn submitted_work_done(&self)
+    {
+       let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+          self.queue.on_submitted_work_done(move || {
+             let _ = resolve.call0(&JsValue::UNDEFINED);
+          });
+       });
+       let _ = JsFuture::from(promise).await;
     }
 
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
