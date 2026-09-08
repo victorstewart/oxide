@@ -207,7 +207,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "memory_snapshot:WebGpuMemorySnapshot,_adapter:wgpu::Adapter,_instance:wgpu::Instance,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=wgpu::Instance::new"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
@@ -233,6 +233,9 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(!javascript.contains("requestDevice"));
    assert!(!javascript.contains("device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
+   assert!(javascript.contains("state.initializationTail = ready.then(() => finished)"));
+   assert!(javascript.contains("pendingRendererInitializationCount"));
+   assert!(compact_rust.contains("device_session.complete_initialization();"));
    assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
    assert!(javascript.contains("if (!event.persisted)"));

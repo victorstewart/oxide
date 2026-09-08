@@ -21,7 +21,7 @@ Call flow:
 
 ## Entry points list
 
-- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that joins the JavaScript-realm page device session, initializes route-local WebGPU resources, and returns `Unsupported` if the browser cannot provide WebGPU.
+- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that joins the JavaScript-realm page device session, serializes cold adapter/device acquisition with sibling Oxide WASM modules, initializes route-local WebGPU resources, and returns `Unsupported` if the browser cannot provide WebGPU.
 - `oxide_renderer_web::BrowserRenderer::backend_name(&self) -> &'static str`: returns `webgpu` for browser smoke/perf reports.
 - `oxide_renderer_web::WebGpuRenderer::from_canvas_id(id: &str) -> Future<Result<Self, RenderError>>`: wasm-only WebGPU constructor that joins the same page device session as `BrowserRenderer`.
 - `oxide_renderer_web::BrowserRenderer::canvas(&self) -> HtmlCanvasElement`: returns the backing canvas wrapper for host integration.

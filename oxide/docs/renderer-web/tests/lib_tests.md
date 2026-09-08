@@ -24,7 +24,7 @@ Call flow:
 - `sanitize_scale_rejects_invalid_values()`: verifies invalid scale fallback.
 - `native_stub_tracks_frame_shape_and_reports_unsupported_submit()`: verifies native frame counters and unsupported submit behavior.
 - `native_stub_ignores_web_camera_background_commands()`: verifies unsupported web `CameraBg` commands do not count as web draw work.
-- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript coordinator, per-renderer device/adapter/instance lifetimes and teardown order, route-local lease ownership, terminal pagehide cleanup, and stable read-only counters.
+- `wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()`: freezes the cross-WASM JavaScript lifecycle coordinator, serialized cold adapter/device initialization, renderer-owned instance/adapter/device ownership, route-local lease ownership, terminal pagehide closure, and stable read-only counters without intercepting browser WebGPU objects.
 - `wasm_webgpu_runtime_images_are_explicitly_reclaimable_without_arena_tombstones()`: verifies the production wrapper delegates image release and the WebGPU resource table recycles generation-checked slots without append-only tombstones or stale-handle ABA.
 - `wasm_webgpu_scene3d_uses_compact_order_safe_instances_and_generation_slots()`: freezes C56's 80-byte storage records, exact adjacent grouping key, transparent boundary, cull variants, viewport/scissor state, instanced draw range, and generation-checked mesh ownership.
 - `wasm_webgpu_image_store_uses_append_only_srgb_pages_and_complete_mips()`: freezes C60's portable image-store backend hooks, direct tight uploads, formats, and chunk/layer invalidation.
