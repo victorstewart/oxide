@@ -2,7 +2,7 @@ const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 6;
+const PROTOCOL_VERSION = 7;
 
 function snapshot(state)
 {
@@ -50,7 +50,6 @@ function shutdown(state)
    }
    state.closed = true;
    state.sessionShutdownCount += 1;
-   state.adapterPromises.clear();
    if (state.currentGeneration) {
       destroyGeneration(state, state.currentGeneration);
       state.currentGeneration = null;
@@ -74,8 +73,6 @@ function createState()
       gpuPrototype: null,
       originalRequestAdapter: null,
       patchedRequestAdapter: null,
-      adapterPromises: new Map(),
-      adapterDescriptorKeys: new WeakMap(),
       adapterPatches: new WeakMap(),
    };
    Object.defineProperty(globalThis, STATE_SYMBOL, {
@@ -112,8 +109,6 @@ function sharedState()
    if (state.protocolVersion !== PROTOCOL_VERSION) {
       throw new Error("incompatible Oxide WebGPU device-session protocol");
    }
-   state.adapterPromises ??= new Map();
-   state.adapterDescriptorKeys ??= new WeakMap();
    return state;
 }
 
@@ -127,29 +122,10 @@ function descriptorKey(descriptor)
    return JSON.stringify([requiredFeatures, requiredLimits, queueLabel]);
 }
 
-function adapterDescriptorKey(descriptor)
-{
-   const options = descriptor ?? {};
-   const extraOptions = Object.entries(options)
-      .filter(([name, value]) => value !== undefined
-         && name !== "powerPreference"
-         && name !== "forceFallbackAdapter"
-         && name !== "xrCompatible")
-      .map(([name, value]) => [name, typeof value, String(value)])
-      .sort(([left], [right]) => left.localeCompare(right));
-   return JSON.stringify([
-      String(options.powerPreference ?? ""),
-      Boolean(options.forceFallbackAdapter ?? false),
-      Boolean(options.xrCompatible ?? false),
-      extraOptions,
-   ]);
-}
-
 function createGeneration(state)
 {
    const generation = {
       id: state.nextGeneration,
-      adapterDescriptorKey: null,
       descriptorKey: null,
       devicePromise: null,
       device: null,
@@ -187,18 +163,6 @@ function registerDevice(state, generation, device)
    return device;
 }
 
-function registerAdapter(state, key, adapter)
-{
-   let keys = state.adapterDescriptorKeys.get(adapter);
-   if (!keys) {
-      keys = new Set();
-      state.adapterDescriptorKeys.set(adapter, keys);
-   }
-   keys.add(key);
-   installAdapterRequestDevicePatch(state, adapter);
-   return adapter;
-}
-
 function installAdapterRequestDevicePatch(state, adapter)
 {
    const adapterPrototype = Object.getPrototypeOf(adapter);
@@ -224,19 +188,6 @@ function installAdapterRequestDevicePatch(state, adapter)
       if (!generation || state.closed) {
          return Promise.reject(new Error("Oxide WebGPU device requested without an active page session"));
       }
-      const adapterKeys = state.adapterDescriptorKeys.get(this);
-      if (!adapterKeys || adapterKeys.size !== 1) {
-         state.incompatibleAcquireFailureCount += 1;
-         return Promise.reject(new Error("incompatible Oxide WebGPU adapter requirements"));
-      }
-      const adapterKey = adapterKeys.values().next().value;
-      if (generation.adapterDescriptorKey !== null
-         && generation.adapterDescriptorKey !== undefined
-         && generation.adapterDescriptorKey !== adapterKey) {
-         state.incompatibleAcquireFailureCount += 1;
-         return Promise.reject(new Error("incompatible Oxide WebGPU adapter requirements"));
-      }
-      generation.adapterDescriptorKey = adapterKey;
       const key = descriptorKey(deviceDescriptor);
       if (generation.descriptorKey !== null && generation.descriptorKey !== key) {
          state.incompatibleAcquireFailureCount += 1;
@@ -251,7 +202,6 @@ function installAdapterRequestDevicePatch(state, adapter)
                (device) => registerDevice(state, generation, device),
                (error) => {
                   generation.devicePromise = null;
-                  generation.adapterDescriptorKey = null;
                   generation.descriptorKey = null;
                   throw error;
                },
@@ -289,38 +239,15 @@ function installRequestAdapterPatch(state)
 
    const descriptor = Object.getOwnPropertyDescriptor(gpuPrototype, "requestAdapter");
    const originalRequestAdapter = gpuPrototype.requestAdapter;
-   const patchedRequestAdapter = function(adapterDescriptor)
+   const patchedRequestAdapter = function()
    {
-      const key = adapterDescriptorKey(adapterDescriptor);
-      if (state.closed) {
-         return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
-            .then((adapter) => {
-               if (adapter) {
-                  installAdapterRequestDevicePatch(state, adapter);
-               }
-               return adapter;
-            });
-      }
-      const existing = state.adapterPromises.get(key);
-      if (existing) {
-         return existing;
-      }
-      const adapterPromise = Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
-         .then(
-            (adapter) => {
-               if (!adapter) {
-                  state.adapterPromises.delete(key);
-                  return adapter;
-               }
-               return registerAdapter(state, key, adapter);
-            },
-            (error) => {
-               state.adapterPromises.delete(key);
-               throw error;
-            },
-         );
-      state.adapterPromises.set(key, adapterPromise);
-      return adapterPromise;
+      return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
+         .then((adapter) => {
+            if (adapter) {
+               installAdapterRequestDevicePatch(state, adapter);
+            }
+            return adapter;
+         });
    };
    Object.defineProperty(gpuPrototype, "requestAdapter", {
       value: patchedRequestAdapter,
