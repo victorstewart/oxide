@@ -23,7 +23,7 @@ Call flow:
 
 ## Entry points list
 
-- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that joins the JavaScript-realm page device session, initializes route-local WebGPU resources, and returns `Unsupported` if the browser cannot provide WebGPU.
+- `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu(id: &str) -> Future<Result<Self, RenderError>>`: async production constructor that joins the JavaScript-realm page device session, serializes cold adapter/device acquisition with sibling Oxide WASM modules, initializes route-local WebGPU resources, and returns `Unsupported` if the browser cannot provide WebGPU.
 - `oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu_with_profile(id: &str, profile: BrowserRendererPipelineProfile) -> Future<Result<Self, RenderError>>`: async constructor that eagerly creates exactly the profile's declared 2D and Scene3D pipelines plus one adapter-selected ID-mask backend. The canvas overload is `from_canvas_webgpu_with_profile`.
 - `oxide_renderer_web::BrowserRendererPipelineProfile`: immutable construction profile built from `empty()` with exact `BrowserDrawPipeline` and `BrowserScene3dPipeline` keys and optional ID-mask compositing. `full()` preserves the legacy constructor's complete rendering contract, and `declared_pipeline_count()` exposes the deterministic cold-start work count.
 - `oxide_renderer_web::BrowserRenderer::backend_name(&self) -> &'static str`: returns `webgpu` for browser smoke/perf reports.

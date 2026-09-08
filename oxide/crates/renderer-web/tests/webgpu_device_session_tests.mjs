@@ -50,11 +50,24 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    ]);
    const landingLease = landingModule.acquireOxideWebGpuDeviceSession();
    const foundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   const landingReady = landingModule.waitForOxideWebGpuDeviceInitialization(landingLease);
+   const foundationReady = foundationModule.waitForOxideWebGpuDeviceInitialization(foundationLease);
+   let foundationInitializationStarted = false;
+   foundationReady.then(() => {
+      foundationInitializationStarted = true;
+   });
 
+   await landingReady;
+   await Promise.resolve();
+   assert.equal(foundationInitializationStarted, false);
    const landingAdapter = await globalThis.navigator.gpu.requestAdapter();
-   const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
    const landingDevice = await landingAdapter.requestDevice();
+   landingModule.completeOxideWebGpuDeviceInitialization(landingLease);
+   await foundationReady;
+   assert.equal(foundationInitializationStarted, true);
+   const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
    const foundationDevice = await foundationAdapter.requestDevice();
+   foundationModule.completeOxideWebGpuDeviceInitialization(foundationLease);
    assert.notStrictEqual(landingAdapter, foundationAdapter);
    assert.notStrictEqual(landingDevice, foundationDevice);
    assert.equal(nativeAdapterRequests, 2);
@@ -64,11 +77,12 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 3,
+      protocol_version: 4,
       generation: 0,
       device_request_count: 0,
       live_device_count: 0,
       renderer_lease_count: 2,
+      pending_renderer_initialization_count: 0,
       device_destroy_count: 0,
       incompatible_acquire_failure_count: 0,
       session_shutdown_count: 0,
@@ -81,6 +95,16 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    foundationModule.releaseOxideWebGpuDeviceSession(foundationLease);
    assert.equal(readSnapshot().renderer_lease_count, 0);
    assert.equal(nativeDeviceDestroys, 0);
+
+   const failedLease = landingModule.acquireOxideWebGpuDeviceSession();
+   const recoveredLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   await landingModule.waitForOxideWebGpuDeviceInitialization(failedLease);
+   landingModule.releaseOxideWebGpuDeviceSession(failedLease);
+   await foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease);
+   foundationModule.completeOxideWebGpuDeviceInitialization(recoveredLease);
+   foundationModule.releaseOxideWebGpuDeviceSession(recoveredLease);
+   assert.equal(readSnapshot().pending_renderer_initialization_count, 0);
+   assert.equal(readSnapshot().renderer_lease_count, 0);
 
    const persistedPageHide = new Event("pagehide");
    Object.defineProperty(persistedPageHide, "persisted", { value: true });

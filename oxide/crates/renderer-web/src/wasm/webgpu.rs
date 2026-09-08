@@ -41,6 +41,12 @@ extern "C" {
    #[wasm_bindgen(catch, js_name = acquireOxideWebGpuDeviceSession)]
    fn acquire_webgpu_device_session() -> Result<JsValue, JsValue>;
 
+   #[wasm_bindgen(js_name = waitForOxideWebGpuDeviceInitialization)]
+   fn wait_for_webgpu_device_initialization(lease: &JsValue) -> js_sys::Promise;
+
+   #[wasm_bindgen(js_name = completeOxideWebGpuDeviceInitialization)]
+   fn complete_webgpu_device_initialization(lease: &JsValue);
+
    #[wasm_bindgen(js_name = releaseOxideWebGpuDeviceSession)]
    fn release_webgpu_device_session(lease: &JsValue);
 }
@@ -2494,14 +2500,24 @@ struct BrowserWebGpuDeviceSessionLease
 
 impl BrowserWebGpuDeviceSessionLease
 {
-   fn acquire() -> Result<Self, api::RenderError>
+   async fn acquire() -> Result<Self, api::RenderError>
    {
-      acquire_webgpu_device_session()
-         .map(|lease| Self { lease })
-         .map_err(|error| {
+      let lease = acquire_webgpu_device_session().map_err(|error| {
             let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
             api::RenderError::Io(format!("webgpu page session unavailable: {message}"))
-         })
+         })?;
+      JsFuture::from(wait_for_webgpu_device_initialization(&lease))
+         .await
+         .map_err(|error| {
+            let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
+            api::RenderError::Io(format!("webgpu initialization unavailable: {message}"))
+         })?;
+      Ok(Self { lease })
+   }
+
+   fn complete_initialization(&self)
+   {
+      complete_webgpu_device_initialization(&self.lease);
    }
 }
 
@@ -3058,7 +3074,7 @@ impl WebGpuRenderer {
         canvas: HtmlCanvasElement,
         pipeline_profile: BrowserRendererPipelineProfile,
     ) -> Result<Self, api::RenderError> {
-        let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
+        let device_session = BrowserWebGpuDeviceSessionLease::acquire().await?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
@@ -3110,6 +3126,7 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
+        device_session.complete_initialization();
         #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_queries = if timestamp_query_supported {
             Some(WebGpuTimestampQueries::new(

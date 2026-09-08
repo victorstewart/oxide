@@ -1,7 +1,7 @@
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 3;
+const PROTOCOL_VERSION = 4;
 
 function snapshot(state)
 {
@@ -11,6 +11,7 @@ function snapshot(state)
       device_request_count: 0,
       live_device_count: 0,
       renderer_lease_count: state.rendererLeaseCount,
+      pending_renderer_initialization_count: state.pendingRendererInitializationCount,
       device_destroy_count: 0,
       incompatible_acquire_failure_count: 0,
       session_shutdown_count: state.sessionShutdownCount,
@@ -23,6 +24,9 @@ function shutdown(state)
    if (!state.closed) {
       state.closed = true;
       state.sessionShutdownCount += 1;
+      for (const lease of state.leases) {
+         finishInitialization(state, lease);
+      }
    }
    return snapshot(state);
 }
@@ -32,8 +36,11 @@ function createState()
    const state = {
       protocolVersion: PROTOCOL_VERSION,
       rendererLeaseCount: 0,
+      pendingRendererInitializationCount: 0,
       sessionShutdownCount: 0,
       closed: false,
+      initializationTail: Promise.resolve(),
+      leases: new Set(),
    };
    Object.defineProperty(globalThis, STATE_SYMBOL, {
       value: state,
@@ -80,9 +87,56 @@ export function acquireOxideWebGpuDeviceSession()
    if (state.closed) {
       throw new Error("Oxide WebGPU page session is shut down");
    }
-   const lease = { released: false };
+   const ready = state.initializationTail;
+   let finish;
+   const finished = new Promise((resolve) => {
+      finish = resolve;
+   });
+   const lease = {
+      released: false,
+      initializationFinished: false,
+      ready,
+      finish,
+   };
+   state.initializationTail = ready.then(() => finished);
+   state.leases.add(lease);
    state.rendererLeaseCount += 1;
+   state.pendingRendererInitializationCount += 1;
    return lease;
+}
+
+export function waitForOxideWebGpuDeviceInitialization(lease)
+{
+   if (!lease || lease.released) {
+      return Promise.reject(new Error("Oxide WebGPU renderer lease is not live"));
+   }
+   return lease.ready.then(() => {
+      if (lease.released || sharedState().closed) {
+         throw new Error("Oxide WebGPU renderer lease cannot initialize after release or page shutdown");
+      }
+   });
+}
+
+function finishInitialization(state, lease)
+{
+   if (!lease || lease.initializationFinished) {
+      return;
+   }
+   lease.initializationFinished = true;
+   state.pendingRendererInitializationCount = Math.max(
+      0,
+      state.pendingRendererInitializationCount - 1,
+   );
+   lease.finish();
+}
+
+export function completeOxideWebGpuDeviceInitialization(lease)
+{
+   const state = sharedState();
+   if (!lease || lease.released) {
+      throw new Error("Oxide WebGPU renderer lease is not live");
+   }
+   finishInitialization(state, lease);
 }
 
 export function releaseOxideWebGpuDeviceSession(lease)
@@ -90,6 +144,8 @@ export function releaseOxideWebGpuDeviceSession(lease)
    if (!lease || lease.released) {
       return;
    }
+   finishInitialization(MODULE_STATE, lease);
    lease.released = true;
+   MODULE_STATE.leases.delete(lease);
    MODULE_STATE.rendererLeaseCount = Math.max(0, MODULE_STATE.rendererLeaseCount - 1);
 }
