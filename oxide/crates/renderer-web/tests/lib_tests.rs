@@ -241,12 +241,14 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains("const existing = state.adapterPromises.get(key)"));
    assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
    assert!(javascript.contains("generation.devicePromise"));
+   assert!(javascript.contains("state.sharedDevices.has(this)"));
+   assert!(javascript.contains("state.routeLocalDestroySuppressionCount += 1"));
+   assert!(javascript.contains("Reflect.apply(state.originalDeviceDestroy, generation.device, [])"));
    assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
    assert!(javascript.contains("state.incompatibleModuleFailureCount += 1"));
    assert!(javascript.contains(
       "Oxide WebGPU page session belongs to another compiled WASM module"
    ));
-   assert!(javascript.contains("generation.device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
    assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));

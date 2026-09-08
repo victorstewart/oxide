@@ -16,6 +16,23 @@ test("one wasm module reuses one page-session device and rejects a second module
    globalThis.addEventListener = events.addEventListener.bind(events);
    globalThis.dispatchEvent = events.dispatchEvent.bind(events);
 
+   class MockGpuDevice
+   {
+      constructor(lost, resolveLost)
+      {
+         this.lost = lost;
+         this.resolveLost = resolveLost;
+      }
+      loseForTest()
+      {
+         this.resolveLost();
+      }
+      destroy()
+      {
+         nativeDeviceDestroys += 1;
+         this.resolveLost();
+      }
+   }
    class MockGpuAdapter
    {
       requestDevice()
@@ -32,18 +49,7 @@ test("one wasm module reuses one page-session device and rejects a second module
          const lost = new Promise((resolve) => {
             resolveLost = resolve;
          });
-         return Promise.resolve({
-            lost,
-            loseForTest()
-            {
-               resolveLost();
-            },
-            destroy()
-            {
-               nativeDeviceDestroys += 1;
-               resolveLost();
-            },
-         });
+         return Promise.resolve(new MockGpuDevice(lost, resolveLost));
       }
    }
    class MockGpu
@@ -113,18 +119,24 @@ test("one wasm module reuses one page-session device and rejects a second module
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 7,
+      protocol_version: 8,
       generation: 1,
       device_request_count: 1,
       live_device_count: 1,
       renderer_lease_count: 2,
       device_destroy_count: 0,
+      route_local_destroy_suppression_count: 0,
       incompatible_acquire_failure_count: 0,
       incompatible_module_failure_count: 1,
       session_shutdown_count: 0,
       closed: false,
    });
    assert(Object.isFrozen(readSnapshot()));
+
+   landingDevice.destroy();
+   assert.equal(nativeDeviceDestroys, 0);
+   assert.equal(readSnapshot().route_local_destroy_suppression_count, 1);
+   assert.equal(readSnapshot().live_device_count, 1);
 
    landingModule.releaseOxideWebGpuDeviceSession(landingLease);
    landingModule.releaseOxideWebGpuDeviceSession(foundationLease);

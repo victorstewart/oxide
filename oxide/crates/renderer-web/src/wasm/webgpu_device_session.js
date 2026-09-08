@@ -3,7 +3,7 @@ const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state"
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 const MODULE_TOKEN = Object.freeze({});
-const PROTOCOL_VERSION = 7;
+const PROTOCOL_VERSION = 8;
 
 function snapshot(state)
 {
@@ -14,6 +14,7 @@ function snapshot(state)
       live_device_count: state.liveDeviceCount,
       renderer_lease_count: state.rendererLeaseCount,
       device_destroy_count: state.deviceDestroyCount,
+      route_local_destroy_suppression_count: state.routeLocalDestroySuppressionCount,
       incompatible_acquire_failure_count: state.incompatibleAcquireFailureCount,
       incompatible_module_failure_count: state.incompatibleModuleFailureCount,
       session_shutdown_count: state.sessionShutdownCount,
@@ -41,7 +42,7 @@ function destroyGeneration(state, generation)
    }
    generation.destroyed = true;
    markDeviceNotLive(state, generation);
-   generation.device.destroy();
+   Reflect.apply(state.originalDeviceDestroy, generation.device, []);
    state.deviceDestroyCount += 1;
 }
 
@@ -70,6 +71,7 @@ function createState()
       deviceRequestCount: 0,
       liveDeviceCount: 0,
       deviceDestroyCount: 0,
+      routeLocalDestroySuppressionCount: 0,
       incompatibleAcquireFailureCount: 0,
       incompatibleModuleFailureCount: 0,
       moduleOwnerToken: null,
@@ -81,6 +83,10 @@ function createState()
       adapterPromises: new Map(),
       adapterDescriptorKeys: new WeakMap(),
       adapterPatches: new WeakMap(),
+      sharedDevices: new WeakSet(),
+      devicePrototype: null,
+      originalDeviceDestroy: null,
+      patchedDeviceDestroy: null,
    };
    Object.defineProperty(globalThis, STATE_SYMBOL, {
       value: state,
@@ -168,6 +174,8 @@ function createGeneration(state)
 
 function registerDevice(state, generation, device)
 {
+   installDeviceDestroyPatch(state, device);
+   state.sharedDevices.add(device);
    generation.device = device;
    generation.live = true;
    state.liveDeviceCount += 1;
@@ -189,6 +197,40 @@ function registerDevice(state, generation, device)
       destroyGeneration(state, generation);
    }
    return device;
+}
+
+function installDeviceDestroyPatch(state, device)
+{
+   const devicePrototype = Object.getPrototypeOf(device);
+   if (!devicePrototype || typeof devicePrototype.destroy !== "function") {
+      throw new Error("browser GPUDevice prototype unavailable");
+   }
+   if (state.devicePrototype) {
+      if (devicePrototype !== state.devicePrototype
+         || devicePrototype.destroy !== state.patchedDeviceDestroy) {
+         throw new Error("browser GPUDevice destroy changed after Oxide initialization");
+      }
+      return;
+   }
+   const descriptor = Object.getOwnPropertyDescriptor(devicePrototype, "destroy");
+   const originalDeviceDestroy = devicePrototype.destroy;
+   const patchedDeviceDestroy = function()
+   {
+      if (state.sharedDevices.has(this)) {
+         state.routeLocalDestroySuppressionCount += 1;
+         return;
+      }
+      return Reflect.apply(originalDeviceDestroy, this, arguments);
+   };
+   Object.defineProperty(devicePrototype, "destroy", {
+      value: patchedDeviceDestroy,
+      configurable: descriptor?.configurable ?? true,
+      enumerable: descriptor?.enumerable ?? false,
+      writable: descriptor?.writable ?? true,
+   });
+   state.devicePrototype = devicePrototype;
+   state.originalDeviceDestroy = originalDeviceDestroy;
+   state.patchedDeviceDestroy = patchedDeviceDestroy;
 }
 
 function registerAdapter(state, key, adapter)
