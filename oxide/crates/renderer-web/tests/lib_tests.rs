@@ -213,10 +213,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=browser_webgpu_instance()"
    ));
    assert!(compact_rust.contains(
-      "structBrowserWebGpuDeviceSessionLease{lease:JsValue,initialization_completed:Cell<bool>,}"
-   ));
-   assert!(compact_rust.contains(
-      "if!self.initialization_completed.replace(true){complete_webgpu_device_initialization(&self.lease);}"
+      "structBrowserWebGpuDeviceSessionLease{lease:JsValue,initialization_completed:Rc<Cell<bool>>,}"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
@@ -226,9 +223,15 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(compact_rust.contains(
       "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
    ));
+   assert!(compact_rust.contains(
+      "pubfnsubmitted_work_done_future(&self,)->implstd::future::Future<Output=()>+'static{self.inner.submitted_work_done_future()}"
+   ));
    assert!(compact_rust.contains("self.queue.on_submitted_work_done"));
    assert!(compact_rust.contains(
-      "let_=JsFuture::from(promise).await;self._device_session.complete_initialization();"
+      "asyncmove{let_=JsFuture::from(promise).await;if!initialization_completed.replace(true){complete_webgpu_device_initialization(&lease);}}"
+   ));
+   assert!(compact_rust.contains(
+      "self.submitted_work_done_future().await;"
    ));
 
    assert!(javascript.contains(

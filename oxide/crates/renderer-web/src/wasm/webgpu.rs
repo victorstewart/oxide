@@ -2059,6 +2059,14 @@ impl BrowserRenderer {
         self.inner.submitted_work_done().await;
     }
 
+    /// Creates an owned queue-completion future synchronously so a host with interior
+    /// mutable application state can release its borrow before awaiting the fence.
+    pub fn submitted_work_done_future(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + 'static {
+        self.inner.submitted_work_done_future()
+    }
+
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
         self.inner.collect_timestamp_readbacks()
     }
@@ -2341,7 +2349,7 @@ impl BrowserRenderer {
 struct BrowserWebGpuDeviceSessionLease
 {
    lease: JsValue,
-   initialization_completed: Cell<bool>,
+   initialization_completed: Rc<Cell<bool>>,
 }
 
 impl BrowserWebGpuDeviceSessionLease
@@ -2358,14 +2366,7 @@ impl BrowserWebGpuDeviceSessionLease
             let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
             api::RenderError::Io(format!("webgpu initialization unavailable: {message}"))
          })?;
-      Ok(Self { lease, initialization_completed: Cell::new(false) })
-   }
-
-   fn complete_initialization(&self)
-   {
-      if !self.initialization_completed.replace(true) {
-         complete_webgpu_device_initialization(&self.lease);
-      }
+      Ok(Self { lease, initialization_completed: Rc::new(Cell::new(false)) })
    }
 }
 
@@ -3255,14 +3256,28 @@ impl WebGpuRenderer {
         completed
     }
 
-    pub async fn submitted_work_done(&self) {
+    pub fn submitted_work_done_future(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + 'static {
+        let lease = self._device_session.lease.clone();
+        let initialization_completed = Rc::clone(
+            &self._device_session.initialization_completed,
+        );
         let promise = js_sys::Promise::new(&mut |resolve, _reject| {
             self.queue.on_submitted_work_done(move || {
                 let _ = resolve.call0(&JsValue::UNDEFINED);
             });
         });
-        let _ = JsFuture::from(promise).await;
-        self._device_session.complete_initialization();
+        async move {
+            let _ = JsFuture::from(promise).await;
+            if !initialization_completed.replace(true) {
+                complete_webgpu_device_initialization(&lease);
+            }
+        }
+    }
+
+    pub async fn submitted_work_done(&self) {
+        self.submitted_work_done_future().await;
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {
