@@ -2,7 +2,7 @@ const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 8;
+const PROTOCOL_VERSION = 6;
 
 function snapshot(state)
 {

@@ -17,7 +17,7 @@ use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_renderer_wgpu::image::{rgba8_srgb_mip_chain, RgbaMipLevel};
 use oxide_wasm_alloc_counter::AllocationSnapshot;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
 use std::rc::Rc;
@@ -2341,43 +2341,6 @@ impl Drop for BrowserWebGpuDeviceSessionLease
    }
 }
 
-struct BrowserWebGpuModuleRoot
-{
-   _adapter: wgpu::Adapter,
-   _device: wgpu::Device,
-   _queue: wgpu::Queue,
-}
-
-thread_local!
-{
-   /// A wgpu WebGPU instance is an external-object registry, not just a factory. Keep one
-   /// registry alive for this compiled WASM module for the lifetime of the page realm so a
-   /// renderer replacement cannot retire handles still shared with another Oxide module.
-   static WEBGPU_MODULE_INSTANCE: wgpu::Instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-      backends: wgpu::Backends::BROWSER_WEBGPU,
-      ..Default::default()
-   });
-   /// Retain only the latest adapter/device generation. Replacement happens after the new
-   /// handles exist, so route churn is bounded without opening a gap in external ownership.
-   static WEBGPU_MODULE_ROOT: RefCell<Option<BrowserWebGpuModuleRoot>> = const { RefCell::new(None) };
-}
-
-fn webgpu_module_instance() -> wgpu::Instance
-{
-   WEBGPU_MODULE_INSTANCE.with(Clone::clone)
-}
-
-fn retain_webgpu_module_root(adapter: &wgpu::Adapter, device: &wgpu::Device, queue: &wgpu::Queue)
-{
-   WEBGPU_MODULE_ROOT.with(|root| {
-      root.replace(Some(BrowserWebGpuModuleRoot {
-         _adapter: adapter.clone(),
-         _device: device.clone(),
-         _queue: queue.clone(),
-      }));
-   });
-}
-
 impl api::Renderer for BrowserRenderer {
     fn device_caps(&self) -> api::DeviceCaps {
         self.inner.device_caps()
@@ -2898,7 +2861,10 @@ impl WebGpuRenderer {
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
         let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
-        let instance = webgpu_module_instance();
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+        });
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|err| {
@@ -2940,7 +2906,6 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
-        retain_webgpu_module_root(&adapter, &device, &queue);
         let timestamp_queries = if timestamp_query_supported {
             Some(WebGpuTimestampQueries::new(
                 &device,

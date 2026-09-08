@@ -101,7 +101,7 @@ test("separate wasm modules reuse one page-session device across route transitio
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 8,
+      protocol_version: 6,
       generation: 1,
       device_request_count: 1,
       live_device_count: 1,
