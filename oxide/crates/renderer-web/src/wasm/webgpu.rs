@@ -2002,8 +2002,8 @@ struct PendingIdMaskReadback
 ///
 /// WebGPU device creation is asynchronous in browsers. If WebGPU is unavailable, construction
 /// returns `RenderError::Unsupported` instead of falling back to a CPU/Canvas2D visual path. All
-/// renderers in one JavaScript page realm share one page-session device while retaining distinct
-/// surfaces and renderer-owned resources.
+/// renderer retains its own adapter, device, surface, and resources. The page owner serializes
+/// first-frame initialization so Chromium external objects are never initialized concurrently.
 pub struct BrowserRenderer {
    inner: WebGpuRenderer,
 }
@@ -2341,6 +2341,7 @@ impl BrowserRenderer {
 struct BrowserWebGpuDeviceSessionLease
 {
    lease: JsValue,
+   initialization_completed: Cell<bool>,
 }
 
 impl BrowserWebGpuDeviceSessionLease
@@ -2357,12 +2358,14 @@ impl BrowserWebGpuDeviceSessionLease
             let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
             api::RenderError::Io(format!("webgpu initialization unavailable: {message}"))
          })?;
-      Ok(Self { lease })
+      Ok(Self { lease, initialization_completed: Cell::new(false) })
    }
 
    fn complete_initialization(&self)
    {
-      complete_webgpu_device_initialization(&self.lease);
+      if !self.initialization_completed.replace(true) {
+         complete_webgpu_device_initialization(&self.lease);
+      }
    }
 }
 
@@ -2988,7 +2991,6 @@ impl WebGpuRenderer {
         .saturating_mul(8)
         .clamp(LAYER_CACHE_MIN_BUDGET_BYTES, LAYER_CACHE_MAX_BUDGET_BYTES);
 
-        device_session.complete_initialization();
         Ok(Self {
             canvas,
             surface,
@@ -3260,6 +3262,7 @@ impl WebGpuRenderer {
             });
         });
         let _ = JsFuture::from(promise).await;
+        self._device_session.complete_initialization();
     }
 
     pub fn clear_completed_timestamp_samples(&mut self) {

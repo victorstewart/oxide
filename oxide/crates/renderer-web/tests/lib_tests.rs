@@ -213,7 +213,10 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=browser_webgpu_instance()"
    ));
    assert!(compact_rust.contains(
-      "device_session.complete_initialization();Ok(Self{"
+      "structBrowserWebGpuDeviceSessionLease{lease:JsValue,initialization_completed:Cell<bool>,}"
+   ));
+   assert!(compact_rust.contains(
+      "if!self.initialization_completed.replace(true){complete_webgpu_device_initialization(&self.lease);}"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
@@ -224,6 +227,9 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
    ));
    assert!(compact_rust.contains("self.queue.on_submitted_work_done"));
+   assert!(compact_rust.contains(
+      "let_=JsFuture::from(promise).await;self._device_session.complete_initialization();"
+   ));
 
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")"
