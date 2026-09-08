@@ -232,18 +232,18 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
    ));
    assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
-   assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
-   assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
-   assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
+   assert!(javascript.contains("Object.defineProperty(adapter, \"requestDevice\""));
+   assert!(javascript.contains("adapter.requestDevice === installed.patched"));
+   assert!(javascript.contains("gpu.requestAdapter !== state.patchedRequestAdapter"));
    assert!(javascript.contains("function adapterDescriptorKey(descriptor)"));
    assert!(javascript.contains("adapterPromises: new Map()"));
    assert!(javascript.contains("adapterDescriptorKeys: new WeakMap()"));
    assert!(javascript.contains("const existing = state.adapterPromises.get(key)"));
    assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
    assert!(javascript.contains("generation.devicePromise"));
-   assert!(javascript.contains("state.sharedDevices.has(this)"));
-   assert!(javascript.contains("state.routeLocalDestroySuppressionCount += 1"));
-   assert!(javascript.contains("Reflect.apply(state.originalDeviceDestroy, generation.device, [])"));
+   assert!(javascript.contains("Object.defineProperty(gpu, \"requestAdapter\""));
+   assert!(javascript.contains("generation.device.destroy()"));
+   assert!(!javascript.contains("Object.getPrototypeOf"));
    assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
    assert!(javascript.contains("state.incompatibleModuleFailureCount += 1"));
    assert!(javascript.contains(

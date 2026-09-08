@@ -68,6 +68,8 @@ test("one wasm module reuses one page-session device and rejects a second module
       value: { gpu: new MockGpu() },
       configurable: true,
    });
+   const nativeRequestAdapter = MockGpu.prototype.requestAdapter;
+   const nativeRequestDevice = MockGpuAdapter.prototype.requestDevice;
 
    const sourceUrl = new URL("../src/wasm/webgpu_device_session.js", import.meta.url);
    const source = await readFile(sourceUrl, "utf8");
@@ -98,6 +100,10 @@ test("one wasm module reuses one page-session device and rejects a second module
       foundationAdapterPromise,
    ]);
    assert.strictEqual(landingAdapter, foundationAdapter);
+   assert.strictEqual(MockGpu.prototype.requestAdapter, nativeRequestAdapter);
+   assert.strictEqual(MockGpuAdapter.prototype.requestDevice, nativeRequestDevice);
+   assert(Object.hasOwn(globalThis.navigator.gpu, "requestAdapter"));
+   assert(Object.hasOwn(landingAdapter, "requestDevice"));
    const landingDevicePromise = landingAdapter.requestDevice({
       label: DEVICE_LABEL,
       requiredFeatures: ["timestamp-query"],
@@ -119,24 +125,18 @@ test("one wasm module reuses one page-session device and rejects a second module
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 8,
+      protocol_version: 9,
       generation: 1,
       device_request_count: 1,
       live_device_count: 1,
       renderer_lease_count: 2,
       device_destroy_count: 0,
-      route_local_destroy_suppression_count: 0,
       incompatible_acquire_failure_count: 0,
       incompatible_module_failure_count: 1,
       session_shutdown_count: 0,
       closed: false,
    });
    assert(Object.isFrozen(readSnapshot()));
-
-   landingDevice.destroy();
-   assert.equal(nativeDeviceDestroys, 0);
-   assert.equal(readSnapshot().route_local_destroy_suppression_count, 1);
-   assert.equal(readSnapshot().live_device_count, 1);
 
    landingModule.releaseOxideWebGpuDeviceSession(landingLease);
    landingModule.releaseOxideWebGpuDeviceSession(foundationLease);

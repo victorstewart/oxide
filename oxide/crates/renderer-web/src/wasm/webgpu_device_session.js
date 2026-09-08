@@ -3,7 +3,7 @@ const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state"
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 const MODULE_TOKEN = Object.freeze({});
-const PROTOCOL_VERSION = 8;
+const PROTOCOL_VERSION = 9;
 
 function snapshot(state)
 {
@@ -14,7 +14,6 @@ function snapshot(state)
       live_device_count: state.liveDeviceCount,
       renderer_lease_count: state.rendererLeaseCount,
       device_destroy_count: state.deviceDestroyCount,
-      route_local_destroy_suppression_count: state.routeLocalDestroySuppressionCount,
       incompatible_acquire_failure_count: state.incompatibleAcquireFailureCount,
       incompatible_module_failure_count: state.incompatibleModuleFailureCount,
       session_shutdown_count: state.sessionShutdownCount,
@@ -42,7 +41,7 @@ function destroyGeneration(state, generation)
    }
    generation.destroyed = true;
    markDeviceNotLive(state, generation);
-   Reflect.apply(state.originalDeviceDestroy, generation.device, []);
+   generation.device.destroy();
    state.deviceDestroyCount += 1;
 }
 
@@ -71,22 +70,17 @@ function createState()
       deviceRequestCount: 0,
       liveDeviceCount: 0,
       deviceDestroyCount: 0,
-      routeLocalDestroySuppressionCount: 0,
       incompatibleAcquireFailureCount: 0,
       incompatibleModuleFailureCount: 0,
       moduleOwnerToken: null,
       sessionShutdownCount: 0,
       closed: false,
-      gpuPrototype: null,
+      gpu: null,
       originalRequestAdapter: null,
       patchedRequestAdapter: null,
       adapterPromises: new Map(),
       adapterDescriptorKeys: new WeakMap(),
       adapterPatches: new WeakMap(),
-      sharedDevices: new WeakSet(),
-      devicePrototype: null,
-      originalDeviceDestroy: null,
-      patchedDeviceDestroy: null,
    };
    Object.defineProperty(globalThis, STATE_SYMBOL, {
       value: state,
@@ -174,8 +168,6 @@ function createGeneration(state)
 
 function registerDevice(state, generation, device)
 {
-   installDeviceDestroyPatch(state, device);
-   state.sharedDevices.add(device);
    generation.device = device;
    generation.live = true;
    state.liveDeviceCount += 1;
@@ -199,40 +191,6 @@ function registerDevice(state, generation, device)
    return device;
 }
 
-function installDeviceDestroyPatch(state, device)
-{
-   const devicePrototype = Object.getPrototypeOf(device);
-   if (!devicePrototype || typeof devicePrototype.destroy !== "function") {
-      throw new Error("browser GPUDevice prototype unavailable");
-   }
-   if (state.devicePrototype) {
-      if (devicePrototype !== state.devicePrototype
-         || devicePrototype.destroy !== state.patchedDeviceDestroy) {
-         throw new Error("browser GPUDevice destroy changed after Oxide initialization");
-      }
-      return;
-   }
-   const descriptor = Object.getOwnPropertyDescriptor(devicePrototype, "destroy");
-   const originalDeviceDestroy = devicePrototype.destroy;
-   const patchedDeviceDestroy = function()
-   {
-      if (state.sharedDevices.has(this)) {
-         state.routeLocalDestroySuppressionCount += 1;
-         return;
-      }
-      return Reflect.apply(originalDeviceDestroy, this, arguments);
-   };
-   Object.defineProperty(devicePrototype, "destroy", {
-      value: patchedDeviceDestroy,
-      configurable: descriptor?.configurable ?? true,
-      enumerable: descriptor?.enumerable ?? false,
-      writable: descriptor?.writable ?? true,
-   });
-   state.devicePrototype = devicePrototype;
-   state.originalDeviceDestroy = originalDeviceDestroy;
-   state.patchedDeviceDestroy = patchedDeviceDestroy;
-}
-
 function registerAdapter(state, key, adapter)
 {
    let keys = state.adapterDescriptorKeys.get(adapter);
@@ -247,20 +205,18 @@ function registerAdapter(state, key, adapter)
 
 function installAdapterRequestDevicePatch(state, adapter)
 {
-   const adapterPrototype = Object.getPrototypeOf(adapter);
-   if (!adapterPrototype || typeof adapterPrototype.requestDevice !== "function") {
-      throw new Error("browser GPUAdapter prototype unavailable");
+   if (!adapter || typeof adapter.requestDevice !== "function") {
+      throw new Error("browser GPUAdapter requestDevice unavailable");
    }
-   const installed = state.adapterPatches.get(adapterPrototype);
-   if (installed && adapterPrototype.requestDevice === installed.patched) {
+   const installed = state.adapterPatches.get(adapter);
+   if (installed && adapter.requestDevice === installed.patched) {
       return;
    }
    if (installed) {
       throw new Error("browser GPUAdapter requestDevice changed after Oxide initialization");
    }
 
-   const descriptor = Object.getOwnPropertyDescriptor(adapterPrototype, "requestDevice");
-   const originalRequestDevice = adapterPrototype.requestDevice;
+   const originalRequestDevice = adapter.requestDevice;
    const patchedRequestDevice = function(deviceDescriptor)
    {
       if (!deviceDescriptor || deviceDescriptor.label !== DEVICE_LABEL) {
@@ -306,13 +262,11 @@ function installAdapterRequestDevicePatch(state, adapter)
       return generation.devicePromise;
    };
 
-   Object.defineProperty(adapterPrototype, "requestDevice", {
+   Object.defineProperty(adapter, "requestDevice", {
       value: patchedRequestDevice,
-      configurable: descriptor?.configurable ?? true,
-      enumerable: descriptor?.enumerable ?? false,
-      writable: descriptor?.writable ?? true,
+      configurable: true,
    });
-   state.adapterPatches.set(adapterPrototype, {
+   state.adapterPatches.set(adapter, {
       original: originalRequestDevice,
       patched: patchedRequestDevice,
    });
@@ -321,20 +275,17 @@ function installAdapterRequestDevicePatch(state, adapter)
 function installRequestAdapterPatch(state)
 {
    const gpu = globalThis.navigator?.gpu;
-   const gpuPrototype = gpu && Object.getPrototypeOf(gpu);
-   if (!gpuPrototype || typeof gpuPrototype.requestAdapter !== "function") {
+   if (!gpu || typeof gpu.requestAdapter !== "function") {
       throw new Error("browser GPU requestAdapter unavailable");
    }
-   if (state.gpuPrototype) {
-      if (gpuPrototype !== state.gpuPrototype
-         || gpuPrototype.requestAdapter !== state.patchedRequestAdapter) {
+   if (state.gpu) {
+      if (gpu !== state.gpu || gpu.requestAdapter !== state.patchedRequestAdapter) {
          throw new Error("browser GPU requestAdapter changed after Oxide initialization");
       }
       return;
    }
 
-   const descriptor = Object.getOwnPropertyDescriptor(gpuPrototype, "requestAdapter");
-   const originalRequestAdapter = gpuPrototype.requestAdapter;
+   const originalRequestAdapter = gpu.requestAdapter;
    const patchedRequestAdapter = function(adapterDescriptor)
    {
       const key = adapterDescriptorKey(adapterDescriptor);
@@ -368,13 +319,11 @@ function installRequestAdapterPatch(state)
       state.adapterPromises.set(key, adapterPromise);
       return adapterPromise;
    };
-   Object.defineProperty(gpuPrototype, "requestAdapter", {
+   Object.defineProperty(gpu, "requestAdapter", {
       value: patchedRequestAdapter,
-      configurable: descriptor?.configurable ?? true,
-      enumerable: descriptor?.enumerable ?? false,
-      writable: descriptor?.writable ?? true,
+      configurable: true,
    });
-   state.gpuPrototype = gpuPrototype;
+   state.gpu = gpu;
    state.originalRequestAdapter = originalRequestAdapter;
    state.patchedRequestAdapter = patchedRequestAdapter;
 }
