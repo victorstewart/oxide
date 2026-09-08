@@ -234,6 +234,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(!javascript.contains("device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
    assert!(javascript.contains("state.initializationTail = ready.then(() => finished)"));
+   assert!(javascript.contains("setTimeout(() => finishInitialization(state, lease), 0)"));
    assert!(javascript.contains("pendingRendererInitializationCount"));
    assert!(compact_rust.contains("device_session.complete_initialization();"));
    assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));

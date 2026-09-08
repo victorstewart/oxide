@@ -63,11 +63,14 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
    const landingAdapter = await globalThis.navigator.gpu.requestAdapter();
    const landingDevice = await landingAdapter.requestDevice();
    landingModule.completeOxideWebGpuDeviceInitialization(landingLease);
+   await Promise.resolve();
+   assert.equal(foundationInitializationStarted, false);
    await foundationReady;
    assert.equal(foundationInitializationStarted, true);
    const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
    const foundationDevice = await foundationAdapter.requestDevice();
    foundationModule.completeOxideWebGpuDeviceInitialization(foundationLease);
+   await new Promise((resolve) => setTimeout(resolve, 0));
    assert.notStrictEqual(landingAdapter, foundationAdapter);
    assert.notStrictEqual(landingDevice, foundationDevice);
    assert.equal(nativeAdapterRequests, 2);
@@ -77,7 +80,7 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 4,
+      protocol_version: 5,
       generation: 0,
       device_request_count: 0,
       live_device_count: 0,
@@ -99,10 +102,17 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
    const failedLease = landingModule.acquireOxideWebGpuDeviceSession();
    const recoveredLease = foundationModule.acquireOxideWebGpuDeviceSession();
    await landingModule.waitForOxideWebGpuDeviceInitialization(failedLease);
+   let recoveryInitializationStarted = false;
+   foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease).then(() => {
+      recoveryInitializationStarted = true;
+   });
    landingModule.releaseOxideWebGpuDeviceSession(failedLease);
+   await Promise.resolve();
+   assert.equal(recoveryInitializationStarted, false);
    await foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease);
    foundationModule.completeOxideWebGpuDeviceInitialization(recoveredLease);
    foundationModule.releaseOxideWebGpuDeviceSession(recoveredLease);
+   await new Promise((resolve) => setTimeout(resolve, 0));
    assert.equal(readSnapshot().pending_renderer_initialization_count, 0);
    assert.equal(readSnapshot().renderer_lease_count, 0);
 

@@ -1,7 +1,7 @@
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 4;
+const PROTOCOL_VERSION = 5;
 
 function snapshot(state)
 {
@@ -95,6 +95,7 @@ export function acquireOxideWebGpuDeviceSession()
    const lease = {
       released: false,
       initializationFinished: false,
+      initializationFinishScheduled: false,
       ready,
       finish,
    };
@@ -130,13 +131,22 @@ function finishInitialization(state, lease)
    lease.finish();
 }
 
+function settleThenFinishInitialization(state, lease)
+{
+   if (!lease || lease.initializationFinished || lease.initializationFinishScheduled) {
+      return;
+   }
+   lease.initializationFinishScheduled = true;
+   setTimeout(() => finishInitialization(state, lease), 0);
+}
+
 export function completeOxideWebGpuDeviceInitialization(lease)
 {
    const state = sharedState();
    if (!lease || lease.released) {
       throw new Error("Oxide WebGPU renderer lease is not live");
    }
-   finishInitialization(state, lease);
+   settleThenFinishInitialization(state, lease);
 }
 
 export function releaseOxideWebGpuDeviceSession(lease)
@@ -144,7 +154,7 @@ export function releaseOxideWebGpuDeviceSession(lease)
    if (!lease || lease.released) {
       return;
    }
-   finishInitialization(MODULE_STATE, lease);
+   settleThenFinishInitialization(MODULE_STATE, lease);
    lease.released = true;
    MODULE_STATE.leases.delete(lease);
    MODULE_STATE.rendererLeaseCount = Math.max(0, MODULE_STATE.rendererLeaseCount - 1);
