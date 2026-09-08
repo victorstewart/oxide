@@ -37,6 +37,7 @@ test("one wasm module reuses one page-session device and rejects a second module
    {
       requestDevice()
       {
+         assert(this instanceof MockGpuAdapter);
          nativeDeviceRequests += 1;
          if (deviceFailures > 0) {
             deviceFailures -= 1;
@@ -56,6 +57,7 @@ test("one wasm module reuses one page-session device and rejects a second module
    {
       requestAdapter(options)
       {
+         assert(this instanceof MockGpu);
          nativeAdapterRequests += 1;
          if (options?.forceFallbackAdapter && fallbackAdapterFailures > 0) {
             fallbackAdapterFailures -= 1;
@@ -94,7 +96,12 @@ test("one wasm module reuses one page-session device and rejects a second module
       forceFallbackAdapter: false,
       powerPreference: "high-performance",
    });
+   const detachedAdapterPromise = globalThis.navigator.gpu.requestAdapter.call({}, {
+      forceFallbackAdapter: false,
+      powerPreference: "high-performance",
+   });
    assert.strictEqual(landingAdapterPromise, foundationAdapterPromise);
+   assert.strictEqual(landingAdapterPromise, detachedAdapterPromise);
    const [landingAdapter, foundationAdapter] = await Promise.all([
       landingAdapterPromise,
       foundationAdapterPromise,
@@ -114,7 +121,13 @@ test("one wasm module reuses one page-session device and rejects a second module
       requiredFeatures: ["timestamp-query"],
       requiredLimits: { maxTextureDimension2D: 8_192, maxBindGroups: 4 },
    });
+   const detachedDevicePromise = foundationAdapter.requestDevice.call({}, {
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxTextureDimension2D: 8_192, maxBindGroups: 4 },
+   });
    assert.strictEqual(landingDevicePromise, foundationDevicePromise);
+   assert.strictEqual(landingDevicePromise, detachedDevicePromise);
    const [landingDevice, foundationDevice] = await Promise.all([
       landingDevicePromise,
       foundationDevicePromise,

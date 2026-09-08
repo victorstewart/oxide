@@ -216,17 +216,21 @@ function installAdapterRequestDevicePatch(state, adapter)
       throw new Error("browser GPUAdapter requestDevice changed after Oxide initialization");
    }
 
-   const originalRequestDevice = adapter.requestDevice;
+   // Chromium's WebGPU implementation keeps the native Instance associated with
+   // the concrete adapter receiver. Retain that receiver in the callable for the
+   // full page session instead of retaining only an unbound prototype function.
+   const ownerAdapter = adapter;
+   const originalRequestDevice = ownerAdapter.requestDevice.bind(ownerAdapter);
    const patchedRequestDevice = function(deviceDescriptor)
    {
       if (!deviceDescriptor || deviceDescriptor.label !== DEVICE_LABEL) {
-         return Reflect.apply(originalRequestDevice, this, arguments);
+         return originalRequestDevice(...arguments);
       }
       const generation = state.currentGeneration;
       if (!generation || state.closed) {
          return Promise.reject(new Error("Oxide WebGPU device requested without an active page session"));
       }
-      const adapterKeys = state.adapterDescriptorKeys.get(this);
+      const adapterKeys = state.adapterDescriptorKeys.get(ownerAdapter);
       if (!adapterKeys || adapterKeys.size !== 1) {
          state.incompatibleAcquireFailureCount += 1;
          return Promise.reject(new Error("incompatible Oxide WebGPU adapter requirements"));
@@ -248,7 +252,7 @@ function installAdapterRequestDevicePatch(state, adapter)
       if (!generation.devicePromise) {
          state.deviceRequestCount += 1;
          generation.devicePromise = Promise.resolve()
-            .then(() => Reflect.apply(originalRequestDevice, this, [deviceDescriptor]))
+            .then(() => originalRequestDevice(deviceDescriptor))
             .then(
                (device) => registerDevice(state, generation, device),
                (error) => {
@@ -285,12 +289,14 @@ function installRequestAdapterPatch(state)
       return;
    }
 
-   const originalRequestAdapter = gpu.requestAdapter;
+   // Keep the concrete GPU receiver alive with its native callable. This is
+   // required by Chromium across independently instantiated WASM modules.
+   const originalRequestAdapter = gpu.requestAdapter.bind(gpu);
    const patchedRequestAdapter = function(adapterDescriptor)
    {
       const key = adapterDescriptorKey(adapterDescriptor);
       if (state.closed) {
-         return Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
+         return Promise.resolve(originalRequestAdapter(...arguments))
             .then((adapter) => {
                if (adapter) {
                   installAdapterRequestDevicePatch(state, adapter);
@@ -302,7 +308,7 @@ function installRequestAdapterPatch(state)
       if (existing) {
          return existing;
       }
-      const adapterPromise = Promise.resolve(Reflect.apply(originalRequestAdapter, this, arguments))
+      const adapterPromise = Promise.resolve(originalRequestAdapter(...arguments))
          .then(
             (adapter) => {
                if (!adapter) {
