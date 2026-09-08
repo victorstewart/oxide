@@ -207,13 +207,22 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "memory_snapshot:WebGpuMemorySnapshot,_adapter:wgpu::Adapter,_instance:wgpu::Instance,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=webgpu_module_instance();"
+   ));
+   assert!(compact_rust.contains(
+      "staticWEBGPU_MODULE_INSTANCE:wgpu::Instance=wgpu::Instance::new"
+   ));
+   assert!(compact_rust.contains(
+      "staticWEBGPU_MODULE_ROOT:RefCell<Option<BrowserWebGpuModuleRoot>>"
+   ));
+   assert!(compact_rust.contains(
+      "retain_webgpu_module_root(&adapter,&device,&queue);"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
    ));
    assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
-   assert!(!rust.contains("thread_local!"));
+   assert_eq!(rust.matches("thread_local!").count(), 1);
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
    assert!(compact_rust.contains(
       "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
@@ -233,6 +242,11 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
    assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
    assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
+   assert!(javascript.contains("function adapterDescriptorKey(descriptor)"));
+   assert!(javascript.contains("adapterPromises: new Map()"));
+   assert!(javascript.contains("adapterDescriptorKeys: new WeakMap()"));
+   assert!(javascript.contains("const existing = state.adapterPromises.get(key)"));
+   assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
    assert!(javascript.contains("generation.devicePromise"));
    assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
    assert!(javascript.contains("generation.device.destroy()"));

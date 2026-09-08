@@ -10,6 +10,7 @@ test("separate wasm modules reuse one page-session device across route transitio
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
    let nativeDeviceDestroys = 0;
+   let fallbackAdapterFailures = 1;
    const events = new EventTarget();
    globalThis.addEventListener = events.addEventListener.bind(events);
    globalThis.dispatchEvent = events.dispatchEvent.bind(events);
@@ -39,9 +40,13 @@ test("separate wasm modules reuse one page-session device across route transitio
    }
    class MockGpu
    {
-      requestAdapter()
+      requestAdapter(options)
       {
          nativeAdapterRequests += 1;
+         if (options?.forceFallbackAdapter && fallbackAdapterFailures > 0) {
+            fallbackAdapterFailures -= 1;
+            return Promise.reject(new Error("transient adapter discovery failure"));
+         }
          return Promise.resolve(new MockGpuAdapter());
       }
    }
@@ -61,8 +66,20 @@ test("separate wasm modules reuse one page-session device across route transitio
    ]);
    const landingLease = landingModule.acquireOxideWebGpuDeviceSession();
    const foundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
-   const landingAdapter = await globalThis.navigator.gpu.requestAdapter();
-   const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
+   const landingAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+   });
+   const foundationAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      forceFallbackAdapter: false,
+      powerPreference: "high-performance",
+   });
+   assert.strictEqual(landingAdapterPromise, foundationAdapterPromise);
+   const [landingAdapter, foundationAdapter] = await Promise.all([
+      landingAdapterPromise,
+      foundationAdapterPromise,
+   ]);
+   assert.strictEqual(landingAdapter, foundationAdapter);
    const landingDevicePromise = landingAdapter.requestDevice({
       label: DEVICE_LABEL,
       requiredFeatures: ["timestamp-query"],
@@ -84,7 +101,7 @@ test("separate wasm modules reuse one page-session device across route transitio
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 7,
+      protocol_version: 8,
       generation: 1,
       device_request_count: 1,
       live_device_count: 1,
@@ -101,7 +118,10 @@ test("separate wasm modules reuse one page-session device across route transitio
    for (let transition = 0; transition < 128; transition += 1) {
       const module = transition % 2 === 0 ? landingModule : foundationModule;
       const lease = module.acquireOxideWebGpuDeviceSession();
-      const adapter = await globalThis.navigator.gpu.requestAdapter();
+      const adapter = await globalThis.navigator.gpu.requestAdapter({
+         powerPreference: "high-performance",
+         forceFallbackAdapter: false,
+      });
       const device = await adapter.requestDevice({
          label: DEVICE_LABEL,
          requiredFeatures: ["timestamp-query"],
@@ -110,7 +130,7 @@ test("separate wasm modules reuse one page-session device across route transitio
       assert.strictEqual(device, landingDevice);
       module.releaseOxideWebGpuDeviceSession(lease);
    }
-   assert.equal(nativeAdapterRequests, 130);
+   assert.equal(nativeAdapterRequests, 1);
    assert.equal(nativeDeviceRequests, 1);
    assert.deepEqual(
       {
@@ -122,8 +142,42 @@ test("separate wasm modules reuse one page-session device across route transitio
       { requests: 1, live: 1, leases: 0, destroys: 0 },
    );
 
+   const fallbackOptions = {
+      powerPreference: "high-performance",
+      forceFallbackAdapter: true,
+   };
+   await assert.rejects(
+      globalThis.navigator.gpu.requestAdapter(fallbackOptions),
+      /transient adapter discovery failure/,
+   );
+   assert(await globalThis.navigator.gpu.requestAdapter(fallbackOptions));
+   assert.equal(nativeAdapterRequests, 3);
+
    const incompatibleLease = foundationModule.acquireOxideWebGpuDeviceSession();
-   const incompatibleAdapter = await globalThis.navigator.gpu.requestAdapter();
+   const lowPowerAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "low-power",
+      forceFallbackAdapter: false,
+   });
+   assert.strictEqual(
+      lowPowerAdapterPromise,
+      globalThis.navigator.gpu.requestAdapter({
+         forceFallbackAdapter: false,
+         powerPreference: "low-power",
+      }),
+   );
+   const lowPowerAdapter = await lowPowerAdapterPromise;
+   await assert.rejects(
+      lowPowerAdapter.requestDevice({
+         label: DEVICE_LABEL,
+         requiredFeatures: ["timestamp-query"],
+         requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
+      }),
+      /incompatible Oxide WebGPU adapter requirements/,
+   );
+   const incompatibleAdapter = await globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+   });
    await assert.rejects(
       incompatibleAdapter.requestDevice({
          label: DEVICE_LABEL,
@@ -132,24 +186,26 @@ test("separate wasm modules reuse one page-session device across route transitio
       }),
       /incompatible Oxide WebGPU device requirements/,
    );
-   assert.equal(nativeAdapterRequests, 131);
+   assert.equal(nativeAdapterRequests, 4);
    foundationModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
-   assert.equal(readSnapshot().incompatible_acquire_failure_count, 1);
+   assert.equal(readSnapshot().incompatible_acquire_failure_count, 2);
 
    landingDevice.loseForTest();
    await Promise.resolve();
    assert.equal(readSnapshot().generation, 0);
    assert.equal(readSnapshot().live_device_count, 0);
    const recoveredLease = landingModule.acquireOxideWebGpuDeviceSession();
-   const recoveredAdapter = await globalThis.navigator.gpu.requestAdapter();
+   const recoveredAdapter = await globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+   });
    const recoveredDevice = await recoveredAdapter.requestDevice({
       label: DEVICE_LABEL,
       requiredFeatures: ["timestamp-query"],
       requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
    });
-   assert.notStrictEqual(recoveredAdapter, landingAdapter);
    assert.notStrictEqual(recoveredDevice, landingDevice);
-   assert.equal(nativeAdapterRequests, 132);
+   assert.equal(nativeAdapterRequests, 4);
    assert.equal(nativeDeviceRequests, 2);
    assert.equal(readSnapshot().generation, 2);
    assert.equal(readSnapshot().live_device_count, 1);
