@@ -9,16 +9,32 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
    let nativeDeviceDestroys = 0;
+   let failNextAdapterRequest = false;
+   let failNextDeviceRequest = false;
    const events = new EventTarget();
    globalThis.addEventListener = events.addEventListener.bind(events);
    globalThis.dispatchEvent = events.dispatchEvent.bind(events);
 
    class MockGpuAdapter
    {
+      constructor(owner)
+      {
+         this.owner = owner;
+      }
+
       requestDevice()
       {
          nativeDeviceRequests += 1;
+         if (failNextDeviceRequest) {
+            failNextDeviceRequest = false;
+            return Promise.reject(new DOMException(
+               "A valid external Instance reference no longer exists.",
+               "OperationError",
+            ));
+         }
+         const owner = this.owner;
          return Promise.resolve({
+            owner,
             destroy()
             {
                nativeDeviceDestroys += 1;
@@ -31,7 +47,11 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
       requestAdapter()
       {
          nativeAdapterRequests += 1;
-         return Promise.resolve(new MockGpuAdapter());
+         if (failNextAdapterRequest) {
+            failNextAdapterRequest = false;
+            return Promise.reject(new Error("adapter initialization failed"));
+         }
+         return Promise.resolve(new MockGpuAdapter(nativeAdapterRequests));
       }
    }
    Object.defineProperty(globalThis, "navigator", {
@@ -70,6 +90,8 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    foundationModule.completeOxideWebGpuDeviceInitialization(foundationLease);
    assert.notStrictEqual(landingAdapter, foundationAdapter);
    assert.notStrictEqual(landingDevice, foundationDevice);
+   assert.equal(landingDevice.owner, landingAdapter.owner);
+   assert.equal(foundationDevice.owner, foundationAdapter.owner);
    assert.equal(nativeAdapterRequests, 2);
    assert.equal(nativeDeviceRequests, 2);
 
@@ -96,13 +118,41 @@ test("separate wasm modules retain page lifecycle without intercepting WebGPU ow
    assert.equal(readSnapshot().renderer_lease_count, 0);
    assert.equal(nativeDeviceDestroys, 0);
 
-   const failedLease = landingModule.acquireOxideWebGpuDeviceSession();
-   const recoveredLease = foundationModule.acquireOxideWebGpuDeviceSession();
-   await landingModule.waitForOxideWebGpuDeviceInitialization(failedLease);
-   landingModule.releaseOxideWebGpuDeviceSession(failedLease);
-   await foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease);
-   foundationModule.completeOxideWebGpuDeviceInitialization(recoveredLease);
-   foundationModule.releaseOxideWebGpuDeviceSession(recoveredLease);
+   const recoveredOwners = new Set();
+   for (let attempt = 0; attempt < 32; attempt += 1) {
+      const failedModule = attempt % 2 === 0 ? landingModule : foundationModule;
+      const recoveredModule = attempt % 2 === 0 ? foundationModule : landingModule;
+      const failedLease = failedModule.acquireOxideWebGpuDeviceSession();
+      const recoveredLease = recoveredModule.acquireOxideWebGpuDeviceSession();
+      await failedModule.waitForOxideWebGpuDeviceInitialization(failedLease);
+      if (attempt % 2 === 0) {
+         failNextAdapterRequest = true;
+         await assert.rejects(
+            globalThis.navigator.gpu.requestAdapter(),
+            /adapter initialization failed/,
+         );
+      } else {
+         failNextDeviceRequest = true;
+         const failedAdapter = await globalThis.navigator.gpu.requestAdapter();
+         await assert.rejects(
+            failedAdapter.requestDevice(),
+            /valid external Instance reference no longer exists/,
+         );
+      }
+      failedModule.releaseOxideWebGpuDeviceSession(failedLease);
+
+      await recoveredModule.waitForOxideWebGpuDeviceInitialization(recoveredLease);
+      const recoveredAdapter = await globalThis.navigator.gpu.requestAdapter();
+      const recoveredDevice = await recoveredAdapter.requestDevice();
+      assert.equal(recoveredDevice.owner, recoveredAdapter.owner);
+      assert.equal(recoveredOwners.has(recoveredDevice.owner), false);
+      recoveredOwners.add(recoveredDevice.owner);
+      recoveredModule.completeOxideWebGpuDeviceInitialization(recoveredLease);
+      recoveredModule.releaseOxideWebGpuDeviceSession(recoveredLease);
+   }
+   assert.equal(recoveredOwners.size, 32);
+   assert.equal(nativeAdapterRequests, 66);
+   assert.equal(nativeDeviceRequests, 50);
    assert.equal(readSnapshot().pending_renderer_initialization_count, 0);
    assert.equal(readSnapshot().renderer_lease_count, 0);
 
