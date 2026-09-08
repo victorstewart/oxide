@@ -1,32 +1,43 @@
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 4;
+const MODULE_TOKEN = Object.freeze({});
+const PROTOCOL_VERSION = 10;
 
 function snapshot(state)
 {
    return Object.freeze({
       protocol_version: PROTOCOL_VERSION,
-      generation: 0,
-      device_request_count: 0,
-      live_device_count: 0,
       renderer_lease_count: state.rendererLeaseCount,
       pending_renderer_initialization_count: state.pendingRendererInitializationCount,
-      device_destroy_count: 0,
-      incompatible_acquire_failure_count: 0,
+      incompatible_module_failure_count: state.incompatibleModuleFailureCount,
       session_shutdown_count: state.sessionShutdownCount,
       closed: state.closed,
    });
 }
 
+function finishInitialization(state, lease)
+{
+   if (!lease || lease.initializationFinished) {
+      return;
+   }
+   lease.initializationFinished = true;
+   state.pendingRendererInitializationCount = Math.max(
+      0,
+      state.pendingRendererInitializationCount - 1,
+   );
+   lease.finish();
+}
+
 function shutdown(state)
 {
-   if (!state.closed) {
-      state.closed = true;
-      state.sessionShutdownCount += 1;
-      for (const lease of state.leases) {
-         finishInitialization(state, lease);
-      }
+   if (state.closed) {
+      return snapshot(state);
+   }
+   state.closed = true;
+   state.sessionShutdownCount += 1;
+   for (const lease of state.leases) {
+      finishInitialization(state, lease);
    }
    return snapshot(state);
 }
@@ -35,8 +46,10 @@ function createState()
 {
    const state = {
       protocolVersion: PROTOCOL_VERSION,
+      moduleOwnerToken: null,
       rendererLeaseCount: 0,
       pendingRendererInitializationCount: 0,
+      incompatibleModuleFailureCount: 0,
       sessionShutdownCount: 0,
       closed: false,
       initializationTail: Promise.resolve(),
@@ -87,6 +100,12 @@ export function acquireOxideWebGpuDeviceSession()
    if (state.closed) {
       throw new Error("Oxide WebGPU page session is shut down");
    }
+   if (state.moduleOwnerToken === null) {
+      state.moduleOwnerToken = MODULE_TOKEN;
+   } else if (state.moduleOwnerToken !== MODULE_TOKEN) {
+      state.incompatibleModuleFailureCount += 1;
+      throw new Error("Oxide WebGPU page session belongs to another compiled WASM module");
+   }
    const ready = state.initializationTail;
    let finish;
    const finished = new Promise((resolve) => {
@@ -112,22 +131,9 @@ export function waitForOxideWebGpuDeviceInitialization(lease)
    }
    return lease.ready.then(() => {
       if (lease.released || sharedState().closed) {
-         throw new Error("Oxide WebGPU renderer lease cannot initialize after release or page shutdown");
+         throw new Error("Oxide WebGPU renderer cannot initialize after release or page shutdown");
       }
    });
-}
-
-function finishInitialization(state, lease)
-{
-   if (!lease || lease.initializationFinished) {
-      return;
-   }
-   lease.initializationFinished = true;
-   state.pendingRendererInitializationCount = Math.max(
-      0,
-      state.pendingRendererInitializationCount - 1,
-   );
-   lease.finish();
 }
 
 export function completeOxideWebGpuDeviceInitialization(lease)

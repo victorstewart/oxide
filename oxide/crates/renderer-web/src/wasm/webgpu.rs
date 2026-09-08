@@ -20,13 +20,11 @@ use js_sys::Reflect;
 use oxide_renderer_api as api;
 #[cfg(feature = "diagnostic-instrumentation")]
 use oxide_wasm_alloc_counter::AllocationSnapshot;
-#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(feature = "diagnostic-instrumentation")]
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
-#[cfg(any(feature = "diagnostic-instrumentation", feature = "snapshot-tests"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -65,6 +63,23 @@ const GLYPH_INSTANCE_BYTES: usize = 36;
 const GLYPH_VERTEX_COUNT: u32 = 4;
 const EFFECT_GRAPH_CACHE_CAPACITY: usize = 8;
 static NEXT_WEBGPU_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+   static BROWSER_WEBGPU_INSTANCE: RefCell<Option<wgpu::Instance>> = const { RefCell::new(None) };
+}
+
+fn browser_webgpu_instance() -> wgpu::Instance
+{
+   BROWSER_WEBGPU_INSTANCE.with(|shared| {
+      let mut shared = shared.borrow_mut();
+      shared.get_or_insert_with(|| {
+         wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+         })
+      }).clone()
+   })
+}
 
 #[inline]
 fn web_effect_graph_hash_mix(hash: &mut u64, value: u64)
@@ -2214,6 +2229,15 @@ impl BrowserRenderer {
        self.inner.submitted_work_done().await;
     }
 
+    /// Creates an owned queue-completion future synchronously so a host with interior
+    /// mutable application state can release its borrow before awaiting the fence.
+    pub fn submitted_work_done_future(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + 'static
+    {
+       self.inner.submitted_work_done_future()
+    }
+
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {
         self.inner.collect_timestamp_readbacks()
     }
@@ -2496,6 +2520,7 @@ impl BrowserRenderer {
 struct BrowserWebGpuDeviceSessionLease
 {
    lease: JsValue,
+   initialization_completed: Rc<Cell<bool>>,
 }
 
 impl BrowserWebGpuDeviceSessionLease
@@ -2512,12 +2537,7 @@ impl BrowserWebGpuDeviceSessionLease
             let message = error.as_string().unwrap_or_else(|| format!("{error:?}"));
             api::RenderError::Io(format!("webgpu initialization unavailable: {message}"))
          })?;
-      Ok(Self { lease })
-   }
-
-   fn complete_initialization(&self)
-   {
-      complete_webgpu_device_initialization(&self.lease);
+      Ok(Self { lease, initialization_completed: Rc::new(Cell::new(false)) })
    }
 }
 
@@ -3075,10 +3095,7 @@ impl WebGpuRenderer {
         pipeline_profile: BrowserRendererPipelineProfile,
     ) -> Result<Self, api::RenderError> {
         let device_session = BrowserWebGpuDeviceSessionLease::acquire().await?;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
-        });
+        let instance = browser_webgpu_instance();
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|err| {
@@ -3126,7 +3143,6 @@ impl WebGpuRenderer {
             })
             .await
             .map_err(|err| api::RenderError::Io(format!("webgpu device unavailable: {err}")))?;
-        device_session.complete_initialization();
         #[cfg(feature = "diagnostic-instrumentation")]
         let timestamp_queries = if timestamp_query_supported {
             Some(WebGpuTimestampQueries::new(
@@ -3367,14 +3383,30 @@ impl WebGpuRenderer {
         self.stats
     }
 
-    pub async fn submitted_work_done(&self)
+    pub fn submitted_work_done_future(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + 'static
     {
+       let lease = self._device_session.lease.clone();
+       let initialization_completed = Rc::clone(
+          &self._device_session.initialization_completed,
+       );
        let promise = js_sys::Promise::new(&mut |resolve, _reject| {
           self.queue.on_submitted_work_done(move || {
              let _ = resolve.call0(&JsValue::UNDEFINED);
           });
        });
-       let _ = JsFuture::from(promise).await;
+       async move {
+          let _ = JsFuture::from(promise).await;
+          if !initialization_completed.replace(true) {
+             complete_webgpu_device_initialization(&lease);
+          }
+       }
+    }
+
+    pub async fn submitted_work_done(&self)
+    {
+       self.submitted_work_done_future().await;
     }
 
     pub fn collect_timestamp_readbacks(&mut self) -> WebRendererStats {

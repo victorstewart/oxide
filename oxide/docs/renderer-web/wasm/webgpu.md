@@ -74,7 +74,7 @@ C26 adds a three-slice dynamic-uniform property ring. Queue writes and render su
 
 Draw count is unchanged. Generic vertex uploads fall from 32 to 20 bytes each, u16-eligible index uploads fall from four to two bytes each, and frame-level vertex/index reserialization is deleted. The C16 browser workload separately measures 10,000 glyph quads, 10,000 image quads, and a 70,002-vertex u32-fallback solid mesh while retaining direct GPU timestamp and visual evidence.
 
-The page-session lifecycle contract keeps WebGPU object ownership inside each wgpu instance. Its focused cross-module test requires independent adapters/devices, shared lease and terminal-page state, and zero JavaScript-owned device destruction. Renderer frame work and visuals are unchanged.
+The page-session lifecycle contract keeps WebGPU object ownership inside one compiled module's retained wgpu instance. It serializes renderer construction through the first submitted-work fence, releases failed constructors, preserves persisted pages, closes terminal pages, and rejects a second compiled module before it can mix external-object owners. An owned completion future is constructed synchronously so hosts can release interior-mutable application state before awaiting that fence. JavaScript never intercepts adapter/device creation or destroys renderer-owned devices; renderer frame work and visuals are unchanged.
 
 C19 measures construction resource count, direct/backdrop/Scene3D logical target bytes, resize creation work, explicit prewarm cost, first-feature submission, queue completion, and GPU time across fresh Chrome processes. A simple direct app leaves prewarm disabled and retains zero auxiliary-target bytes.
 

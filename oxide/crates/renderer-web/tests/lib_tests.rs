@@ -256,7 +256,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(compact_rust.contains("_adapter:wgpu::Adapter,_instance:wgpu::Instance,"));
    assert!(compact_rust.contains("_device_session:BrowserWebGpuDeviceSessionLease,"));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas_with_profile(canvas:HtmlCanvasElement,pipeline_profile:BrowserRendererPipelineProfile,)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=wgpu::Instance::new"
+      "pubasyncfnfrom_canvas_with_profile(canvas:HtmlCanvasElement,pipeline_profile:BrowserRendererPipelineProfile,)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=browser_webgpu_instance()"
    ));
    assert!(compact_rust.contains(
       "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{Self::from_canvas_with_profile(canvas,BrowserRendererPipelineProfile::full()).await}"
@@ -264,12 +264,24 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(compact_rust.contains("_adapter:adapter,_instance:instance,"));
    assert!(compact_rust.contains("_device_session:device_session,"));
    assert!(rust.contains("label: Some(\"oxide-webgpu-renderer-device-v2\")"));
-   assert!(!rust.contains("thread_local!"));
+   assert!(compact_rust.contains(
+      "thread_local!{staticBROWSER_WEBGPU_INSTANCE:RefCell<Option<wgpu::Instance>>"
+   ));
+   assert!(compact_rust.contains(
+      "structBrowserWebGpuDeviceSessionLease{lease:JsValue,initialization_completed:Rc<Cell<bool>>,}"
+   ));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
    assert!(compact_rust.contains(
       "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
    ));
+   assert!(compact_rust.contains(
+      "pubfnsubmitted_work_done_future(&self,)->implstd::future::Future<Output=()>+'static{self.inner.submitted_work_done_future()}"
+   ));
    assert!(compact_rust.contains("self.queue.on_submitted_work_done"));
+   assert!(compact_rust.contains(
+      "asyncmove{let_=JsFuture::from(promise).await;if!initialization_completed.replace(true){complete_webgpu_device_initialization(&lease);}}"
+   ));
+   assert!(compact_rust.contains("self.submitted_work_done_future().await;"));
 
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.state\")"
@@ -283,10 +295,15 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(!javascript.contains("requestAdapter"));
    assert!(!javascript.contains("requestDevice"));
    assert!(!javascript.contains("device.destroy()"));
+   assert!(javascript.contains("const MODULE_TOKEN = Object.freeze({})"));
+   assert!(javascript.contains("state.incompatibleModuleFailureCount += 1"));
+   assert!(javascript.contains(
+      "Oxide WebGPU page session belongs to another compiled WASM module"
+   ));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
    assert!(javascript.contains("state.initializationTail = ready.then(() => finished)"));
    assert!(javascript.contains("pendingRendererInitializationCount"));
-   assert!(compact_rust.contains("device_session.complete_initialization();"));
+   assert!(!compact_rust.contains("device_session.complete_initialization();"));
    assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
    assert!(javascript.contains("if (!event.persisted)"));
