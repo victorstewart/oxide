@@ -210,7 +210,10 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "thread_local!{staticBROWSER_WEBGPU_INSTANCE:RefCell<Option<wgpu::Instance>>"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=browser_webgpu_instance()"
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=browser_webgpu_instance()"
+   ));
+   assert!(compact_rust.contains(
+      "device_session.complete_initialization();Ok(Self{"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
@@ -231,26 +234,22 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
    ));
-   assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
-   assert!(javascript.contains("Object.defineProperty(adapter, \"requestDevice\""));
-   assert!(javascript.contains("adapter.requestDevice === installed.patched"));
-   assert!(javascript.contains("gpu.requestAdapter !== state.patchedRequestAdapter"));
-   assert!(javascript.contains("function adapterDescriptorKey(descriptor)"));
-   assert!(javascript.contains("adapterPromises: new Map()"));
-   assert!(javascript.contains("adapterDescriptorKeys: new WeakMap()"));
-   assert!(javascript.contains("const existing = state.adapterPromises.get(key)"));
-   assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
-   assert!(javascript.contains("generation.devicePromise"));
-   assert!(javascript.contains("Object.defineProperty(gpu, \"requestAdapter\""));
-   assert!(javascript.contains("generation.device.destroy()"));
+   assert!(javascript.contains("initializationTail: Promise.resolve()"));
+   assert!(javascript.contains("const ready = state.initializationTail"));
+   assert!(javascript.contains("state.initializationTail = ready.then(() => finished)"));
+   assert!(javascript.contains("waitForOxideWebGpuDeviceInitialization"));
+   assert!(javascript.contains("completeOxideWebGpuDeviceInitialization"));
+   assert!(javascript.contains("finishInitialization(state, lease)"));
+   assert!(!javascript.contains("requestAdapter"));
+   assert!(!javascript.contains("requestDevice"));
    assert!(!javascript.contains("Object.getPrototypeOf"));
-   assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
    assert!(javascript.contains("state.incompatibleModuleFailureCount += 1"));
    assert!(javascript.contains(
       "Oxide WebGPU page session belongs to another compiled WASM module"
    ));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
-   assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
+   assert!(javascript.contains("state.pendingRendererInitializationCount += 1"));
+   assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
    assert!(javascript.contains("if (!event.persisted)"));
    assert!(javascript.contains("return Object.freeze({"));
