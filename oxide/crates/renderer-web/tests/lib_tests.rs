@@ -207,13 +207,15 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "memory_snapshot:WebGpuMemorySnapshot,_adapter:wgpu::Adapter,_instance:wgpu::Instance,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
+      "thread_local!{staticBROWSER_WEBGPU_INSTANCE:RefCell<Option<wgpu::Instance>>"
+   ));
+   assert!(compact_rust.contains(
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=browser_webgpu_instance()"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
    ));
    assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
-   assert!(!rust.contains("thread_local!"));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
    assert!(compact_rust.contains(
       "pubasyncfnsubmitted_work_done(&self){self.inner.submitted_work_done().await;}"
@@ -240,6 +242,10 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
    assert!(javascript.contains("generation.devicePromise"));
    assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
+   assert!(javascript.contains("state.incompatibleModuleFailureCount += 1"));
+   assert!(javascript.contains(
+      "Oxide WebGPU page session belongs to another compiled WASM module"
+   ));
    assert!(javascript.contains("generation.device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
    assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));

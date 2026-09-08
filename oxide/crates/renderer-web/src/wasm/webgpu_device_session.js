@@ -2,7 +2,8 @@ const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const STATE_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.state");
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
-const PROTOCOL_VERSION = 6;
+const MODULE_TOKEN = Object.freeze({});
+const PROTOCOL_VERSION = 7;
 
 function snapshot(state)
 {
@@ -14,6 +15,7 @@ function snapshot(state)
       renderer_lease_count: state.rendererLeaseCount,
       device_destroy_count: state.deviceDestroyCount,
       incompatible_acquire_failure_count: state.incompatibleAcquireFailureCount,
+      incompatible_module_failure_count: state.incompatibleModuleFailureCount,
       session_shutdown_count: state.sessionShutdownCount,
       closed: state.closed,
    });
@@ -69,6 +71,8 @@ function createState()
       liveDeviceCount: 0,
       deviceDestroyCount: 0,
       incompatibleAcquireFailureCount: 0,
+      incompatibleModuleFailureCount: 0,
+      moduleOwnerToken: null,
       sessionShutdownCount: 0,
       closed: false,
       gpuPrototype: null,
@@ -340,6 +344,12 @@ export function acquireOxideWebGpuDeviceSession()
    const state = sharedState();
    if (state.closed) {
       throw new Error("Oxide WebGPU page session is shut down");
+   }
+   if (state.moduleOwnerToken === null) {
+      state.moduleOwnerToken = MODULE_TOKEN;
+   } else if (state.moduleOwnerToken !== MODULE_TOKEN) {
+      state.incompatibleModuleFailureCount += 1;
+      throw new Error("Oxide WebGPU page session belongs to another compiled WASM module");
    }
    installRequestAdapterPatch(state);
    const generation = state.currentGeneration ?? createGeneration(state);

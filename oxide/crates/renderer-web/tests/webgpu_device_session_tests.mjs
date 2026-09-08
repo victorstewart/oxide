@@ -6,7 +6,7 @@ const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 
-test("separate wasm modules reuse one page-session device across route transitions", async () => {
+test("one wasm module reuses one page-session device and rejects a second module", async () => {
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
    let nativeDeviceDestroys = 0;
@@ -73,7 +73,11 @@ test("separate wasm modules reuse one page-session device across route transitio
       importCopy("foundation wasm module"),
    ]);
    const landingLease = landingModule.acquireOxideWebGpuDeviceSession();
-   const foundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   const foundationLease = landingModule.acquireOxideWebGpuDeviceSession();
+   assert.throws(
+      () => foundationModule.acquireOxideWebGpuDeviceSession(),
+      /belongs to another compiled WASM module/,
+   );
    const landingAdapterPromise = globalThis.navigator.gpu.requestAdapter({
       powerPreference: "high-performance",
       forceFallbackAdapter: false,
@@ -109,23 +113,23 @@ test("separate wasm modules reuse one page-session device across route transitio
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 6,
+      protocol_version: 7,
       generation: 1,
       device_request_count: 1,
       live_device_count: 1,
       renderer_lease_count: 2,
       device_destroy_count: 0,
       incompatible_acquire_failure_count: 0,
+      incompatible_module_failure_count: 1,
       session_shutdown_count: 0,
       closed: false,
    });
    assert(Object.isFrozen(readSnapshot()));
 
    landingModule.releaseOxideWebGpuDeviceSession(landingLease);
-   foundationModule.releaseOxideWebGpuDeviceSession(foundationLease);
+   landingModule.releaseOxideWebGpuDeviceSession(foundationLease);
    for (let transition = 0; transition < 128; transition += 1) {
-      const module = transition % 2 === 0 ? landingModule : foundationModule;
-      const lease = module.acquireOxideWebGpuDeviceSession();
+      const lease = landingModule.acquireOxideWebGpuDeviceSession();
       const adapter = await globalThis.navigator.gpu.requestAdapter({
          powerPreference: "high-performance",
          forceFallbackAdapter: false,
@@ -136,7 +140,7 @@ test("separate wasm modules reuse one page-session device across route transitio
          requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
       });
       assert.strictEqual(device, landingDevice);
-      module.releaseOxideWebGpuDeviceSession(lease);
+      landingModule.releaseOxideWebGpuDeviceSession(lease);
    }
    assert.equal(nativeAdapterRequests, 1);
    assert.equal(nativeDeviceRequests, 1);
@@ -161,7 +165,7 @@ test("separate wasm modules reuse one page-session device across route transitio
    assert(await globalThis.navigator.gpu.requestAdapter(fallbackOptions));
    assert.equal(nativeAdapterRequests, 3);
 
-   const incompatibleLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   const incompatibleLease = landingModule.acquireOxideWebGpuDeviceSession();
    const lowPowerAdapterPromise = globalThis.navigator.gpu.requestAdapter({
       powerPreference: "low-power",
       forceFallbackAdapter: false,
@@ -195,7 +199,7 @@ test("separate wasm modules reuse one page-session device across route transitio
       /incompatible Oxide WebGPU device requirements/,
    );
    assert.equal(nativeAdapterRequests, 4);
-   foundationModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
+   landingModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
    assert.equal(readSnapshot().incompatible_acquire_failure_count, 2);
 
    landingDevice.loseForTest();

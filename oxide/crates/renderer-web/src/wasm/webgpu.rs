@@ -17,7 +17,7 @@ use js_sys::Reflect;
 use oxide_renderer_api as api;
 use oxide_renderer_wgpu::image::{rgba8_srgb_mip_chain, RgbaMipLevel};
 use oxide_wasm_alloc_counter::AllocationSnapshot;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
 use std::rc::Rc;
@@ -52,6 +52,23 @@ const GLYPH_INSTANCE_BYTES: usize = 36;
 const GLYPH_VERTEX_COUNT: u32 = 4;
 const EFFECT_GRAPH_CACHE_CAPACITY: usize = 8;
 static NEXT_WEBGPU_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+   static BROWSER_WEBGPU_INSTANCE: RefCell<Option<wgpu::Instance>> = const { RefCell::new(None) };
+}
+
+fn browser_webgpu_instance() -> wgpu::Instance
+{
+   BROWSER_WEBGPU_INSTANCE.with(|shared| {
+      let mut shared = shared.borrow_mut();
+      shared.get_or_insert_with(|| {
+         wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+         })
+      }).clone()
+   })
+}
 
 fn rgba8_mip_chain(width: u32, height: u32, rgba: Vec<u8>) -> Vec<RgbaMipLevel>
 {
@@ -2861,10 +2878,7 @@ impl WebGpuRenderer {
 
     pub async fn from_canvas(canvas: HtmlCanvasElement) -> Result<Self, api::RenderError> {
         let device_session = BrowserWebGpuDeviceSessionLease::acquire()?;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
-        });
+        let instance = browser_webgpu_instance();
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|err| {
