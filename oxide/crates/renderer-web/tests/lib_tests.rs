@@ -207,12 +207,12 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       "memory_snapshot:WebGpuMemorySnapshot,_adapter:wgpu::Adapter,_instance:wgpu::Instance,_device_session:BrowserWebGpuDeviceSessionLease,}"
    ));
    assert!(compact_rust.contains(
-      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire().await?;letinstance=wgpu::Instance::new"
+      "pubasyncfnfrom_canvas(canvas:HtmlCanvasElement)->Result<Self,api::RenderError>{letdevice_session=BrowserWebGpuDeviceSessionLease::acquire()?;letinstance=wgpu::Instance::new"
    ));
    assert!(compact_rust.contains(
       "memory_snapshot:WebGpuMemorySnapshot::default(),_adapter:adapter,_instance:instance,_device_session:device_session,})"
    ));
-   assert!(rust.contains("label: Some(\"oxide-webgpu-renderer-device-v2\")"));
+   assert!(rust.contains("label: Some(\"oxide-webgpu-shared-device-v1\")"));
    assert!(!rust.contains("thread_local!"));
    assert!(!rust.contains("impl Drop for BrowserRenderer"));
    assert!(compact_rust.contains(
@@ -229,15 +229,20 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
    assert!(javascript.contains(
       "Symbol.for(\"oxide.renderer-web.webgpu-device-session.shutdown.v1\")"
    ));
-   assert!(!javascript.contains("requestAdapter"));
-   assert!(!javascript.contains("requestDevice"));
-   assert!(!javascript.contains("device.destroy()"));
+   assert!(javascript.contains("const gpu = globalThis.navigator?.gpu"));
+   assert!(javascript.contains("const adapterPrototype = Object.getPrototypeOf(adapter)"));
+   assert!(javascript.contains("adapterPrototype.requestDevice === installed.patched"));
+   assert!(javascript.contains("gpuPrototype.requestAdapter !== state.patchedRequestAdapter"));
+   assert!(javascript.contains("function adapterDescriptorKey(descriptor)"));
+   assert!(javascript.contains("adapterPromises: new Map()"));
+   assert!(javascript.contains("adapterDescriptorKeys: new WeakMap()"));
+   assert!(javascript.contains("const existing = state.adapterPromises.get(key)"));
+   assert!(javascript.contains("generation.adapterDescriptorKey !== adapterKey"));
+   assert!(javascript.contains("generation.devicePromise"));
+   assert!(javascript.contains("state.incompatibleAcquireFailureCount += 1"));
+   assert!(javascript.contains("generation.device.destroy()"));
    assert!(javascript.contains("state.rendererLeaseCount += 1"));
-   assert!(javascript.contains("state.initializationTail = ready.then(() => finished)"));
-   assert!(javascript.contains("setTimeout(() => finishInitialization(state, lease), 0)"));
-   assert!(javascript.contains("pendingRendererInitializationCount"));
-   assert!(compact_rust.contains("device_session.complete_initialization();"));
-   assert!(javascript.contains("MODULE_STATE.rendererLeaseCount = Math.max(0"));
+   assert!(javascript.contains("state.rendererLeaseCount = Math.max(0"));
    assert!(javascript.contains("globalThis.addEventListener(\"pagehide\""));
    assert!(javascript.contains("if (!event.persisted)"));
    assert!(javascript.contains("return Object.freeze({"));
@@ -248,7 +253,7 @@ fn wasm_webgpu_device_session_is_js_realm_owned_page_scoped_and_observable()
       .nth(1)
       .expect("device-session release");
    assert!(release.contains("rendererLeaseCount"));
-   assert!(!release.contains("destroy"));
+   assert!(!release.contains("destroyGeneration"));
 }
 
 #[test]

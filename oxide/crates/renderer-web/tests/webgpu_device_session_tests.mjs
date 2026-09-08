@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+const DEVICE_LABEL = "oxide-webgpu-shared-device-v1";
 const SNAPSHOT_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.snapshot.v1");
 const SHUTDOWN_SYMBOL = Symbol.for("oxide.renderer-web.webgpu-device-session.shutdown.v1");
 
-test("separate wasm modules serialize cold WebGPU initialization and recover after failure", async () => {
+test("separate wasm modules reuse one page-session device across route transitions", async () => {
    let nativeAdapterRequests = 0;
    let nativeDeviceRequests = 0;
    let nativeDeviceDestroys = 0;
+   let fallbackAdapterFailures = 1;
    const events = new EventTarget();
    globalThis.addEventListener = events.addEventListener.bind(events);
    globalThis.dispatchEvent = events.dispatchEvent.bind(events);
@@ -18,19 +20,33 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
       requestDevice()
       {
          nativeDeviceRequests += 1;
+         let resolveLost;
+         const lost = new Promise((resolve) => {
+            resolveLost = resolve;
+         });
          return Promise.resolve({
+            lost,
+            loseForTest()
+            {
+               resolveLost();
+            },
             destroy()
             {
                nativeDeviceDestroys += 1;
+               resolveLost();
             },
          });
       }
    }
    class MockGpu
    {
-      requestAdapter()
+      requestAdapter(options)
       {
          nativeAdapterRequests += 1;
+         if (options?.forceFallbackAdapter && fallbackAdapterFailures > 0) {
+            fallbackAdapterFailures -= 1;
+            return Promise.reject(new Error("transient adapter discovery failure"));
+         }
          return Promise.resolve(new MockGpuAdapter());
       }
    }
@@ -50,42 +66,46 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
    ]);
    const landingLease = landingModule.acquireOxideWebGpuDeviceSession();
    const foundationLease = foundationModule.acquireOxideWebGpuDeviceSession();
-   const landingReady = landingModule.waitForOxideWebGpuDeviceInitialization(landingLease);
-   const foundationReady = foundationModule.waitForOxideWebGpuDeviceInitialization(foundationLease);
-   let foundationInitializationStarted = false;
-   foundationReady.then(() => {
-      foundationInitializationStarted = true;
+   const landingAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
    });
-
-   await landingReady;
-   await Promise.resolve();
-   assert.equal(foundationInitializationStarted, false);
-   const landingAdapter = await globalThis.navigator.gpu.requestAdapter();
-   const landingDevice = await landingAdapter.requestDevice();
-   landingModule.completeOxideWebGpuDeviceInitialization(landingLease);
-   await Promise.resolve();
-   assert.equal(foundationInitializationStarted, false);
-   await foundationReady;
-   assert.equal(foundationInitializationStarted, true);
-   const foundationAdapter = await globalThis.navigator.gpu.requestAdapter();
-   const foundationDevice = await foundationAdapter.requestDevice();
-   foundationModule.completeOxideWebGpuDeviceInitialization(foundationLease);
-   await new Promise((resolve) => setTimeout(resolve, 0));
-   assert.notStrictEqual(landingAdapter, foundationAdapter);
-   assert.notStrictEqual(landingDevice, foundationDevice);
-   assert.equal(nativeAdapterRequests, 2);
-   assert.equal(nativeDeviceRequests, 2);
+   const foundationAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      forceFallbackAdapter: false,
+      powerPreference: "high-performance",
+   });
+   assert.strictEqual(landingAdapterPromise, foundationAdapterPromise);
+   const [landingAdapter, foundationAdapter] = await Promise.all([
+      landingAdapterPromise,
+      foundationAdapterPromise,
+   ]);
+   assert.strictEqual(landingAdapter, foundationAdapter);
+   const landingDevicePromise = landingAdapter.requestDevice({
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
+   });
+   const foundationDevicePromise = foundationAdapter.requestDevice({
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxTextureDimension2D: 8_192, maxBindGroups: 4 },
+   });
+   assert.strictEqual(landingDevicePromise, foundationDevicePromise);
+   const [landingDevice, foundationDevice] = await Promise.all([
+      landingDevicePromise,
+      foundationDevicePromise,
+   ]);
+   assert.strictEqual(landingDevice, foundationDevice);
 
    const readSnapshot = globalThis[SNAPSHOT_SYMBOL];
    assert.equal(typeof readSnapshot, "function");
    assert.equal(typeof globalThis[SHUTDOWN_SYMBOL], "function");
    assert.deepEqual(readSnapshot(), {
-      protocol_version: 5,
-      generation: 0,
-      device_request_count: 0,
-      live_device_count: 0,
+      protocol_version: 6,
+      generation: 1,
+      device_request_count: 1,
+      live_device_count: 1,
       renderer_lease_count: 2,
-      pending_renderer_initialization_count: 0,
       device_destroy_count: 0,
       incompatible_acquire_failure_count: 0,
       session_shutdown_count: 0,
@@ -94,46 +114,134 @@ test("separate wasm modules serialize cold WebGPU initialization and recover aft
    assert(Object.isFrozen(readSnapshot()));
 
    landingModule.releaseOxideWebGpuDeviceSession(landingLease);
-   landingModule.releaseOxideWebGpuDeviceSession(landingLease);
    foundationModule.releaseOxideWebGpuDeviceSession(foundationLease);
-   assert.equal(readSnapshot().renderer_lease_count, 0);
-   assert.equal(nativeDeviceDestroys, 0);
+   for (let transition = 0; transition < 128; transition += 1) {
+      const module = transition % 2 === 0 ? landingModule : foundationModule;
+      const lease = module.acquireOxideWebGpuDeviceSession();
+      const adapter = await globalThis.navigator.gpu.requestAdapter({
+         powerPreference: "high-performance",
+         forceFallbackAdapter: false,
+      });
+      const device = await adapter.requestDevice({
+         label: DEVICE_LABEL,
+         requiredFeatures: ["timestamp-query"],
+         requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
+      });
+      assert.strictEqual(device, landingDevice);
+      module.releaseOxideWebGpuDeviceSession(lease);
+   }
+   assert.equal(nativeAdapterRequests, 1);
+   assert.equal(nativeDeviceRequests, 1);
+   assert.deepEqual(
+      {
+         requests: readSnapshot().device_request_count,
+         live: readSnapshot().live_device_count,
+         leases: readSnapshot().renderer_lease_count,
+         destroys: readSnapshot().device_destroy_count,
+      },
+      { requests: 1, live: 1, leases: 0, destroys: 0 },
+   );
 
-   const failedLease = landingModule.acquireOxideWebGpuDeviceSession();
-   const recoveredLease = foundationModule.acquireOxideWebGpuDeviceSession();
-   await landingModule.waitForOxideWebGpuDeviceInitialization(failedLease);
-   let recoveryInitializationStarted = false;
-   foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease).then(() => {
-      recoveryInitializationStarted = true;
+   const fallbackOptions = {
+      powerPreference: "high-performance",
+      forceFallbackAdapter: true,
+   };
+   await assert.rejects(
+      globalThis.navigator.gpu.requestAdapter(fallbackOptions),
+      /transient adapter discovery failure/,
+   );
+   assert(await globalThis.navigator.gpu.requestAdapter(fallbackOptions));
+   assert.equal(nativeAdapterRequests, 3);
+
+   const incompatibleLease = foundationModule.acquireOxideWebGpuDeviceSession();
+   const lowPowerAdapterPromise = globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "low-power",
+      forceFallbackAdapter: false,
    });
-   landingModule.releaseOxideWebGpuDeviceSession(failedLease);
+   assert.strictEqual(
+      lowPowerAdapterPromise,
+      globalThis.navigator.gpu.requestAdapter({
+         forceFallbackAdapter: false,
+         powerPreference: "low-power",
+      }),
+   );
+   const lowPowerAdapter = await lowPowerAdapterPromise;
+   await assert.rejects(
+      lowPowerAdapter.requestDevice({
+         label: DEVICE_LABEL,
+         requiredFeatures: ["timestamp-query"],
+         requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
+      }),
+      /incompatible Oxide WebGPU adapter requirements/,
+   );
+   const incompatibleAdapter = await globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+   });
+   await assert.rejects(
+      incompatibleAdapter.requestDevice({
+         label: DEVICE_LABEL,
+         requiredFeatures: ["timestamp-query"],
+         requiredLimits: { maxBindGroups: 8, maxTextureDimension2D: 8_192 },
+      }),
+      /incompatible Oxide WebGPU device requirements/,
+   );
+   assert.equal(nativeAdapterRequests, 4);
+   foundationModule.releaseOxideWebGpuDeviceSession(incompatibleLease);
+   assert.equal(readSnapshot().incompatible_acquire_failure_count, 2);
+
+   landingDevice.loseForTest();
    await Promise.resolve();
-   assert.equal(recoveryInitializationStarted, false);
-   await foundationModule.waitForOxideWebGpuDeviceInitialization(recoveredLease);
-   foundationModule.completeOxideWebGpuDeviceInitialization(recoveredLease);
-   foundationModule.releaseOxideWebGpuDeviceSession(recoveredLease);
-   await new Promise((resolve) => setTimeout(resolve, 0));
-   assert.equal(readSnapshot().pending_renderer_initialization_count, 0);
-   assert.equal(readSnapshot().renderer_lease_count, 0);
+   assert.equal(readSnapshot().generation, 0);
+   assert.equal(readSnapshot().live_device_count, 0);
+   const recoveredLease = landingModule.acquireOxideWebGpuDeviceSession();
+   const recoveredAdapter = await globalThis.navigator.gpu.requestAdapter({
+      powerPreference: "high-performance",
+      forceFallbackAdapter: false,
+   });
+   const recoveredDevice = await recoveredAdapter.requestDevice({
+      label: DEVICE_LABEL,
+      requiredFeatures: ["timestamp-query"],
+      requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
+   });
+   assert.notStrictEqual(recoveredDevice, landingDevice);
+   assert.equal(nativeAdapterRequests, 4);
+   assert.equal(nativeDeviceRequests, 2);
+   assert.equal(readSnapshot().generation, 2);
+   assert.equal(readSnapshot().live_device_count, 1);
+   landingModule.releaseOxideWebGpuDeviceSession(recoveredLease);
 
    const persistedPageHide = new Event("pagehide");
    Object.defineProperty(persistedPageHide, "persisted", { value: true });
    globalThis.dispatchEvent(persistedPageHide);
    assert.equal(readSnapshot().closed, false);
+   assert.equal(readSnapshot().live_device_count, 1);
 
    const terminalPageHide = new Event("pagehide");
    Object.defineProperty(terminalPageHide, "persisted", { value: false });
    globalThis.dispatchEvent(terminalPageHide);
-   assert.equal(readSnapshot().closed, true);
-   assert.equal(readSnapshot().session_shutdown_count, 1);
-   assert.equal(nativeDeviceDestroys, 0);
+   assert.equal(nativeDeviceDestroys, 1);
+   assert.deepEqual(
+      {
+         requests: readSnapshot().device_request_count,
+         live: readSnapshot().live_device_count,
+         leases: readSnapshot().renderer_lease_count,
+         destroys: readSnapshot().device_destroy_count,
+         shutdowns: readSnapshot().session_shutdown_count,
+         closed: readSnapshot().closed,
+      },
+      { requests: 2, live: 0, leases: 0, destroys: 1, shutdowns: 1, closed: true },
+   );
    assert.throws(
       () => landingModule.acquireOxideWebGpuDeviceSession(),
       /Oxide WebGPU page session is shut down/,
    );
-
-   globalThis.dispatchEvent(terminalPageHide);
-   globalThis[SHUTDOWN_SYMBOL]();
+   const repeatedTerminalPageHide = new Event("pagehide");
+   Object.defineProperty(repeatedTerminalPageHide, "persisted", { value: false });
+   globalThis.dispatchEvent(repeatedTerminalPageHide);
+   assert.equal(nativeDeviceDestroys, 1);
    assert.equal(readSnapshot().session_shutdown_count, 1);
-   assert.equal(nativeDeviceDestroys, 0);
+   globalThis[SHUTDOWN_SYMBOL]();
+   assert.equal(nativeDeviceDestroys, 1);
+   assert.equal(readSnapshot().session_shutdown_count, 1);
 });
