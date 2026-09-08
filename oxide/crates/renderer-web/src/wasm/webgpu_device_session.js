@@ -174,11 +174,13 @@ function registerDevice(state, generation, device)
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
+         state.adapterPromises.clear();
       }, () => {
          markDeviceNotLive(state, generation);
          if (state.currentGeneration === generation) {
             state.currentGeneration = null;
          }
+         state.adapterPromises.clear();
       });
    }
    if (generation.destroyWhenReady || state.closed) {

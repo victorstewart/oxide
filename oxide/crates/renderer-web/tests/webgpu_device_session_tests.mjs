@@ -17,8 +17,16 @@ test("separate wasm modules reuse one page-session device across route transitio
 
    class MockGpuAdapter
    {
+      valid = true;
+
       requestDevice()
       {
+         if (!this.valid) {
+            return Promise.reject(new DOMException(
+               "A valid external Instance reference no longer exists.",
+               "OperationError",
+            ));
+         }
          nativeDeviceRequests += 1;
          let resolveLost;
          const lost = new Promise((resolve) => {
@@ -26,8 +34,8 @@ test("separate wasm modules reuse one page-session device across route transitio
          });
          return Promise.resolve({
             lost,
-            loseForTest()
-            {
+            loseForTest: () => {
+               this.valid = false;
                resolveLost();
             },
             destroy()
@@ -205,7 +213,7 @@ test("separate wasm modules reuse one page-session device across route transitio
       requiredLimits: { maxBindGroups: 4, maxTextureDimension2D: 8_192 },
    });
    assert.notStrictEqual(recoveredDevice, landingDevice);
-   assert.equal(nativeAdapterRequests, 4);
+   assert.equal(nativeAdapterRequests, 5);
    assert.equal(nativeDeviceRequests, 2);
    assert.equal(readSnapshot().generation, 2);
    assert.equal(readSnapshot().live_device_count, 1);
