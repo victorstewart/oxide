@@ -286,6 +286,9 @@ mod headless
    const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
    const OUTPUT_TRANSFER: &str = "linear-unorm";
    const DIRECT_RGBA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+   // This is the source of viewport opacity for the headless target.  Keep
+   // opaque replacement tied to it if the viewport uniform ever changes.
+   const HEADLESS_VIEWPORT_OPACITY: f32 = 1.0;
    const IMAGE_STORE_RGBA_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
    const COPY_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
    const INITIAL_VERTEX_BYTES: u64 = 64 * 1024;
@@ -496,6 +499,8 @@ mod headless
       width: u32,
       height: u32,
       kind: ImageKind,
+      #[cfg(feature = "benchmark-timings")]
+      known_opaque: bool,
    }
 
    #[derive(Clone, Copy)]
@@ -523,12 +528,26 @@ mod headless
       first: u32,
       count: u32,
       clip: PhysicalClip,
+      #[cfg(feature = "benchmark-timings")]
+      opaque_rgba: bool,
+   }
+
+   /// Per-frame upper bounds for the opaque-RGBA replace-pipeline candidate.
+   /// `eligible_clipped_pixels` deliberately sums scissors, so overlapping
+   /// batches may make it larger than the number of distinct output pixels.
+   #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+   pub struct OpaqueRgbaCounters
+   {
+      pub eligible_batches: u32,
+      pub eligible_clipped_pixels: u64,
    }
 
    struct Programs
    {
       solid: wgpu::RenderPipeline,
       rgba: wgpu::RenderPipeline,
+      #[cfg(feature = "benchmark-timings")]
+      rgba_opaque: wgpu::RenderPipeline,
       a8: wgpu::RenderPipeline,
       sdf: wgpu::RenderPipeline,
       rrect: wgpu::RenderPipeline,
@@ -564,6 +583,10 @@ mod headless
       batches: Vec<DrawBatch>,
       clip_stack: Vec<api::RectI>,
       layer_depth: usize,
+      #[cfg(feature = "benchmark-timings")]
+      opaque_rgba_counters: OpaqueRgbaCounters,
+      #[cfg(feature = "benchmark-timings")]
+      benchmark_opaque_rgba_enabled: bool,
       pending_error: Option<api::RenderError>,
       active_token: Option<api::FrameToken>,
       next_frame: u64,
@@ -699,6 +722,10 @@ mod headless
             batches: Vec::new(),
             clip_stack: Vec::new(),
             layer_depth: 0,
+            #[cfg(feature = "benchmark-timings")]
+            opaque_rgba_counters: OpaqueRgbaCounters::default(),
+            #[cfg(feature = "benchmark-timings")]
+            benchmark_opaque_rgba_enabled: true,
             pending_error: None,
             active_token: None,
             next_frame: 1,
@@ -720,6 +747,27 @@ mod headless
       pub const fn output_format(&self) -> wgpu::TextureFormat
       {
          OUTPUT_FORMAT
+      }
+
+      #[must_use]
+      pub const fn opaque_rgba_counters(&self) -> OpaqueRgbaCounters
+      {
+         #[cfg(feature = "benchmark-timings")]
+         {
+            self.opaque_rgba_counters
+         }
+         #[cfg(not(feature = "benchmark-timings"))]
+         {
+            OpaqueRgbaCounters { eligible_batches: 0, eligible_clipped_pixels: 0 }
+         }
+      }
+
+      /// Benchmark-only same-binary A/B control; production rendering never
+      /// reads this from its environment.
+      #[cfg(feature = "benchmark-timings")]
+      pub fn set_benchmark_opaque_rgba_enabled(&mut self, enabled: bool)
+      {
+         self.benchmark_opaque_rgba_enabled = enabled;
       }
 
       #[must_use]
@@ -891,12 +939,27 @@ mod headless
          self.create_image(width, height, ImageKind::Rgba, data, row_bytes, false, DIRECT_RGBA_FORMAT)
       }
 
+      /// Creates a direct RGBA texture whose producer has already established
+      /// that every uploaded texel has alpha 255. This does not rescan pixels;
+      /// callers without that existing proof must use `try_image_create_rgba8`.
+      #[cfg(feature = "benchmark-timings")]
+      pub fn try_image_create_known_opaque_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Result<api::ImageHandle, api::RenderError>
+      {
+         self.create_image_inner(width, height, ImageKind::Rgba, data, row_bytes, false, DIRECT_RGBA_FORMAT, true)
+      }
+
       pub fn try_image_create_a8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Result<api::ImageHandle, api::RenderError>
       {
          self.create_image(width, height, ImageKind::A8, data, row_bytes, false, DIRECT_RGBA_FORMAT)
       }
 
       fn create_image(&mut self, width: u32, height: u32, kind: ImageKind, data: &[u8], row_bytes: usize, mipmapped: bool, rgba_format: wgpu::TextureFormat) -> Result<api::ImageHandle, api::RenderError>
+      {
+         self.create_image_inner(width, height, kind, data, row_bytes, mipmapped, rgba_format, false)
+      }
+
+      #[allow(unused_variables)]
+      fn create_image_inner(&mut self, width: u32, height: u32, kind: ImageKind, data: &[u8], row_bytes: usize, mipmapped: bool, rgba_format: wgpu::TextureFormat, known_opaque: bool) -> Result<api::ImageHandle, api::RenderError>
       {
          let bytes_per_pixel = if kind == ImageKind::Rgba { 4 } else { 1 };
          validate_image_rows(width, height, data, row_bytes, bytes_per_pixel)?;
@@ -964,7 +1027,11 @@ mod headless
                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.programs.sampler) },
             ],
          });
-         let image = GpuImage { texture, bind_group, width, height, kind };
+         let image = GpuImage {
+            texture, bind_group, width, height, kind,
+            #[cfg(feature = "benchmark-timings")]
+            known_opaque,
+         };
          let slot = self.images.len() as u32;
          self.images.push(Some(image));
          Ok(api::ImageHandle(slot))
@@ -977,7 +1044,7 @@ mod headless
          let values = [
             logical_width, logical_height, 0.0, 0.0,
             1.0, 0.0, 0.0, 1.0,
-            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, HEADLESS_VIEWPORT_OPACITY, 0.0,
          ];
          self.queue.write_buffer(&self.viewport_buffer, 0, bytemuck::cast_slice(&values));
       }
@@ -1065,7 +1132,7 @@ mod headless
          };
          let first = self.indices.len() as u32;
          append_vertices(&mut self.vertices, &mut self.indices, vertices, &indices, vb.offset, color, true);
-         self.push_index_batch(BatchKind::Solid, first);
+         self.push_index_batch(BatchKind::Solid, first, false, false);
       }
 
       fn encode_image(&mut self, handle: api::ImageHandle, dst: api::RectF, src: api::RectF, alpha: f32)
@@ -1078,6 +1145,14 @@ mod headless
          let kind = image.kind;
          let width = image.width;
          let height = image.height;
+         #[cfg(feature = "benchmark-timings")]
+         let eligible_opaque_rgba = image.kind == ImageKind::Rgba && image.known_opaque && alpha == 1.0 && HEADLESS_VIEWPORT_OPACITY == 1.0;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let eligible_opaque_rgba = false;
+         #[cfg(feature = "benchmark-timings")]
+         let opaque_rgba = eligible_opaque_rgba && self.benchmark_opaque_rgba_enabled;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let opaque_rgba = false;
          let (u0, v0, u1, v1) = normalized_source(src, width, height);
          let first = self.indices.len() as u32;
          append_quad(
@@ -1087,7 +1162,7 @@ mod headless
             [u0, v0, u1, v1],
             api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0)).pack_rgba8(),
          );
-         self.push_index_batch(image_batch(kind, handle), first);
+         self.push_index_batch(image_batch(kind, handle), first, opaque_rgba, eligible_opaque_rgba);
       }
 
       fn encode_image_mesh(&mut self, list: &api::DrawList, handle: api::ImageHandle, vb: api::VertexSpan, ib: api::IndexSpan, alpha: f32)
@@ -1098,6 +1173,16 @@ mod headless
             return;
          };
          let kind = image.kind;
+         // append_vertices intentionally replaces mesh vertex colour with this
+         // command alpha, so alpha == 1.0 is the complete modulation proof.
+         #[cfg(feature = "benchmark-timings")]
+         let eligible_opaque_rgba = image.kind == ImageKind::Rgba && image.known_opaque && alpha == 1.0 && HEADLESS_VIEWPORT_OPACITY == 1.0;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let eligible_opaque_rgba = false;
+         #[cfg(feature = "benchmark-timings")]
+         let opaque_rgba = eligible_opaque_rgba && self.benchmark_opaque_rgba_enabled;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let opaque_rgba = false;
          let Some(vertices) = vertex_span(list, vb) else
          {
             self.record_error(api::RenderError::InvalidOperation("image vertex span outside draw list"));
@@ -1118,7 +1203,7 @@ mod headless
             api::Color::rgba(1.0, 1.0, 1.0, alpha.clamp(0.0, 1.0)),
             false,
          );
-         self.push_index_batch(image_batch(kind, handle), first);
+         self.push_index_batch(image_batch(kind, handle), first, opaque_rgba, eligible_opaque_rgba);
       }
 
       fn encode_glyph(&mut self, list: &api::DrawList, run: &api::GlyphRun)
@@ -1154,7 +1239,7 @@ mod headless
             false,
          );
          let batch = if run.sdf { BatchKind::Sdf(run.atlas) } else { image_batch(kind, run.atlas) };
-         self.push_index_batch(batch, first);
+         self.push_index_batch(batch, first, false, false);
       }
 
       fn encode_rrect(&mut self, rect: api::RectF, radii: [f32; 4], color: api::Color)
@@ -1169,7 +1254,11 @@ mod headless
             radii,
             rgba: color.pack_rgba8(),
          });
-         self.batches.push(DrawBatch { kind: BatchKind::RRect, first, count: 1, clip: self.active_clip() });
+         self.batches.push(DrawBatch {
+            kind: BatchKind::RRect, first, count: 1, clip: self.active_clip(),
+            #[cfg(feature = "benchmark-timings")]
+            opaque_rgba: false,
+         });
       }
 
       fn encode_nine_slice(&mut self, handle: api::ImageHandle, rect: api::RectF, slice: api::Insets, alpha: f32)
@@ -1180,6 +1269,14 @@ mod headless
             return;
          };
          let kind = image.kind;
+         #[cfg(feature = "benchmark-timings")]
+         let eligible_opaque_rgba = image.kind == ImageKind::Rgba && image.known_opaque && alpha == 1.0 && HEADLESS_VIEWPORT_OPACITY == 1.0;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let eligible_opaque_rgba = false;
+         #[cfg(feature = "benchmark-timings")]
+         let opaque_rgba = eligible_opaque_rgba && self.benchmark_opaque_rgba_enabled;
+         #[cfg(not(feature = "benchmark-timings"))]
+         let opaque_rgba = false;
          let image_width = image.width as f32;
          let image_height = image.height as f32;
          let dx = [0.0, slice.left, (rect.w - slice.right).max(slice.left), rect.w];
@@ -1205,7 +1302,7 @@ mod headless
                );
             }
          }
-         self.push_index_batch(image_batch(kind, handle), first);
+         self.push_index_batch(image_batch(kind, handle), first, opaque_rgba, eligible_opaque_rgba);
       }
 
       fn encode_spinner(&mut self, center: [f32; 2], atom: f32, alpha: f32)
@@ -1227,15 +1324,32 @@ mod headless
                rgba: api::Color::rgba(1.0, 1.0, 1.0, dot_alpha).pack_rgba8(),
             });
          }
-         self.batches.push(DrawBatch { kind: BatchKind::RRect, first, count: 12, clip: self.active_clip() });
+         self.batches.push(DrawBatch {
+            kind: BatchKind::RRect, first, count: 12, clip: self.active_clip(),
+            #[cfg(feature = "benchmark-timings")]
+            opaque_rgba: false,
+         });
       }
 
-      fn push_index_batch(&mut self, kind: BatchKind, first: u32)
+      fn push_index_batch(&mut self, kind: BatchKind, first: u32, opaque_rgba: bool, eligible_opaque_rgba: bool)
       {
+         #[cfg(not(feature = "benchmark-timings"))]
+         let _ = (opaque_rgba, eligible_opaque_rgba);
          let count = self.indices.len() as u32 - first;
          if count > 0
          {
-            self.batches.push(DrawBatch { kind, first, count, clip: self.active_clip() });
+            let clip = self.active_clip();
+            #[cfg(feature = "benchmark-timings")]
+            if eligible_opaque_rgba
+            {
+               self.opaque_rgba_counters.eligible_batches = self.opaque_rgba_counters.eligible_batches.saturating_add(1);
+               self.opaque_rgba_counters.eligible_clipped_pixels = self.opaque_rgba_counters.eligible_clipped_pixels.saturating_add(u64::from(clip.width) * u64::from(clip.height));
+            }
+            self.batches.push(DrawBatch {
+               kind, first, count, clip,
+               #[cfg(feature = "benchmark-timings")]
+               opaque_rgba,
+            });
          }
       }
 
@@ -1320,6 +1434,8 @@ mod headless
                   BatchKind::Rgba(handle) | BatchKind::A8(handle) | BatchKind::Sdf(handle) => {
                      let image = self.image(handle).expect("validated image batch");
                      let pipeline = match batch.kind {
+                        #[cfg(feature = "benchmark-timings")]
+                        BatchKind::Rgba(_) if batch.opaque_rgba && image.known_opaque => &self.programs.rgba_opaque,
                         BatchKind::Rgba(_) => &self.programs.rgba,
                         BatchKind::A8(_) => &self.programs.a8,
                         BatchKind::Sdf(_) => &self.programs.sdf,
@@ -1367,6 +1483,10 @@ mod headless
          self.batches.clear();
          self.clip_stack.clear();
          self.layer_depth = 0;
+         #[cfg(feature = "benchmark-timings")]
+         {
+            self.opaque_rgba_counters = OpaqueRgbaCounters::default();
+         }
          token
       }
 
@@ -1448,6 +1568,17 @@ mod headless
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
          );
+         // An update can follow draw-list encoding before the frame is
+         // submitted. Never scan the update on this hot path; conservatively
+         // revoke the producer proof after a successful RGBA write instead.
+         #[cfg(feature = "benchmark-timings")]
+         if kind == ImageKind::Rgba
+         {
+            if let Some(Some(image)) = self.images.get_mut(handle.0 as usize)
+            {
+               image.known_opaque = false;
+            }
+         }
          Ok(())
       }
    }
@@ -1537,11 +1668,13 @@ mod headless
          label: Some("oxide-shared-wgpu-ui-shader"),
          source: wgpu::ShaderSource::Wgsl(UI_WGSL.into()),
       });
-      let solid = create_pipeline(device, &shader, &solid_layout, &[vertex_layout()], "vs_main", "fs_solid", "oxide-wgpu-solid");
-      let rgba = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_rgba", "oxide-wgpu-rgba");
-      let a8 = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_a8", "oxide-wgpu-a8");
-      let sdf = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_sdf", "oxide-wgpu-sdf");
-      let rrect = create_pipeline(device, &shader, &solid_layout, &[rrect_layout()], "vs_rrect", "fs_rrect", "oxide-wgpu-rrect");
+      let solid = create_pipeline(device, &shader, &solid_layout, &[vertex_layout()], "vs_main", "fs_solid", "oxide-wgpu-solid", Some(wgpu::BlendState::ALPHA_BLENDING));
+      let rgba = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_rgba", "oxide-wgpu-rgba", Some(wgpu::BlendState::ALPHA_BLENDING));
+      #[cfg(feature = "benchmark-timings")]
+      let rgba_opaque = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_rgba", "oxide-wgpu-rgba-opaque", None);
+      let a8 = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_a8", "oxide-wgpu-a8", Some(wgpu::BlendState::ALPHA_BLENDING));
+      let sdf = create_pipeline(device, &shader, &texture_pipeline_layout, &[vertex_layout()], "vs_main", "fs_sdf", "oxide-wgpu-sdf", Some(wgpu::BlendState::ALPHA_BLENDING));
+      let rrect = create_pipeline(device, &shader, &solid_layout, &[rrect_layout()], "vs_rrect", "fs_rrect", "oxide-wgpu-rrect", Some(wgpu::BlendState::ALPHA_BLENDING));
       let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
          label: Some("oxide-wgpu-linear-sampler"),
          address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1552,10 +1685,15 @@ mod headless
          mipmap_filter: wgpu::FilterMode::Linear,
          ..Default::default()
       });
-      Programs { solid, rgba, a8, sdf, rrect, viewport_layout, texture_layout, sampler }
+      Programs {
+         solid, rgba,
+         #[cfg(feature = "benchmark-timings")]
+         rgba_opaque,
+         a8, sdf, rrect, viewport_layout, texture_layout, sampler,
+      }
    }
 
-   fn create_pipeline(device: &wgpu::Device, shader: &wgpu::ShaderModule, layout: &wgpu::PipelineLayout, buffers: &[wgpu::VertexBufferLayout<'_>], vertex: &'static str, fragment: &'static str, label: &'static str) -> wgpu::RenderPipeline
+   fn create_pipeline(device: &wgpu::Device, shader: &wgpu::ShaderModule, layout: &wgpu::PipelineLayout, buffers: &[wgpu::VertexBufferLayout<'_>], vertex: &'static str, fragment: &'static str, label: &'static str, blend: Option<wgpu::BlendState>) -> wgpu::RenderPipeline
    {
       device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
          label: Some(label),
@@ -1575,7 +1713,7 @@ mod headless
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                format: OUTPUT_FORMAT,
-               blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+               blend,
                write_mask: wgpu::ColorWrites::ALL,
             })],
          }),
@@ -1794,12 +1932,17 @@ mod headless
       use super::{
          append_vertices, index_span_or_implicit, padded_bytes_per_row, unpack_padded_rows,
          validate_adapter_policy, HeadlessAdapterPolicy, HeadlessWgpuRenderer, PackedVertex,
-         UnsupportedHeadlessWgpuCapability, COPY_ALIGNMENT,
+         UnsupportedHeadlessWgpuCapability, COPY_ALIGNMENT, OpaqueRgbaCounters,
       };
 
       fn cpu_renderer(width: u32, height: u32) -> Option<HeadlessWgpuRenderer>
       {
-         HeadlessWgpuRenderer::new(width, height, 1.0).ok()
+         let renderer = HeadlessWgpuRenderer::new(width, height, 1.0).ok();
+         if std::env::var_os("OXIDE_REQUIRE_CPU_RENDERER").is_some() && renderer.is_none()
+         {
+            panic!("required CPU Vulkan renderer is unavailable");
+         }
+         renderer
       }
 
       fn solid_list(width: f32, height: f32, color: api::Color) -> api::DrawList
@@ -1835,6 +1978,64 @@ mod headless
                tex: image,
                dst: api::RectF::new(0.0, 0.0, 2.0, 2.0),
                src: api::RectF::new(0.0, 0.0, 1.0, 1.0),
+               alpha: 1.0,
+            }],
+            ..Default::default()
+         }
+      }
+
+      fn image_list_with_alpha(image: api::ImageHandle, alpha: f32) -> api::DrawList
+      {
+         api::DrawList {
+            items: vec![api::DrawCmd::Image {
+               tex: image,
+               dst: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+               src: api::RectF::new(0.0, 0.0, 1.0, 1.0),
+               alpha,
+            }],
+            ..Default::default()
+         }
+      }
+
+      fn image_list_with_later_overlay(image: api::ImageHandle) -> api::DrawList
+      {
+         let mut list = image_list(image);
+         list.items.push(api::DrawCmd::Solid {
+            vb: api::VertexSpan { offset: 0, len: 4 },
+            ib: api::IndexSpan { offset: 0, len: 6 },
+            color: api::Color::rgba(0.25, 0.5, 0.75, 0.5),
+         });
+         list.vertices = solid_list(2.0, 2.0, api::Color::rgba(0.0, 0.0, 0.0, 0.0)).vertices;
+         list.indices = vec![0, 1, 2, 2, 1, 3];
+         list
+      }
+
+      fn image_mesh_list(image: api::ImageHandle) -> api::DrawList
+      {
+         api::DrawList {
+            items: vec![api::DrawCmd::ImageMesh {
+               tex: image,
+               vb: api::VertexSpan { offset: 0, len: 4 },
+               ib: api::IndexSpan { offset: 0, len: 6 },
+               alpha: 1.0,
+            }],
+            vertices: vec![
+               api::Vertex { x: 0.0, y: 0.0, u: 0.0, v: 0.0, rgba: 0 },
+               api::Vertex { x: 2.0, y: 0.0, u: 1.0, v: 0.0, rgba: 0 },
+               api::Vertex { x: 0.0, y: 2.0, u: 0.0, v: 1.0, rgba: 0 },
+               api::Vertex { x: 2.0, y: 2.0, u: 1.0, v: 1.0, rgba: 0 },
+            ],
+            indices: vec![0, 1, 2, 2, 1, 3],
+         }
+      }
+
+      fn nine_slice_list(image: api::ImageHandle) -> api::DrawList
+      {
+         api::DrawList {
+            items: vec![api::DrawCmd::NineSlice {
+               tex: image,
+               rect: api::RectF::new(0.0, 0.0, 2.0, 2.0),
+               slice: api::Insets::new(0.25, 0.25, 0.25, 0.25),
                alpha: 1.0,
             }],
             ..Default::default()
@@ -1983,6 +2184,118 @@ mod headless
          {
             assert_eq!(pixel, [128, 64, 32, 255]);
          }
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn known_opaque_rgba_uses_replace_without_changing_later_source_over()
+      {
+         let Some(mut blended) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let Some(mut opaque) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let texels = [64, 128, 192, 255];
+         let blended_image = blended.try_image_create_rgba8(1, 1, &texels, 4).unwrap();
+         let opaque_image = opaque.try_image_create_known_opaque_rgba8(1, 1, &texels, 4).unwrap();
+         let expected = render(&mut blended, &image_list_with_later_overlay(blended_image));
+         let actual = render(&mut opaque, &image_list_with_later_overlay(opaque_image));
+         assert_eq!(actual, expected);
+         assert_eq!(blended.opaque_rgba_counters(), OpaqueRgbaCounters::default());
+         assert_eq!(opaque.opaque_rgba_counters(), OpaqueRgbaCounters { eligible_batches: 1, eligible_clipped_pixels: 4 });
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn partial_modulation_keeps_known_opaque_rgba_on_blended_pipeline()
+      {
+         let Some(mut renderer) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let image = renderer.try_image_create_known_opaque_rgba8(1, 1, &[64, 128, 192, 255], 4).unwrap();
+         let _ = render(&mut renderer, &image_list_with_alpha(image, 0.5));
+         assert_eq!(renderer.opaque_rgba_counters(), OpaqueRgbaCounters::default());
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn zero_modulation_keeps_known_opaque_rgba_on_blended_pipeline()
+      {
+         let Some(mut renderer) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let image = renderer.try_image_create_known_opaque_rgba8(1, 1, &[64, 128, 192, 255], 4).unwrap();
+         let pixels = render(&mut renderer, &image_list_with_alpha(image, 0.0));
+         assert_eq!(pixels, vec![0; 16]);
+         assert_eq!(renderer.opaque_rgba_counters(), OpaqueRgbaCounters::default());
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn rgba_upload_after_encode_revokes_known_opaque_before_pipeline_selection()
+      {
+         let Some(mut expected) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let Some(mut actual) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let initial = [64, 128, 192, 255];
+         let replacement = [9, 30, 70, 96];
+         let expected_image = expected.try_image_create_rgba8(1, 1, &initial, 4).unwrap();
+         expected.image_append_rgba8(expected_image, 0, 0, 1, 1, &replacement, 4);
+         let expected_pixels = render(&mut expected, &image_list(expected_image));
+
+         let actual_image = actual.try_image_create_known_opaque_rgba8(1, 1, &initial, 4).unwrap();
+         let token = actual.begin_frame(&api::FrameTarget, None);
+         actual.encode_pass(&image_list(actual_image));
+         actual.image_append_rgba8(actual_image, 0, 0, 1, 1, &replacement, 4);
+         actual.submit(token).unwrap();
+         let actual_pixels = actual.read_rgba().unwrap().pixels;
+
+         assert_eq!(actual_pixels, expected_pixels);
+         assert_eq!(actual.opaque_rgba_counters(), OpaqueRgbaCounters { eligible_batches: 1, eligible_clipped_pixels: 4 });
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn benchmark_opaque_rgba_control_uses_blended_pipeline_but_keeps_eligibility_attribution()
+      {
+         let Some(mut renderer) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         renderer.set_benchmark_opaque_rgba_enabled(false);
+         let image = renderer.try_image_create_known_opaque_rgba8(1, 1, &[64, 128, 192, 255], 4).unwrap();
+         let _ = render(&mut renderer, &image_list(image));
+         assert_eq!(renderer.opaque_rgba_counters(), OpaqueRgbaCounters { eligible_batches: 1, eligible_clipped_pixels: 4 });
+      }
+
+      #[test]
+      #[cfg(feature = "benchmark-timings")]
+      fn known_opaque_image_mesh_and_nine_slice_are_eligible()
+      {
+         let Some(mut renderer) = cpu_renderer(2, 2) else
+         {
+            return;
+         };
+         let texels = [64, 128, 192, 255];
+         let mesh = renderer.try_image_create_known_opaque_rgba8(1, 1, &texels, 4).unwrap();
+         let mesh_pixels = render(&mut renderer, &image_mesh_list(mesh));
+         assert!(mesh_pixels.chunks_exact(4).all(|pixel| pixel == texels));
+         assert_eq!(renderer.opaque_rgba_counters(), OpaqueRgbaCounters { eligible_batches: 1, eligible_clipped_pixels: 4 });
+
+         let nine = renderer.try_image_create_known_opaque_rgba8(1, 1, &texels, 4).unwrap();
+         let nine_pixels = render(&mut renderer, &nine_slice_list(nine));
+         assert!(nine_pixels.chunks_exact(4).all(|pixel| pixel == texels));
+         assert_eq!(renderer.opaque_rgba_counters(), OpaqueRgbaCounters { eligible_batches: 1, eligible_clipped_pixels: 4 });
       }
 
       #[test]
@@ -2143,7 +2456,7 @@ mod headless
 #[cfg(feature = "headless-vulkan")]
 pub use headless::{
    CpuAdapterLimits, CpuAdapterReceipt, DrawListCompatibilityReport, HeadlessAdapterPolicy,
-   HeadlessWgpuCompatibility, HeadlessWgpuCapability, HeadlessWgpuRenderer, RgbaFrame,
+   HeadlessWgpuCompatibility, HeadlessWgpuCapability, HeadlessWgpuRenderer, OpaqueRgbaCounters, RgbaFrame,
    UnsupportedHeadlessWgpuCapability,
 };
 
