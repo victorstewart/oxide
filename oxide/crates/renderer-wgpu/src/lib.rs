@@ -293,7 +293,19 @@ mod headless
    const INITIAL_RRECT_BYTES: u64 = 16 * 1024;
    static NEXT_DEVICE_GENERATION: AtomicU64 = AtomicU64::new(1);
 
-   /// Stable identity recorded with every CPU-rendered artifact.
+   /// The only adapter classes accepted by a native headless renderer.
+   ///
+   /// `Cpu` preserves the artifact renderer's deterministic Lavapipe policy.
+   /// `DiscreteGpu` is an explicit opt-in for hardware measurements and rejects
+   /// every adapter whose PCI vendor or device identity differs.
+   #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+   pub enum HeadlessAdapterPolicy
+   {
+      Cpu,
+      DiscreteGpu { vendor: u32, device: u32 },
+   }
+
+   /// Stable identity recorded with every headless-rendered artifact.
    #[derive(Clone, Debug, PartialEq, Eq)]
    pub struct CpuAdapterReceipt
    {
@@ -346,6 +358,22 @@ mod headless
             output_format: format!("{OUTPUT_FORMAT:?}"),
             output_transfer: OUTPUT_TRANSFER.into(),
          }
+      }
+   }
+
+   fn validate_adapter_policy(adapter_policy: HeadlessAdapterPolicy, backend: wgpu::Backend, device_type: wgpu::DeviceType, vendor: u32, device: u32) -> Result<(), api::RenderError>
+   {
+      if backend != wgpu::Backend::Vulkan
+      {
+         return Err(api::RenderError::Unsupported("headless wgpu requires Vulkan"));
+      }
+      match adapter_policy
+      {
+         HeadlessAdapterPolicy::Cpu if device_type == wgpu::DeviceType::Cpu => Ok(()),
+         HeadlessAdapterPolicy::Cpu => Err(api::RenderError::Unsupported("headless wgpu requires a CPU adapter")),
+         HeadlessAdapterPolicy::DiscreteGpu { vendor: expected_vendor, device: expected_device }
+            if device_type == wgpu::DeviceType::DiscreteGpu && vendor == expected_vendor && device == expected_device => Ok(()),
+         HeadlessAdapterPolicy::DiscreteGpu { .. } => Err(api::RenderError::Unsupported("headless wgpu discrete GPU adapter identity mismatch")),
       }
    }
 
@@ -418,6 +446,8 @@ mod headless
       pub height: u32,
       pub row_bytes: u32,
       pub pixels: Vec<u8>,
+      #[cfg(feature = "benchmark-timings")]
+      pub stage_timings_ns: [u64; 5],
    }
 
    impl RgbaFrame
@@ -544,13 +574,24 @@ mod headless
 
    impl HeadlessWgpuRenderer
    {
-      /// Requests only a Vulkan fallback adapter and rejects it unless wgpu identifies it as CPU.
+      /// Requests the default CPU Vulkan fallback adapter and rejects every other adapter.
       pub fn new(width: u32, height: u32, scale: f32) -> Result<Self, api::RenderError>
       {
          pollster::block_on(Self::request(width, height, scale))
       }
 
       pub async fn request(width: u32, height: u32, scale: f32) -> Result<Self, api::RenderError>
+      {
+         Self::request_with_adapter_policy(width, height, scale, HeadlessAdapterPolicy::Cpu).await
+      }
+
+      /// Requests one explicit Vulkan adapter policy and rejects every mismatch.
+      pub fn new_with_adapter_policy(width: u32, height: u32, scale: f32, adapter_policy: HeadlessAdapterPolicy) -> Result<Self, api::RenderError>
+      {
+         pollster::block_on(Self::request_with_adapter_policy(width, height, scale, adapter_policy))
+      }
+
+      pub async fn request_with_adapter_policy(width: u32, height: u32, scale: f32, adapter_policy: HeadlessAdapterPolicy) -> Result<Self, api::RenderError>
       {
          validate_dimensions(width, height, scale)?;
          let driver_files_present = std::env::var_os("VK_DRIVER_FILES")
@@ -569,28 +610,24 @@ mod headless
          });
          let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-               power_preference: wgpu::PowerPreference::LowPower,
-               force_fallback_adapter: true,
+               power_preference: match adapter_policy {
+                  HeadlessAdapterPolicy::Cpu => wgpu::PowerPreference::LowPower,
+                  HeadlessAdapterPolicy::DiscreteGpu { .. } => wgpu::PowerPreference::HighPerformance,
+               },
+               force_fallback_adapter: matches!(adapter_policy, HeadlessAdapterPolicy::Cpu),
                compatible_surface: None,
             })
             .await
             .map_err(|error| api::RenderError::Io(error.to_string()))?;
          let info = adapter.get_info();
-         if info.backend != wgpu::Backend::Vulkan
-         {
-            return Err(api::RenderError::Unsupported("headless wgpu requires Vulkan"));
-         }
-         if info.device_type != wgpu::DeviceType::Cpu
-         {
-            return Err(api::RenderError::Unsupported("headless wgpu requires a CPU adapter"));
-         }
+         validate_adapter_policy(adapter_policy, info.backend, info.device_type, info.vendor, info.device)?;
          let format_features = adapter.get_texture_format_features(OUTPUT_FORMAT);
          let required_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::TEXTURE_BINDING;
          if !format_features.allowed_usages.contains(required_usage)
          {
-            return Err(api::RenderError::Unsupported("CPU Vulkan adapter lacks RGBA8 unorm render/readback support"));
+            return Err(api::RenderError::Unsupported("headless Vulkan adapter lacks RGBA8 unorm render/readback support"));
          }
          let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -772,6 +809,8 @@ mod headless
 
       pub fn read_rgba(&self) -> Result<RgbaFrame, api::RenderError>
       {
+         #[cfg(feature = "benchmark-timings")]
+         let started = std::time::Instant::now();
          let padded_row_bytes = padded_bytes_per_row(self.width)?;
          let size = u64::from(padded_row_bytes)
             .checked_mul(u64::from(self.height))
@@ -782,6 +821,10 @@ mod headless
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
          });
+         #[cfg(feature = "benchmark-timings")]
+         let allocate_ns = started.elapsed().as_nanos() as u64;
+         #[cfg(feature = "benchmark-timings")]
+         let started = std::time::Instant::now();
          let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("oxide-headless-wgpu-readback-encoder"),
          });
@@ -806,11 +849,20 @@ mod headless
                depth_or_array_layers: 1,
             },
          );
-         let submission = self.queue.submit(Some(encoder.finish()));
+         let commands = encoder.finish();
+         #[cfg(feature = "benchmark-timings")]
+         let record_ns = started.elapsed().as_nanos() as u64;
+         #[cfg(feature = "benchmark-timings")]
+         let started = std::time::Instant::now();
+         let submission = self.queue.submit(Some(commands));
          let (sender, receiver) = mpsc::sync_channel(1);
          buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             let _ = sender.send(result);
          });
+         #[cfg(feature = "benchmark-timings")]
+         let submit_ns = started.elapsed().as_nanos() as u64;
+         #[cfg(feature = "benchmark-timings")]
+         let started = std::time::Instant::now();
          self.device
             .poll(wgpu::PollType::WaitForSubmissionIndex(submission))
             .map_err(|error| api::RenderError::Io(error.to_string()))?;
@@ -819,11 +871,19 @@ mod headless
             .map_err(|error| api::RenderError::Io(error.to_string()))?
             .map_err(|error| api::RenderError::Io(error.to_string()))?;
          let mapped = buffer.slice(..).get_mapped_range();
+         #[cfg(feature = "benchmark-timings")]
+         let wait_ns = started.elapsed().as_nanos() as u64;
+         #[cfg(feature = "benchmark-timings")]
+         let started = std::time::Instant::now();
          let row_bytes = self.width.saturating_mul(4);
          let pixels = unpack_padded_rows(&mapped, self.width, self.height, padded_row_bytes)?;
          drop(mapped);
          buffer.unmap();
-         Ok(RgbaFrame { width: self.width, height: self.height, row_bytes, pixels })
+         Ok(RgbaFrame {
+            width: self.width, height: self.height, row_bytes, pixels,
+            #[cfg(feature = "benchmark-timings")]
+            stage_timings_ns: [allocate_ns, record_ns, submit_ns, wait_ns, started.elapsed().as_nanos() as u64],
+         })
       }
 
       pub fn try_image_create_rgba8(&mut self, width: u32, height: u32, data: &[u8], row_bytes: usize) -> Result<api::ImageHandle, api::RenderError>
@@ -1733,8 +1793,8 @@ mod headless
 
       use super::{
          append_vertices, index_span_or_implicit, padded_bytes_per_row, unpack_padded_rows,
-         HeadlessWgpuRenderer, PackedVertex, UnsupportedHeadlessWgpuCapability,
-         COPY_ALIGNMENT,
+         validate_adapter_policy, HeadlessAdapterPolicy, HeadlessWgpuRenderer, PackedVertex,
+         UnsupportedHeadlessWgpuCapability, COPY_ALIGNMENT,
       };
 
       fn cpu_renderer(width: u32, height: u32) -> Option<HeadlessWgpuRenderer>
@@ -1843,6 +1903,21 @@ mod headless
          );
          assert_eq!(lowered_indices, indices.map(u32::from));
          assert!(lowered.iter().all(|vertex| vertex.rgba == black.pack_rgba8()));
+      }
+
+      #[test]
+      fn adapter_policy_rejects_cpu_integrated_and_identity_mismatches()
+      {
+         let gpu = HeadlessAdapterPolicy::DiscreteGpu { vendor: 0x10de, device: 0x2bb1 };
+         assert!(validate_adapter_policy(HeadlessAdapterPolicy::Cpu, wgpu::Backend::Vulkan, wgpu::DeviceType::Cpu, 0, 0).is_ok());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Vulkan, wgpu::DeviceType::DiscreteGpu, 0x10de, 0x2bb1).is_ok());
+         assert!(validate_adapter_policy(HeadlessAdapterPolicy::Cpu, wgpu::Backend::Vulkan, wgpu::DeviceType::DiscreteGpu, 0x10de, 0x2bb1).is_err());
+         assert!(validate_adapter_policy(HeadlessAdapterPolicy::Cpu, wgpu::Backend::Gl, wgpu::DeviceType::Cpu, 0, 0).is_err());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Gl, wgpu::DeviceType::DiscreteGpu, 0x10de, 0x2bb1).is_err());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Vulkan, wgpu::DeviceType::Cpu, 0x10005, 0).is_err());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Vulkan, wgpu::DeviceType::IntegratedGpu, 0x10de, 0x2bb1).is_err());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Vulkan, wgpu::DeviceType::DiscreteGpu, 0x1002, 0x2bb1).is_err());
+         assert!(validate_adapter_policy(gpu, wgpu::Backend::Vulkan, wgpu::DeviceType::DiscreteGpu, 0x10de, 0x2bb2).is_err());
       }
 
       #[test]
@@ -2067,8 +2142,9 @@ mod headless
 
 #[cfg(feature = "headless-vulkan")]
 pub use headless::{
-   CpuAdapterLimits, CpuAdapterReceipt, DrawListCompatibilityReport, HeadlessWgpuCompatibility,
-   HeadlessWgpuCapability, HeadlessWgpuRenderer, RgbaFrame, UnsupportedHeadlessWgpuCapability,
+   CpuAdapterLimits, CpuAdapterReceipt, DrawListCompatibilityReport, HeadlessAdapterPolicy,
+   HeadlessWgpuCompatibility, HeadlessWgpuCapability, HeadlessWgpuRenderer, RgbaFrame,
+   UnsupportedHeadlessWgpuCapability,
 };
 
 #[cfg(test)]
