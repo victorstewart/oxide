@@ -727,7 +727,55 @@ fn labels(template_text: &str, count: usize, font_id: usize, font_px: f32, color
 
 fn template(pattern: &str, index: usize, value: u32) -> String
 {
-   pattern.replace("%02d", &format!("{index:02}")).replace("%04d", &format!("{value:04}"))
+   use std::fmt::Write;
+
+   let index_width = decimal_width(index).max(2);
+   let value_width = decimal_width(value as usize).max(4);
+   let index_count = pattern.matches("%02d").count();
+   let value_count = pattern.matches("%04d").count();
+   let mut output = String::with_capacity(
+      pattern.len().saturating_sub((index_count + value_count) * 4)
+         + index_count * index_width + value_count * value_width,
+   );
+   let mut remaining = pattern;
+   while let Some((offset, is_index)) = next_template_slot(remaining)
+   {
+      output.push_str(&remaining[..offset]);
+      if is_index
+      {
+         let _ = write!(&mut output, "{index:0index_width$}");
+      }
+      else
+      {
+         let _ = write!(&mut output, "{value:0value_width$}");
+      }
+      remaining = &remaining[offset + 4..];
+   }
+   output.push_str(remaining);
+   output
+}
+
+fn next_template_slot(pattern: &str) -> Option<(usize, bool)>
+{
+   match (pattern.find("%02d"), pattern.find("%04d"))
+   {
+      (Some(index), Some(value)) if index <= value => Some((index, true)),
+      (Some(_), Some(value)) => Some((value, false)),
+      (Some(index), None) => Some((index, true)),
+      (None, Some(value)) => Some((value, false)),
+      (None, None) => None,
+   }
+}
+
+fn decimal_width(mut value: usize) -> usize
+{
+   let mut width = 1;
+   while value >= 10
+   {
+      value /= 10;
+      width += 1;
+   }
+   width
 }
 
 fn draw_text(suite: &mut Suite, time: f64, text: &mut TextCtx, renderer: &mut metal::MetalRenderer, builder: &mut ui::DrawListBuilder)
@@ -1012,5 +1060,13 @@ mod native_api_tests
       assert_eq!(native_next_wakeup("local", 0.1), 0.2);
       assert_eq!(native_next_wakeup("shapes", 0.25), 0.25);
       assert!(native_next_wakeup("missing", 0.0).is_nan());
+   }
+
+   #[test]
+   fn template_replaces_every_placeholder_without_changing_unicode()
+   {
+      assert_eq!(template("μ %04d / %02d / %04d", 7, 42), "μ 0042 / 07 / 0042");
+      assert_eq!(template("é%02d🙂%04d", 123, 12_345), "é123🙂12345");
+      assert_eq!(template("literal %0xd", 3, 9), "literal %0xd");
    }
 }
