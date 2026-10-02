@@ -55,7 +55,7 @@ mod variation_cache_tests
       let mut runs = Vec::new();
       bake_paged_glyphs_into::<false>(&bold, 1, 32.0, &bold_glyphs, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs, super::api::Color::rgba(0.0, 0.0, 0.0, 1.0), 0.0, 0.0, 1.0);
       bake_paged_glyphs_into::<false>(&regular, 0, 32.0, &regular_glyphs, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs, super::api::Color::rgba(0.0, 0.0, 0.0, 1.0), 0.0, 0.0, 1.0);
-      let regular_key = GlyphKey {font: 0, gid: regular_glyphs[0].glyph_id, raster_px: 32, sdf: true};
+      let regular_key = GlyphKey {font: 0, gid: regular_glyphs[0].glyph_id, raster_px: 32};
       let after_bold = atlas.pages[0].atlas.map.get(&regular_key).unwrap();
       let after_bold_pixels = glyph_pixels(&atlas.pages[0].atlas, after_bold);
 
@@ -67,7 +67,7 @@ mod variation_cache_tests
       assert_eq!(after_bold_pixels, glyph_pixels(&clean_atlas.pages[0].atlas, clean));
    }
 
-   fn glyph_pixels(atlas: &super::Atlas, entry: &super::GlyphAtlasEntry) -> Vec<u8>
+   pub(super) fn glyph_pixels(atlas: &super::Atlas, entry: &super::GlyphAtlasEntry) -> Vec<u8>
    {
       let mut pixels = Vec::with_capacity(entry.w as usize * entry.h as usize);
       for row in entry.v as usize..entry.v as usize + entry.h as usize
@@ -215,7 +215,6 @@ struct GlyphKey {
     font: usize,
     gid: u16,
     raster_px: u16,
-    sdf: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1336,160 +1335,14 @@ impl TextShaper {
     }
 }
 
-const SDF_SPREAD: i32 = 8;
-const EDT_INFINITY: i32 = 1_000_000_000;
-
-#[derive(Default)]
-struct SdfScratch
-{
-   intermediate: Vec<i32>,
-   distances: Vec<i32>,
-   line_input: Vec<i32>,
-   line_output: Vec<i32>,
-   sites: Vec<usize>,
-   edges: Vec<f64>,
-   output: Vec<u8>,
-}
-
-impl SdfScratch
-{
-   fn generate(&mut self, coverage: &[u8], width: usize, height: usize) -> &[u8]
-   {
-      let len = width.saturating_mul(height);
-      self.output.resize(len, 0);
-      if width == 0 || height == 0 || coverage.len() < len
-      {
-         self.output.fill(0);
-         return &self.output;
-      }
-
-      self.distance_transform(coverage, width, height, true);
-      for index in 0..len
-      {
-         if coverage[index] < 128
-         {
-            self.output[index] = sdf_value(-self.distances[index]);
-         }
-      }
-      self.distance_transform(coverage, width, height, false);
-      for index in 0..len
-      {
-         if coverage[index] >= 128
-         {
-            self.output[index] = sdf_value(self.distances[index]);
-         }
-      }
-      &self.output
-   }
-
-   fn distance_transform(&mut self, coverage: &[u8], width: usize, height: usize, feature_inside: bool)
-   {
-      let len = width * height;
-      let axis_len = width.max(height);
-      self.intermediate.resize(len, EDT_INFINITY);
-      self.distances.resize(len, EDT_INFINITY);
-      self.line_input.resize(axis_len, EDT_INFINITY);
-      self.line_output.resize(axis_len, EDT_INFINITY);
-      self.sites.resize(axis_len, 0);
-      self.edges.resize(axis_len.saturating_add(1), f64::INFINITY);
-
-      for x in 0..width
-      {
-         for y in 0..height
-         {
-            let inside = coverage[y * width + x] >= 128;
-            self.line_input[y] = if inside == feature_inside { 0 } else { EDT_INFINITY };
-         }
-         squared_distance_transform_1d(
-            &self.line_input[..height],
-            &mut self.line_output[..height],
-            &mut self.sites[..height],
-            &mut self.edges[..height + 1],
-         );
-         for y in 0..height
-         {
-            self.intermediate[y * width + x] = self.line_output[y];
-         }
-      }
-
-      for y in 0..height
-      {
-         let start = y * width;
-         self.line_input[..width].copy_from_slice(&self.intermediate[start..start + width]);
-         squared_distance_transform_1d(
-            &self.line_input[..width],
-            &mut self.line_output[..width],
-            &mut self.sites[..width],
-            &mut self.edges[..width + 1],
-         );
-         self.distances[start..start + width].copy_from_slice(&self.line_output[..width]);
-      }
-   }
-}
-
-fn squared_distance_transform_1d(input: &[i32], output: &mut [i32], sites: &mut [usize], edges: &mut [f64])
-{
-   if input.is_empty()
-   {
-      return;
-   }
-   let mut envelope = 0usize;
-   sites[0] = 0;
-   edges[0] = f64::NEG_INFINITY;
-   edges[1] = f64::INFINITY;
-   for q in 1..input.len()
-   {
-      let mut intersection = parabola_intersection(input, q, sites[envelope]);
-      while intersection <= edges[envelope]
-      {
-         envelope -= 1;
-         intersection = parabola_intersection(input, q, sites[envelope]);
-      }
-      envelope += 1;
-      sites[envelope] = q;
-      edges[envelope] = intersection;
-      edges[envelope + 1] = f64::INFINITY;
-   }
-
-   envelope = 0;
-   for q in 0..input.len()
-   {
-      while edges[envelope + 1] < q as f64
-      {
-         envelope += 1;
-      }
-      let delta = q as i32 - sites[envelope] as i32;
-      output[q] = delta.saturating_mul(delta).saturating_add(input[sites[envelope]]);
-   }
-}
-
-fn parabola_intersection(input: &[i32], right: usize, left: usize) -> f64
-{
-   let right = right as i64;
-   let left = left as i64;
-   let numerator = input[right as usize] as i64 + right * right
-      - input[left as usize] as i64 - left * left;
-   numerator as f64 / (2 * (right - left)) as f64
-}
-
-fn sdf_value(signed_squared_distance: i32) -> u8
-{
-   let sign = if signed_squared_distance < 0 { -1.0 } else { 1.0 };
-   let squared = signed_squared_distance.unsigned_abs().min(((SDF_SPREAD + 1) * (SDF_SPREAD + 1)) as u32);
-   let signed = sign * (squared as f32).sqrt();
-   let value = (0.5 + signed / (2.0 * SDF_SPREAD as f32)).clamp(0.0, 1.0);
-   (value * 255.0).round() as u8
-}
-
 pub struct RasterCtx {
     scale: ScaleContext,
     image: Image,
-    sdf: SdfScratch,
 }
 
 impl Default for RasterCtx {
     fn default() -> Self {
-        Self { scale: ScaleContext::new(), image: Image::new(), sdf: SdfScratch::default() }
+        Self { scale: ScaleContext::new(), image: Image::new() }
     }
 }
 
@@ -2559,8 +2412,8 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
     let mut pen_x = 0.0_f32;
     let mut pen_y = 0.0_f32;
     let scale = normalized_device_scale(device_scale);
-    let use_sdf = px >= 24.0;
-    let raster_scale = if use_sdf { 1.0 } else { scale };
+    // Preserve outline coverage at the target display resolution at every UI font size.
+    let raster_scale = scale;
     let raster_px = (px * raster_scale).clamp(1.0, u16::MAX as f32).round();
     let ox = (origin_x * scale).round() / scale;
     let oy = (origin_y * scale).round() / scale;
@@ -2571,14 +2424,13 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
     let mut rasterizations = 0_u64;
     let glyph_cache_queries = glyphs.len() as u64;
     let rgba = pack_rgba(color);
-    let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
+    let RasterCtx { scale: scale_context, image: img } = raster;
 
     for glyph in glyphs.iter().copied() {
         let key = GlyphKey {
             font: font_id,
             gid: glyph.glyph_id,
             raster_px: raster_px as u16,
-            sdf: use_sdf,
         };
         let mut cached = None;
         let next_clock = atlas.clock.wrapping_add(1);
@@ -2673,23 +2525,12 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                 continue;
             };
             let page = &mut atlas.pages[page_index];
-            if use_sdf {
-                let sdf = sdf_scratch.generate(&img.data, aw as usize, ah as usize);
-                for yy in 0..ah as usize {
-                    let source = yy * aw as usize;
-                    let offset = (ay as usize + yy) * page.atlas.width as usize
-                        + ax as usize;
-                    page.atlas.data[offset..offset + aw as usize]
-                        .copy_from_slice(&sdf[source..source + aw as usize]);
-                }
-            } else {
-                for row in 0..ah as usize {
-                    let source = row * aw as usize;
-                    let destination = (ay as usize + row) * page.atlas.width as usize
-                        + ax as usize;
-                    page.atlas.data[destination..destination + aw as usize]
-                        .copy_from_slice(&img.data[source..source + aw as usize]);
-                }
+            for row in 0..ah as usize {
+                let source = row * aw as usize;
+                let destination = (ay as usize + row) * page.atlas.width as usize
+                    + ax as usize;
+                page.atlas.data[destination..destination + aw as usize]
+                    .copy_from_slice(&img.data[source..source + aw as usize]);
             }
             page.mark_dirty(AtlasDirtyRect { x: ax, y: ay, w: aw, h: ah });
             atlas.clock = atlas.clock.wrapping_add(1);
@@ -2733,7 +2574,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                     i_start,
                     draw_vertices,
                     draw_indices,
-                    use_sdf,
+                    false,
                     color,
                 );
             }
@@ -2771,7 +2612,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
             i_start,
             draw_vertices,
             draw_indices,
-            use_sdf,
+            false,
             color,
         );
     }
@@ -2816,8 +2657,8 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     let mut pen_x: f32 = 0.0;
     let mut pen_y: f32 = 0.0;
     let scale = normalized_device_scale(device_scale);
-    let use_sdf = px >= 24.0;
-    let raster_scale = if use_sdf { 1.0 } else { scale };
+    // Preserve outline coverage at the target display resolution at every UI font size.
+    let raster_scale = scale;
     let raster_px = (px * raster_scale).clamp(1.0, u16::MAX as f32).round();
     let ox = (origin_x * scale).round() / scale;
     let oy = (origin_y * scale).round() / scale;
@@ -2828,14 +2669,13 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
     let mut glyph_cache_queries = glyphs.len() as u64;
     let mut glyph_cache_misses = 0_u64;
     let mut rasterizations = 0_u64;
-    let RasterCtx { scale: scale_context, image: img, sdf: sdf_scratch } = raster;
+    let RasterCtx { scale: scale_context, image: img } = raster;
 
     for (glyph_index, glyph) in glyphs.iter().copied().enumerate() {
         let key = GlyphKey {
             font: font_id,
             gid: glyph.glyph_id,
             raster_px: raster_px as u16,
-            sdf: use_sdf,
         };
         let entry = if let Some(e) = atlas.map.get_mut(&key) {
             e.last_used = atlas.clock.wrapping_add(1);
@@ -2908,23 +2748,12 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                     continue;
                 }
             };
-            if use_sdf {
-                let sdf = sdf_scratch.generate(&img.data, aw as usize, ah as usize);
-                for yy in 0..ah as usize {
-                    let source = yy * aw as usize;
-                    let dst_y = ay as usize + yy;
-                    let dst_off = (dst_y * (atlas.width as usize)) + (ax as usize);
-                    atlas.data[dst_off..dst_off + aw as usize]
-                        .copy_from_slice(&sdf[source..source + aw as usize]);
-                }
-            } else {
-                for row in 0..ah as usize {
-                    let src_off = row * (aw as usize);
-                    let dst_y = (ay as usize) + row;
-                    let dst_off = (dst_y * (atlas.width as usize)) + (ax as usize);
-                    atlas.data[dst_off..dst_off + (aw as usize)]
-                        .copy_from_slice(&img.data[src_off..src_off + (aw as usize)]);
-                }
+            for row in 0..ah as usize {
+                let src_off = row * (aw as usize);
+                let dst_y = (ay as usize) + row;
+                let dst_off = (dst_y * (atlas.width as usize)) + (ax as usize);
+                atlas.data[dst_off..dst_off + (aw as usize)]
+                    .copy_from_slice(&img.data[src_off..src_off + (aw as usize)]);
             }
             atlas.mark_dirty(ax, ay, aw, ah);
             let e = GlyphAtlasEntry {
@@ -2993,7 +2822,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
         atlas_revision: atlas.retained_revision(device_scale),
         vb: api::VertexSpan { offset: v_start, len: v_end - v_start },
         ib: api::IndexSpan { offset: i_start, len: i_end - i_start },
-        sdf: use_sdf,
+        sdf: false,
         color,
     }
 }
@@ -3038,53 +2867,12 @@ fn push_i(indices: &mut Vec<u16>, a: u32, b: u32, c: u32) {
 }
 
 #[cfg(test)]
-mod sdf_tests
+mod raster_tests
 {
    use super::*;
 
-   const SDF_VALUE_TOLERANCE: u8 = 0;
    const LATIN_FONT: &[u8] = include_bytes!("../tests/fixtures/test_text_latin.ttf");
    const CJK_FONT: &[u8] = include_bytes!("../tests/fixtures/test_text_cjk.ttf");
-
-   #[test]
-   fn exact_edt_matches_brute_force_for_holes_thin_strokes_and_edges()
-   {
-      let mut hole = vec![0_u8; 19 * 19];
-      for y in 2..17
-      {
-         for x in 2..17
-         {
-            if !(6..13).contains(&x) || !(6..13).contains(&y)
-            {
-               hole[y * 19 + x] = 255;
-            }
-         }
-      }
-      assert_reference_match(&hole, 19, 19, "hole");
-
-      let mut strokes = vec![0_u8; 23 * 11];
-      for x in 0..23
-      {
-         strokes[5 * 23 + x] = 255;
-         strokes[(x % 11) * 23 + x] = 255;
-      }
-      assert_reference_match(&strokes, 23, 11, "thin strokes");
-   }
-
-   #[test]
-   fn exact_edt_matches_raster_reference_for_script_and_size_matrix()
-   {
-      for (font, text, script) in [
-         (LATIN_FONT, "O8BgjMW", "Latin"),
-         (CJK_FONT, "漢字かな", "CJK"),
-      ]
-      {
-         for px in [48.0_f32, 96.0]
-         {
-            assert_raster_reference_match(font, text, px, script);
-         }
-      }
-   }
 
    #[test]
    fn fallback_cache_invalidates_on_scale_and_stays_bounded()
@@ -3114,82 +2902,41 @@ mod sdf_tests
       assert!(shaper.fallback_cluster_cache.is_empty());
    }
 
-   fn assert_raster_reference_match(data: &[u8], text: &str, px: f32, script: &str)
+   #[test]
+   fn retina_glyphs_preserve_the_font_rasterizers_exact_coverage()
    {
-      let font = Font::from_bytes(data.to_vec());
-      let mut shaper = TextShaper::default();
-      let shaped = shaper.shape(&font, 0, text, px).expect("shape reference text");
-      let glyphs = shaped.raw_glyphs();
-      let mut scale_context = ScaleContext::new();
-      let font_ref = font.swash_ref().expect("parsed test font");
-      let mut scaler = scale_context.builder(font_ref).size(px).hint(true).build();
-      let render = Render::new(&[Source::Outline]);
-      let mut image = Image::new();
-      for glyph in glyphs
+      let font = Font::from_bytes_with_variations(include_bytes!("../tests/fixtures/NotoSans-VF.ttf").to_vec(), &[FontVariation {tag: *b"wght", value: 700.0}]);
+      for px in [23.0_f32, 24.0, 32.0, 64.0]
       {
-         image.clear();
-         assert!(render.render_into(&mut scaler, glyph.glyph_id, &mut image));
-         if image.data.is_empty()
+         let mut shaper = TextShaper::default();
+         let glyphs = shaper.shape(&font, 0, "Ágj", px).unwrap().raw_glyphs();
+         let mut raster = RasterCtx::default();
+         let mut paged = PagedAtlas::new(512, 512, 2);
+         let mut atlas = Atlas::new(512, 512);
+         let mut vertices = Vec::new();
+         let mut indices = Vec::new();
+         let mut runs = Vec::new();
+         let color = api::Color::rgba(0.0, 0.0, 0.0, 1.0);
+         bake_paged_glyphs_into::<false>(&font, 0, px, &glyphs, &mut raster, &mut paged, &mut vertices, &mut indices, &mut runs, color, 0.0, 0.0, 3.0);
+         let direct = bake_glyphs_into::<false>(&font, 0, px, &glyphs, &mut raster, &mut atlas, &mut vertices, &mut indices, color, api::ImageHandle(1), 0.0, 0.0, 3.0);
+         assert!(!direct.sdf && runs.iter().all(|run| !run.sdf));
+         let mut context = ScaleContext::new();
+         let mut scaler = context.builder(font.swash_ref().unwrap()).size(px * 3.0).hint(true).variations(font.swash_variations()).build();
+         let render = Render::new(&[Source::Outline]);
+         let mut reference = Image::new();
+         for glyph in &glyphs
          {
-            continue;
-         }
-         let label = format!("{script} {px}px glyph {}", glyph.glyph_id);
-         assert_reference_match(
-            &image.data,
-            image.placement.width as usize,
-            image.placement.height as usize,
-            &label,
-         );
-      }
-   }
-
-   fn assert_reference_match(coverage: &[u8], width: usize, height: usize, label: &str)
-   {
-      let mut scratch = SdfScratch::default();
-      let exact = scratch.generate(coverage, width, height);
-      let reference = brute_force_sdf(coverage, width, height);
-      assert_eq!(exact.len(), reference.len(), "{label} length");
-      let max_delta = exact.iter().zip(reference.iter())
-         .map(|(left, right)| left.abs_diff(*right))
-         .max()
-         .unwrap_or(0);
-      assert!(max_delta <= SDF_VALUE_TOLERANCE, "{label} SDF delta {max_delta}");
-   }
-
-   fn brute_force_sdf(coverage: &[u8], width: usize, height: usize) -> Vec<u8>
-   {
-      let mut output = vec![0_u8; width * height];
-      for y in 0..height as i32
-      {
-         for x in 0..width as i32
-         {
-            let index = y as usize * width + x as usize;
-            let inside = coverage[index] >= 128;
-            let mut distance = (SDF_SPREAD + 1) * (SDF_SPREAD + 1);
-            for dy in -SDF_SPREAD..=SDF_SPREAD
+            reference.clear();
+            assert!(render.render_into(&mut scaler, glyph.glyph_id, &mut reference));
+            assert!(reference.data.iter().any(|alpha| *alpha > 0 && *alpha < 255), "reference must exercise fractional edge coverage");
+            let key = GlyphKey {font: 0, gid: glyph.glyph_id, raster_px: (px * 3.0) as u16};
+            for coverage in [&atlas, &paged.pages[0].atlas]
             {
-               let sample_y = y + dy;
-               if sample_y < 0 || sample_y >= height as i32
-               {
-                  continue;
-               }
-               for dx in -SDF_SPREAD..=SDF_SPREAD
-               {
-                  let sample_x = x + dx;
-                  if sample_x < 0 || sample_x >= width as i32
-                  {
-                     continue;
-                  }
-                  let sample = sample_y as usize * width + sample_x as usize;
-                  if (coverage[sample] >= 128) != inside
-                  {
-                     distance = distance.min(dx * dx + dy * dy);
-                  }
-               }
+               let entry = coverage.map.get(&key).expect("physical-resolution glyph");
+               assert_eq!((entry.w as u32, entry.h as u32), (reference.placement.width, reference.placement.height));
+               assert_eq!(super::variation_cache_tests::glyph_pixels(coverage, entry), reference.data, "{px}pt glyph must retain exact outline coverage");
             }
-            output[index] = sdf_value(if inside { distance } else { -distance });
          }
       }
-      output
    }
 }

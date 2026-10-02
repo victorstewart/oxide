@@ -67,8 +67,9 @@ fn assert_logical_quad_close(one: GlyphQuad, three: GlyphQuad, label: &str)
    for (axis, left, right) in [
       ("x", one.x, three.x),
       ("y", one.y, three.y),
-      ("width", one.w, three.w),
-      ("height", one.h, three.h),
+      // Compare edges: rounding each side can change total ink width by more than one pixel.
+      ("right", one.x + one.w, three.x + three.w),
+      ("bottom", one.y + one.h, three.y + three.h),
    ]
    {
       assert!(
@@ -353,13 +354,13 @@ fn device_scale_rasterizes_physical_glyphs_without_changing_logical_quads()
 }
 
 #[test]
-fn sdf_rasterization_is_device_scale_independent()
+fn large_text_preserves_display_resolution_and_reuses_warm_coverage()
 {
    let mut db = FontDb::default();
    let font_id = db.add_font(load_font(LATIN_FONT));
    let font = db.font(font_id).expect("latin font");
    let mut shaper = TextShaper::default();
-   let shaped = shaper.shape(font, font_id, "j", 30.0).expect("shape SDF glyph");
+   let shaped = shaper.shape(font, font_id, "j", 32.0).expect("shape large coverage glyph");
 
    let mut raster = RasterCtx::default();
    let mut atlas = Atlas::new(256, 256);
@@ -368,15 +369,21 @@ fn sdf_rasterization_is_device_scale_independent()
    let (scale_one, scale_one_quad) = bake_atlas_scale(
       &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
    );
+   let one_dirty = atlas.dirty_rect().unwrap();
    atlas.clear_dirty();
    let (scale_three, scale_three_quad) = bake_atlas_scale(
       &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices,
    );
 
-   assert_eq!(atlas.glyph_count(), 1, "SDF must reuse one scale-independent cache entry");
-   assert!(atlas.dirty_rect().is_none(), "Retina SDF replay must not rerasterize or upload");
-   assert!(scale_one.sdf && scale_three.sdf);
-   assert_logical_quad_close(scale_one_quad, scale_three_quad, "atlas SDF");
+   assert_eq!(atlas.glyph_count(), 2, "large glyphs need distinct physical raster sizes");
+   let three_dirty = atlas.dirty_rect().expect("new 3x coverage upload");
+   assert!(three_dirty.w >= one_dirty.w * 2 && three_dirty.h >= one_dirty.h * 2);
+   assert!(!scale_one.sdf && !scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "large atlas coverage");
+   atlas.clear_dirty();
+   let _ = bake_atlas_scale(&shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices);
+   assert!(atlas.dirty_rect().is_none(), "warm large text must reuse uploaded coverage");
+   assert_eq!(atlas.glyph_count(), 2);
 
    let mut raster = RasterCtx::default();
    let mut atlas = PagedAtlas::new(256, 256, 2);
@@ -386,15 +393,21 @@ fn sdf_rasterization_is_device_scale_independent()
    let (scale_one, scale_one_quad) = bake_paged_scale(
       &shaped, 1.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
    );
+   let one_dirty = atlas.page_image(0).unwrap().5.unwrap();
    atlas.clear_dirty();
    let (scale_three, scale_three_quad) = bake_paged_scale(
       &shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs,
    );
 
-   assert_eq!(atlas.glyph_count(), 1, "paged SDF must reuse one scale-independent cache entry");
-   assert!(atlas.page_image(0).and_then(|page| page.5).is_none(), "paged Retina SDF replay must not upload");
-   assert!(scale_one.sdf && scale_three.sdf);
-   assert_logical_quad_close(scale_one_quad, scale_three_quad, "paged SDF");
+   assert_eq!(atlas.glyph_count(), 2, "paged large glyphs need distinct physical raster sizes");
+   let three_dirty = atlas.page_image(0).unwrap().5.expect("paged 3x coverage upload");
+   assert!(three_dirty.w >= one_dirty.w * 2 && three_dirty.h >= one_dirty.h * 2);
+   assert!(!scale_one.sdf && !scale_three.sdf);
+   assert_logical_quad_close(scale_one_quad, scale_three_quad, "large paged coverage");
+   atlas.clear_dirty();
+   let _ = bake_paged_scale(&shaped, 3.0, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs);
+   assert!(atlas.page_image(0).unwrap().5.is_none(), "warm paged large text must reuse coverage");
+   assert_eq!(atlas.glyph_count(), 2);
 }
 
 #[test]
