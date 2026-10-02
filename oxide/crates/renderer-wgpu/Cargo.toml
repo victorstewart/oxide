@@ -16,6 +16,7 @@ wgpu = { version = "=26.0.1", default-features = false, features = ["std", "wgsl
 default = ["headless-vulkan"]
 headless-vulkan = ["dep:pollster", "dep:wgpu", "wgpu/vulkan"]
 shader-source = []
+benchmark-timings = []
 
 [lib]
 path = "src/lib.rs"
