@@ -1040,10 +1040,18 @@ fn premultiplied_srgba8(data: &[u8], w: u32, h: u32, bytes_per_row: usize) -> Ve
       for pixel in 0 .. w as usize
       {
          let index = offset + pixel * 4;
-         let alpha = data[index + 3] as f32 / 255.0;
-         output[index] = linear_to_srgb8(srgb8_to_linear(data[index]) * alpha);
-         output[index + 1] = linear_to_srgb8(srgb8_to_linear(data[index + 1]) * alpha);
-         output[index + 2] = linear_to_srgb8(srgb8_to_linear(data[index + 2]) * alpha);
+         match data[index + 3]
+         {
+            0 => output[index .. index + 3].fill(0),
+            255 => output[index .. index + 3].copy_from_slice(&data[index .. index + 3]),
+            alpha =>
+            {
+               let alpha = alpha as f32 / 255.0;
+               output[index] = linear_to_srgb8(srgb8_to_linear(data[index]) * alpha);
+               output[index + 1] = linear_to_srgb8(srgb8_to_linear(data[index + 1]) * alpha);
+               output[index + 2] = linear_to_srgb8(srgb8_to_linear(data[index + 2]) * alpha);
+            }
+         }
       }
    }
    output
@@ -13213,6 +13221,41 @@ mod tests {
             unsafe { core::slice::from_raw_parts(ring.contents_ptr(0).as_ptr(), seed.len()) };
         assert_eq!(grown, &seed);
     }
+
+   #[test]
+   fn premultiplied_srgba8_fast_paths_match_scalar_conversion_for_every_channel_and_alpha()
+   {
+      let width = 256_usize;
+      let height = 256_usize;
+      let bytes_per_row = width * 4 + 3;
+      let mut data = vec![0_u8; bytes_per_row * height];
+      for alpha in 0 .. 256_usize
+      {
+         let offset = alpha * bytes_per_row;
+         for channel in 0 .. width
+         {
+            let index = offset + channel * 4;
+            data[index .. index + 3].fill(channel as u8);
+            data[index + 3] = alpha as u8;
+         }
+         data[offset + width * 4 .. offset + bytes_per_row].fill(0xA5);
+      }
+      let mut expected = data.clone();
+      for alpha in 0 .. height
+      {
+         let offset = alpha * bytes_per_row;
+         for channel in 0 .. width
+         {
+            let index = offset + channel * 4;
+            let alpha = data[index + 3] as f32 / 255.0;
+            expected[index] = linear_to_srgb8(srgb8_to_linear(data[index]) * alpha);
+            expected[index + 1] = linear_to_srgb8(srgb8_to_linear(data[index + 1]) * alpha);
+            expected[index + 2] = linear_to_srgb8(srgb8_to_linear(data[index + 2]) * alpha);
+         }
+      }
+
+      assert_eq!(premultiplied_srgba8(&data, width as u32, height as u32, bytes_per_row), expected);
+   }
 
     #[cfg(any(target_os = "macos", all(target_os = "ios", not(target_abi = "sim"))))]
     #[test]
