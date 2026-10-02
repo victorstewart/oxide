@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 rustybuzz = "0.14"
+self_cell = "1.3"
 swash = { version = "0.1", features = ["render"] }
 ttf-parser = "0.20"
 oxide-renderer-api = { path = "../renderer-api" }

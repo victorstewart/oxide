@@ -12,6 +12,7 @@ use std::ops::Range;
 
 use oxide_renderer_api as api;
 use rustybuzz::{Face as RbFace, GlyphBuffer as RbGlyphs, UnicodeBuffer, Variation as RbVariation};
+use self_cell::self_cell;
 use swash::scale::{image::Image, ScaleContext};
 #[allow(unused_imports)]
 use swash::scale::{Render, Source};
@@ -24,6 +25,17 @@ struct ParsedFont
 {
    swash_offset: u32,
    swash_key: CacheKey,
+}
+
+self_cell!
+{
+   struct CachedRbFace
+   {
+      owner: std::sync::Arc<Vec<u8>>,
+
+      #[covariant]
+      dependent: RbFace,
+   }
 }
 
 #[cfg(test)]
@@ -67,6 +79,22 @@ mod variation_cache_tests
       assert_eq!(after_bold_pixels, glyph_pixels(&clean_atlas.pages[0].atlas, clean));
    }
 
+   #[test]
+   fn rustybuzz_face_is_reused()
+   {
+      fn assert_font_thread_traits<T: Send + Sync>()
+      {
+      }
+      assert_font_thread_traits::<Font>();
+      let font = Font::from_bytes_with_variations(
+         VARIABLE_FONT.to_vec(),
+         &[FontVariation {tag: *b"wght", value: 700.0}],
+      );
+      let first = font.with_rustybuzz_ref(|face| face as *const _ as usize).unwrap();
+      let second = font.with_rustybuzz_ref(|face| face as *const _ as usize).unwrap();
+      assert_eq!(first, second);
+   }
+
    pub(super) fn glyph_pixels(atlas: &super::Atlas, entry: &super::GlyphAtlasEntry) -> Vec<u8>
    {
       let mut pixels = Vec::with_capacity(entry.w as usize * entry.h as usize);
@@ -90,6 +118,7 @@ pub struct Font {
     data: std::sync::Arc<Vec<u8>>,
     parsed: Option<ParsedFont>,
     variations: Box<[RbVariation]>,
+    rb_face: Option<CachedRbFace>,
     line_metrics: Option<FontLineMetrics>,
 }
 
@@ -110,23 +139,34 @@ impl Font {
 
     #[must_use]
     pub fn from_bytes_with_variations(data: Vec<u8>, variations: &[FontVariation]) -> Self {
+        let data = std::sync::Arc::new(data);
         let parsed = FontRef::from_index(&data, 0).map(|font| ParsedFont {
             swash_offset: font.offset,
             swash_key: font.key,
         });
-        let variations = variations.iter().map(|variation| RbVariation {
+        let variations: Box<[RbVariation]> = variations.iter().map(|variation| RbVariation {
             tag: rustybuzz::ttf_parser::Tag::from_bytes(&variation.tag),
             value: variation.value,
         }).collect();
-        let mut font = Self { data: std::sync::Arc::new(data), parsed, variations, line_metrics: None };
-        if let Some(face) = font.rustybuzz_ref()
-        {
+        let rb_face = CachedRbFace::try_new(std::sync::Arc::clone(&data), |data| {
+           let mut face = RbFace::from_slice(data.as_slice(), 0).ok_or(())?;
+           if !variations.is_empty()
+           {
+              face.set_variations(&variations);
+           }
+           Ok::<_, ()>(face)
+        }).ok();
+        let mut font = Self { data, parsed, variations, rb_face, line_metrics: None };
+        if let Some(metrics) = font.with_rustybuzz_ref(|face| {
            let units = face.units_per_em() as f32;
-           font.line_metrics = Some(FontLineMetrics {
+           FontLineMetrics {
               ascent: (face.ascender() as f32 / units).max(0.0),
               descent: (-f32::from(face.descender()) / units).max(0.0),
               line_gap: (face.line_gap() as f32 / units).max(0.0),
-           });
+           }
+        })
+        {
+           font.line_metrics = Some(metrics);
         }
         font
     }
@@ -160,14 +200,9 @@ impl Font {
        })
     }
 
-    fn rustybuzz_ref(&self) -> Option<RbFace<'_>>
+    fn with_rustybuzz_ref<T>(&self, use_face: impl FnOnce(&RbFace<'_>) -> T) -> Option<T>
     {
-       let mut face = RbFace::from_slice(&self.data, 0)?;
-       if !self.variations.is_empty()
-       {
-          face.set_variations(&self.variations);
-       }
-       Some(face)
+       self.rb_face.as_ref().map(|cached| cached.with_dependent(|_, face| use_face(face)))
     }
 
     fn swash_variations(&self) -> impl Iterator<Item = SwashSetting<f32>> + '_
@@ -1074,11 +1109,13 @@ impl FallbackShape {
 impl TextShaper {
    pub fn shape<'a>(&mut self, font: &'a Font, font_id: usize, text: &str, px: f32) -> anyhow::Result<ShapeOutput<'a>>
    {
-      let rb_face = font.rustybuzz_ref().ok_or_else(|| anyhow::anyhow!("face"))?;
-      let position_scale = shaped_position_scale(px, rb_face.units_per_em());
       let mut buf = UnicodeBuffer::new();
       buf.push_str(text);
-      let glyphs = rustybuzz::shape(&rb_face, &[], buf);
+      let (position_scale, glyphs) = font.with_rustybuzz_ref(|rb_face| {
+         let position_scale = shaped_position_scale(px, rb_face.units_per_em());
+         let glyphs = rustybuzz::shape(rb_face, &[], buf);
+         (position_scale, glyphs)
+      }).ok_or_else(|| anyhow::anyhow!("face"))?;
       Ok(ShapeOutput {
          font,
          font_id,
@@ -1200,11 +1237,14 @@ impl TextShaper {
 
    fn shape_owned(&mut self, font: &Font, font_id: usize, text: &str, px: f32) -> Option<OwnedShape>
    {
-      let rb_face = font.rustybuzz_ref()?;
-      let position_scale = shaped_position_scale(px, rb_face.units_per_em());
+      font.rb_face.as_ref()?;
       let mut buffer = self.unicode_buffer.take().unwrap_or_else(UnicodeBuffer::new);
       buffer.push_str(text);
-      let glyphs = rustybuzz::shape(&rb_face, &[], buffer);
+      let (position_scale, glyphs) = font.with_rustybuzz_ref(|rb_face| {
+         let position_scale = shaped_position_scale(px, rb_face.units_per_em());
+         let glyphs = rustybuzz::shape(rb_face, &[], buffer);
+         (position_scale, glyphs)
+      })?;
       let rtl = text_base_direction_is_rtl(text);
       let shape = owned_shape_from_glyph_buffer(font_id, px, position_scale, rtl, &glyphs);
       self.unicode_buffer = Some(glyphs.clear());
