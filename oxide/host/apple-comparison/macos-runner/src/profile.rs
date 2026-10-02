@@ -60,6 +60,7 @@ struct Profile
    case: String,
    timeline: &'static str,
    requested_wall_seconds: f64,
+   requested_cycles: Option<u64>,
    init_ms: f64,
    warmup_frames: u64,
    measured_frames: u64,
@@ -100,9 +101,19 @@ pub(super) fn run() -> i32
    let name = std::env::var("OXIDE_MAC_CASE").unwrap_or_else(|_| "shapes".to_owned());
    let seconds = super::seconds("OXIDE_MAC_PROFILE_SECONDS", 12.0);
    let continuous = std::env::var_os("OXIDE_MAC_PROFILE_CONTINUOUS").is_some();
+   let cycles = match std::env::var("OXIDE_MAC_BENCH_CYCLES")
+   {
+      Ok(value) => match value.parse::<u64>()
+      {
+         Ok(value) if value > 0 && value <= 1_000 => Some(value),
+         _ => {eprintln!("benchmark cycles must be in 1..=1000"); return 2;}
+      },
+      Err(_) => None,
+   };
    if seconds <= 0.0 || !runtime::NATIVE_CASES.contains(&name.as_str()) {return 2;}
    let mut receipt = Profile {
-      schema: 1, execution: "offscreen-profile", case: name.clone(), requested_wall_seconds: seconds,
+      schema: 1, execution: if cycles.is_some() {"offscreen-fixed-replay"} else {"offscreen-profile"},
+      case: name.clone(), requested_wall_seconds: seconds, requested_cycles: cycles,
       timeline: if continuous {"continuous-text-stress"} else {"repeated-cached-cycle"},
       started_unix_ms: super::unix_millis(), ..Default::default()
    };
@@ -122,11 +133,11 @@ pub(super) fn run() -> i32
    let cpu_started = super::cpu_us();
    receipt.profile_started_unix_ms = super::unix_millis();
    unsafe {comparison_profile_interval(1);}
-   while receipt.errors.is_empty() && started.elapsed().as_secs_f64() < seconds
+   while receipt.errors.is_empty() && cycles.map_or_else(|| started.elapsed().as_secs_f64() < seconds, |limit| receipt.complete_cycles < limit)
    {
       if !continuous {runtime::oxide_core_suite_reset();}
       let offset = if continuous {receipt.complete_cycles as f64 * 12.0} else {0.0};
-      match replay(&name, 12 * 120, offset, Some(&started), seconds)
+      match replay(&name, 12 * 120, offset, if cycles.is_some() {None} else {Some(&started)}, seconds)
       {
          Ok((frames, complete)) => {
             receipt.measured_frames += frames;
@@ -134,6 +145,10 @@ pub(super) fn run() -> i32
          }
          Err(error) => receipt.errors.push(error),
       }
+   }
+   if cycles.is_some()
+   {
+      if let Err(error) = runtime::native_wait_for_gpu() {receipt.errors.push(error);}
    }
    unsafe {comparison_profile_interval(0);}
    receipt.profile_ended_unix_ms = super::unix_millis();

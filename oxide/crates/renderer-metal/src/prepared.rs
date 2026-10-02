@@ -463,6 +463,10 @@ impl PreparedChunkCache
          });
       }
       self.remove_chunk_id(key.id);
+      if !PreparedChunk::supports(chunk)
+      {
+         return None;
+      }
       let mut entry = PreparedChunk::new(renderer, chunk)?;
       entry.last_used_generation = generation;
       let bytes = entry.byte_size;
@@ -664,6 +668,19 @@ pub(super) struct PreparedChunk
 
 impl PreparedChunk
 {
+   fn supports(chunk: &api::RenderChunk) -> bool
+   {
+      !chunk.ordering().has_layer && chunk.draw_list().items.iter().all(|command| matches!(command,
+         api::DrawCmd::RRect { .. }
+         | api::DrawCmd::Image { .. }
+         | api::DrawCmd::GlyphRun { .. }
+         | api::DrawCmd::ImageMesh { .. }
+         | api::DrawCmd::Solid { .. }
+         | api::DrawCmd::ClipPush { .. }
+         | api::DrawCmd::ClipPop
+      ))
+   }
+
    fn new(renderer: &MetalRenderer, chunk: &api::RenderChunk) -> Option<Self>
    {
       if chunk.ordering().has_layer
@@ -2364,4 +2381,54 @@ fn transform_rect_f(rect: api::RectF, uniform: PreparedInstanceUniform) -> api::
    let max_x = points.iter().map(|point| point[0]).fold(f32::NEG_INFINITY, f32::max).ceil();
    let max_y = points.iter().map(|point| point[1]).fold(f32::NEG_INFINITY, f32::max).ceil();
    api::RectI::new(min_x as i32, min_y as i32, (max_x - min_x) as i32, (max_y - min_y) as i32)
+}
+
+#[cfg(test)]
+mod tests
+{
+   use super::*;
+
+   #[test]
+   fn prepared_support_preflight_rejects_late_nine_slice()
+   {
+      let supported = api::RenderChunk::new(
+         api::RenderChunkId(1),
+         api::RenderChunkRevisions::default(),
+         api::DrawList {
+            items: vec![api::DrawCmd::RRect {
+               rect: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+               radii: [0.0; 4],
+               color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+            }],
+            ..api::DrawList::default()
+         },
+         api::ChunkIndexMode::Local,
+         &[],
+      ).unwrap();
+      let unsupported = api::RenderChunk::new(
+         api::RenderChunkId(2),
+         api::RenderChunkRevisions::default(),
+         api::DrawList {
+            items: vec![
+               api::DrawCmd::RRect {
+                  rect: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+                  radii: [0.0; 4],
+                  color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+               },
+               api::DrawCmd::NineSlice {
+                  tex: api::ImageHandle(1),
+                  rect: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+                  slice: api::Insets::new(1.0, 1.0, 1.0, 1.0),
+                  alpha: 1.0,
+               },
+            ],
+            ..api::DrawList::default()
+         },
+         api::ChunkIndexMode::Local,
+         &[api::RenderResourceDependency { image: api::ImageHandle(1), generation: 1 }],
+      ).unwrap();
+
+      assert!(PreparedChunk::supports(&supported));
+      assert!(!PreparedChunk::supports(&unsupported));
+   }
 }
