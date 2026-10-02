@@ -1754,6 +1754,7 @@ impl MetalRenderer
                prepared_key: Some(layer.key),
                resources: chunk.source.resource_dependencies().to_vec(),
                bytes: texture_bytes,
+               budget_bytes: self.layer_texture_required_bytes(layer_format, layer.width, layer.height),
                last_used_frame: self.frame_id,
             });
          }

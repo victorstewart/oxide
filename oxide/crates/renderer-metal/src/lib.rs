@@ -7471,10 +7471,17 @@ impl MetalRenderer {
             }
             let width = (plan.rect.w * self.target_scale.max(1.0)).ceil() as u32;
             let height = (plan.rect.h * self.target_scale.max(1.0)).ceil() as u32;
-            let descriptor = Self::layer_texture_descriptor(self.color_format, width, height);
-            required_bytes = required_bytes.saturating_add(
-                self.device.heap_texture_size_and_align(&descriptor).size as u64,
-            );
+            let bytes = self.layers.get(&plan.id)
+               .filter(|entry| {
+                  entry.w == width
+                     && entry.h == height
+                     && entry.tex.pixel_format() == self.color_format
+               })
+               .map_or_else(
+                  || self.layer_texture_required_bytes(self.color_format, width, height),
+                  |entry| entry.budget_bytes,
+               );
+            required_bytes = required_bytes.saturating_add(bytes);
         }
         if required_bytes > self.layer_cache_budget_bytes
         {
@@ -8261,6 +8268,7 @@ impl api::Renderer for MetalRenderer {
                         prepared_key: None,
                         resources: alloc::vec::Vec::new(),
                         bytes: texture_bytes,
+                        budget_bytes: self.layer_texture_required_bytes(self.color_format, w, h),
                         last_used_frame: self.frame_id,
                     },
                 );
@@ -12047,6 +12055,7 @@ struct LayerEntry {
     prepared_key: Option<prepared::PreparedLayerKey>,
     resources: alloc::vec::Vec<api::RenderResourceDependency>,
     bytes: u64,
+    budget_bytes: u64,
     last_used_frame: u64,
 }
 
