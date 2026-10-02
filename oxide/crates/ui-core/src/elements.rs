@@ -260,6 +260,25 @@ fn ascii_wrap_word_ranges(text_value: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
+fn label_paragraph_ranges(text_value: &str) -> Vec<(usize, usize)>
+{
+   let bytes = text_value.as_bytes();
+   let mut ranges = Vec::with_capacity(4);
+   let mut start = 0usize;
+   for (index, ch) in text_value.char_indices()
+   {
+      if ch != '\n'
+      {
+         continue;
+      }
+      let end = if index > start && bytes[index - 1] == b'\r' { index - 1 } else { index };
+      ranges.push((start, end));
+      start = index + ch.len_utf8();
+   }
+   ranges.push((start, text_value.len()));
+   ranges
+}
+
 pub struct TextCtx {
     pub fonts: text::FontDb,
     pub shaper: text::TextShaper,
@@ -793,7 +812,7 @@ impl TextCtx {
         if let Some(entries) = self.label_layouts.get_mut(&key) {
             if let Some(entry) = entries.get_mut(text_value) {
                 entry.last_used = self.label_layout_clock;
-                if let Some(line) = entry.layout.lines.first() {
+                if let Some(line) = entry.layout.lines.first().filter(|_| !text_value.contains('\n')) {
                     if let CachedLabelShape::Single(run) = &line.shape {
                         let map = run.shape.cursor_map_for_text(text_value);
                         return Some(CachedTextPrefixMetrics { map });
@@ -815,6 +834,8 @@ impl TextCtx {
         text_value: &str,
         shape: text::OwnedShape,
     ) {
+        // Cursor shaping is a single buffer; it must not overwrite paragraph layout.
+        if text_value.contains('\n') {return;}
         if self.label_layout_len >= LABEL_LAYOUT_CACHE_CAP {
             self.evict_cold_label_layouts();
         }
@@ -932,6 +953,25 @@ impl TextCtx {
         max_w: f32,
         count_shapes: bool,
     ) -> Option<CachedLabelLayout> {
+        if text_value.as_bytes().contains(&b'\n') {
+            let mut lines = Vec::with_capacity(4);
+            for (start, end) in label_paragraph_ranges(text_value) {
+                if start == end {
+                    lines.push(self.build_label_line("", font_id, font_px, count_shapes)?);
+                    continue;
+                }
+                let paragraph = self.build_label_layout(
+                    &text_value[start..end],
+                    font_id,
+                    font_px,
+                    wrap,
+                    max_w,
+                    count_shapes,
+                )?;
+                lines.extend(paragraph.lines);
+            }
+            return Some(CachedLabelLayout { lines });
+        }
         if !wrap {
             return Some(CachedLabelLayout {
                 lines: alloc::vec![self.build_label_line(
@@ -1144,6 +1184,8 @@ pub enum Align {
     Right,
 }
 
+/// A top-aligned text layout box. Explicit line breaks are always honored;
+/// `wrap` additionally wraps words to the box width. Parent clips own overflow.
 pub struct Label {
     pub text: alloc::string::String,
     pub color: gfx::Color,
@@ -1351,6 +1393,8 @@ fn encode_label_unwrapped<U: ImageUploader>(
 }
 
 #[inline]
+/// Baseline-oriented compatibility helper: `rect.y` is the first baseline.
+/// Use `Label::encode` when the rectangle describes a top-aligned layout box.
 pub fn encode_label_text<U: ImageUploader>(
     text_value: &str,
     color: gfx::Color,
@@ -1410,29 +1454,17 @@ pub fn encode_label_text_profiled<U: ImageUploader>(
     );
 }
 
-impl Label {
-    pub fn encode<U: ImageUploader>(
-        &self,
-        rect: gfx::RectF,
-        device_scale: f32,
-        txt: &mut TextCtx,
-        up: &mut U,
-        b: &mut DrawListBuilder,
-    ) {
-        encode_label_cached::<false, U>(
-            &self.text,
-            self.color,
-            self.align,
-            self.wrap,
-            self.font_id,
-            self.font_px,
-            rect,
-            device_scale,
-            txt,
-            up,
-            b,
-        );
-    }
+impl Label
+{
+   pub fn encode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, b: &mut DrawListBuilder)
+   {
+      let Some(metrics) = txt.fonts.font(self.font_id).and_then(|font| font.line_metrics(self.font_px)) else {return;};
+      let baseline_rect = gfx::RectF::new(rect.x, rect.y + metrics.ascent, rect.w, rect.h);
+      encode_label_cached::<false, U>(
+         &self.text, self.color, self.align, self.wrap, self.font_id, self.font_px,
+         baseline_rect, device_scale, txt, up, b,
+      );
+   }
 }
 
 // ----- ProgressBar -----
@@ -1571,6 +1603,7 @@ impl Spinner {
 #[derive(Clone, Copy, Debug)]
 pub struct ButtonStyle {
     pub corner: f32,
+    /// Nonnegative inset of the title's clipped content box, in logical points.
     pub pad_x: f32,
     pub pad_y: f32,
     pub color: gfx::Color,
@@ -1578,6 +1611,7 @@ pub struct ButtonStyle {
     pub color_disabled: gfx::Color,
     pub text_px: f32,
     pub text_color: gfx::Color,
+    /// Duration for style-aware ButtonState transitions; zero changes immediately.
     pub press_animation_ms: u32,
 }
 
@@ -1645,86 +1679,187 @@ impl ButtonState {
         self.anim_from + (self.anim_to - self.anim_from) * k
     }
 
-    pub fn on_pointer_down(&mut self) {
-        if self.disabled {
-            return;
-        }
-        self.pressed = true;
-        self.anim_from = self.current_scale(timing::now_ms());
-        self.anim_to = 0.98;
-        self.anim_start_ms = timing::now_ms();
-        self.anim_dur_ms = 80;
-    }
+   fn transition(&mut self, pressed: bool, target: f32, duration_ms: u32, now: u64)
+   {
+      self.pressed = pressed;
+      self.anim_from = self.current_scale(now);
+      self.anim_to = target;
+      self.anim_start_ms = now;
+      self.anim_dur_ms = duration_ms;
+   }
 
-    pub fn on_pointer_cancel(&mut self) {
-        if self.disabled {
-            return;
-        }
-        self.pressed = false;
-        self.anim_from = self.current_scale(timing::now_ms());
-        self.anim_to = 1.0;
-        self.anim_start_ms = timing::now_ms();
-        self.anim_dur_ms = 120;
-    }
+   fn on_pointer_down_at(&mut self, duration_ms: u32, now: u64)
+   {
+      if self.disabled
+      {
+         return;
+      }
+      self.transition(true, 0.98, duration_ms, now);
+   }
 
-    /// Returns true if this was a tap (released while pressed)
-    pub fn on_pointer_up(&mut self) -> bool {
-        if self.disabled {
-            return false;
-        }
-        let was_pressed = self.pressed;
-        self.pressed = false;
-        self.anim_from = self.current_scale(timing::now_ms());
-        self.anim_to = 1.0;
-        self.anim_start_ms = timing::now_ms();
-        self.anim_dur_ms = 120;
-        was_pressed
-    }
+   fn on_pointer_cancel_at(&mut self, duration_ms: u32, now: u64)
+   {
+      if self.disabled
+      {
+         return;
+      }
+      self.transition(false, 1.0, duration_ms, now);
+   }
+
+   fn on_pointer_up_at(&mut self, duration_ms: u32, now: u64) -> bool
+   {
+      if self.disabled
+      {
+         return false;
+      }
+      let was_pressed = self.pressed;
+      self.transition(false, 1.0, duration_ms, now);
+      was_pressed
+   }
+
+   pub fn on_pointer_down_with_style(&mut self, style: &ButtonStyle)
+   {
+      self.on_pointer_down_at(style.press_animation_ms, timing::now_ms());
+   }
+
+   pub fn on_pointer_cancel_with_style(&mut self, style: &ButtonStyle)
+   {
+      self.on_pointer_cancel_at(style.press_animation_ms, timing::now_ms());
+   }
+
+   /// Returns true if this was a tap (released while pressed).
+   pub fn on_pointer_up_with_style(&mut self, style: &ButtonStyle) -> bool
+   {
+      self.on_pointer_up_at(style.press_animation_ms, timing::now_ms())
+   }
+
+   /// Compatibility wrapper preserving the legacy 80 ms press transition.
+   pub fn on_pointer_down(&mut self)
+   {
+      self.on_pointer_down_at(80, timing::now_ms());
+   }
+
+   /// Compatibility wrapper preserving the legacy 120 ms release transition.
+   pub fn on_pointer_cancel(&mut self)
+   {
+      self.on_pointer_cancel_at(120, timing::now_ms());
+   }
+
+   /// Compatibility wrapper preserving the legacy 120 ms release transition.
+   pub fn on_pointer_up(&mut self) -> bool
+   {
+      self.on_pointer_up_at(120, timing::now_ms())
+   }
 }
 
-impl Button {
-    pub fn encode<U: ImageUploader>(
-        &self,
-        rect: gfx::RectF,
-        device_scale: f32,
-        txt: &mut TextCtx,
-        up: &mut U,
-        state: &ButtonState,
-        b: &mut DrawListBuilder,
-    ) {
-        // Determine scale from animation
-        let s = state.current_scale(timing::now_ms()).clamp(0.9, 1.0);
-        let color = if state.disabled {
-            self.style.color_disabled
-        } else if state.pressed {
-            self.style.color_pressed
-        } else {
-            self.style.color
-        };
-        // Scale about center
-        let cx = rect.x + rect.w * 0.5;
-        let cy = rect.y + rect.h * 0.5;
-        let w = rect.w * s;
-        let h = rect.h * s;
-        let r = gfx::RectF::new(cx - w * 0.5, cy - h * 0.5, w, h);
-        b.rrect(r, [self.style.corner; 4], color);
+impl Button
+{
+   /// Draw a centered title inside the padded content box; excess title ink is clipped.
+   /// Pair input with ButtonState's style-aware events to honor `press_animation_ms`.
+   pub fn encode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, state: &ButtonState, b: &mut DrawListBuilder)
+   {
+      let scale = state.current_scale(timing::now_ms()).clamp(0.9, 1.0);
+      let color = if state.disabled {self.style.color_disabled}
+         else if state.pressed {self.style.color_pressed} else {self.style.color};
+      let width = rect.w * scale;
+      let height = rect.h * scale;
+      let background = gfx::RectF::new(rect.x + (rect.w - width) * 0.5, rect.y + (rect.h - height) * 0.5, width, height);
+      b.rrect(background, [self.style.corner; 4], color);
+      if self.text.is_empty() {return;}
+      let pad_x = self.style.pad_x.max(0.0) * scale;
+      let pad_y = self.style.pad_y.max(0.0) * scale;
+      let content = gfx::RectF::new(background.x + pad_x, background.y + pad_y, (width - 2.0 * pad_x).max(0.0), (height - 2.0 * pad_y).max(0.0));
+      if content.w <= 0.0 || content.h <= 0.0 {return;}
+      let Some(metrics) = txt.fonts.font(0).and_then(|font| font.line_metrics(self.style.text_px)) else {return;};
+      let Some(layout) = txt.cached_label_layout::<false>(&self.text, 0, self.style.text_px, false, f32::INFINITY) else {return;};
+      let line_advance = (self.style.text_px * 1.25).ceil();
+      let text_height = metrics.ascent + metrics.descent + layout.lines.len().saturating_sub(1) as f32 * line_advance;
+      let mut baseline = content.y + (content.h - text_height) * 0.5 + metrics.ascent;
+      // Keep the caller's clip stack intact. Rounding outwards retains edge antialiasing.
+      b.clip_push(gfx::RectI::new(content.x.floor() as i32, content.y.floor() as i32,
+         (content.x + content.w).ceil() as i32 - content.x.floor() as i32,
+         (content.y + content.h).ceil() as i32 - content.y.floor() as i32));
+      for line in layout.lines.iter()
+      {
+         let x = content.x + (content.w - line.width) * 0.5;
+         bake_cached_label_line::<false>(line, self.style.text_color, x, baseline, device_scale, txt, b);
+         baseline += line_advance;
+      }
+      txt.flush_after_encoding(up, b);
+      b.clip_pop();
+   }
+}
 
-        // Label centered
-        if !self.text.is_empty() {
-            encode_label_unwrapped(
-                &self.text,
-                self.style.text_color,
-                Align::Center,
-                0,
-                self.style.text_px,
-                r,
-                device_scale,
-                txt,
-                up,
-                b,
-            );
-        }
-    }
+#[cfg(test)]
+mod button_timing_tests
+{
+   use super::{ButtonState, ButtonStyle};
+
+   #[test]
+   fn transition_helper_keeps_interrupted_motion_continuous()
+   {
+      let mut state = ButtonState::default();
+      state.on_pointer_down_at(200, 1_000);
+      assert!((state.current_scale(1_100) - 0.99).abs() < f32::EPSILON);
+      assert!(state.on_pointer_up_at(200, 1_100));
+      assert!((state.current_scale(1_200) - 0.995).abs() < f32::EPSILON);
+   }
+
+   #[test]
+   fn public_styled_zero_duration_transitions_snap()
+   {
+      let style = ButtonStyle {press_animation_ms: 0, ..ButtonStyle::default()};
+      let mut state = ButtonState::default();
+      state.on_pointer_down_with_style(&style);
+      assert_eq!(state.current_scale(state.anim_start_ms), 0.98);
+      assert!(state.on_pointer_up_with_style(&style));
+      assert_eq!(state.current_scale(state.anim_start_ms), 1.0);
+   }
+
+   #[test]
+   fn public_styled_events_leave_disabled_state_unchanged()
+   {
+      let style = ButtonStyle {press_animation_ms: 200, ..ButtonStyle::default()};
+      let mut state = ButtonState {disabled: true, ..ButtonState::default()};
+      state.on_pointer_down_with_style(&style);
+      assert!(!state.is_pressed());
+      assert!(!state.on_pointer_up_with_style(&style));
+      assert_eq!(state.current_scale(state.anim_start_ms), 1.0);
+   }
+
+   #[test]
+   fn compatibility_wrappers_keep_legacy_durations()
+   {
+      let mut state = ButtonState::default();
+      state.on_pointer_down_at(80, 1_000);
+      assert_eq!(state.anim_dur_ms, 80);
+      state.on_pointer_cancel_at(120, 1_040);
+      assert_eq!(state.anim_dur_ms, 120);
+   }
+}
+
+#[cfg(test)]
+mod label_paragraph_cache_tests
+{
+   use super::TextCtx;
+
+   #[test]
+   fn cursor_shaping_does_not_replace_hard_line_layout()
+   {
+      for cursor_first in [false, true]
+      {
+         let mut text = TextCtx::default();
+         let id = text.fonts.add_font(oxide_text::Font::from_bytes(include_bytes!("../assets/Asap-Regular.ttf").to_vec()));
+         let value = "\nTop\r\n\nBottom\n";
+         if cursor_first {text.cached_prefix_metrics(value, id, 14.0).unwrap();}
+         let layout = text.cached_label_layout::<false>(value, id, 14.0, false, f32::INFINITY).unwrap();
+         assert_eq!(layout.lines.len(), 5);
+         text.cached_prefix_metrics(value, id, 14.0).unwrap();
+         let again = text.cached_label_layout::<false>(value, id, 14.0, false, f32::INFINITY).unwrap();
+         assert!(std::sync::Arc::ptr_eq(&layout, &again));
+         assert_eq!(again.lines.len(), 5);
+      }
+   }
 }
 
 // ----- Toggle -----

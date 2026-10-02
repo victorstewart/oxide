@@ -169,7 +169,7 @@ impl AnimationConfigScene {
 
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         // Button interaction zones (4 columns)
-        for (i, (_button, state, _)) in self.buttons.iter_mut().enumerate() {
+        for (i, (button, state, _)) in self.buttons.iter_mut().enumerate() {
             let col = i % 2;
             let row = i / 2;
             let rect =
@@ -177,12 +177,12 @@ impl AnimationConfigScene {
 
             if point_in_rect([x, y], rect) {
                 if buttons & 1 != 0 {
-                    state.on_pointer_down();
+                    state.on_pointer_down_with_style(&button.style);
                 } else {
-                    state.on_pointer_up();
+                    state.on_pointer_up_with_style(&button.style);
                 }
             } else if buttons == 0 {
-                state.on_pointer_cancel();
+                state.on_pointer_cancel_with_style(&button.style);
             }
         }
 

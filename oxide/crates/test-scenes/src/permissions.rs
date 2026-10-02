@@ -283,15 +283,15 @@ impl PermissionsScene {
 
             if point_in_rect([x, y], button_rect) {
                 if buttons & 1 != 0 {
-                    card.button_state.on_pointer_down();
-                } else if card.button_state.on_pointer_up() {
+                    card.button_state.on_pointer_down_with_style(&card.button.style);
+                } else if card.button_state.on_pointer_up_with_style(&card.button.style) {
                     // Request permission
                     card.request_count += 1;
                     card.last_request_ms = timing::now_ms();
                     self.total_requests += 1;
                 }
             } else if buttons == 0 {
-                card.button_state.on_pointer_cancel();
+                card.button_state.on_pointer_cancel_with_style(&card.button.style);
             }
 
             // Toggle for authorized state
@@ -319,12 +319,12 @@ impl PermissionsScene {
 
             if point_in_rect([x, y], rect) {
                 if buttons & 1 != 0 {
-                    button_pair.1.on_pointer_down();
-                } else if button_pair.1.on_pointer_up() {
+                    button_pair.1.on_pointer_down_with_style(&button_pair.0.style);
+                } else if button_pair.1.on_pointer_up_with_style(&button_pair.0.style) {
                     action_to_handle = Some(action);
                 }
             } else if buttons == 0 {
-                button_pair.1.on_pointer_cancel();
+                button_pair.1.on_pointer_cancel_with_style(&button_pair.0.style);
             }
         }
 

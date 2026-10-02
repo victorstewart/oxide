@@ -102,11 +102,61 @@ pub struct Color {
     pub a: f32,
 }
 impl Color {
-    #[inline]
-    #[must_use]
-    pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
-        Self { r, g, b, a }
-    }
+   /// Creates a color from linear RGBA components.
+   ///
+   /// Components are stored unchanged. Use [`Color::from_srgba`] or
+   /// [`Color::from_srgba8`] for standard sRGB input.
+   #[inline]
+   #[must_use]
+   pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self
+   {
+      Self { r, g, b, a }
+   }
+
+   /// Creates a linear color from sRGB RGB components and a linear alpha component.
+   ///
+   /// Finite RGB inputs are not clamped. Values in `0.0..=1.0` use the standard
+   /// sRGB transfer function; values outside that range use its sign-symmetric
+   /// extension. Non-finite RGB inputs and alpha are stored unchanged.
+   #[inline]
+   #[must_use]
+   pub fn from_srgba(r: f32, g: f32, b: f32, a: f32) -> Self
+   {
+      fn linear_component(value: f32) -> f32
+      {
+         if !value.is_finite()
+         {
+            return value;
+         }
+
+         let magnitude = value.abs();
+         let linear = if magnitude <= 0.04045
+         {
+            magnitude / 12.92
+         }
+         else
+         {
+            ((magnitude + 0.055) / 1.055).powf(2.4)
+         };
+         linear.copysign(value)
+      }
+
+      Self::rgba(
+         linear_component(r),
+         linear_component(g),
+         linear_component(b),
+         a,
+      )
+   }
+
+   /// Creates a linear color from 8-bit sRGB RGB components and an 8-bit linear alpha component.
+   #[inline]
+   #[must_use]
+   pub fn from_srgba8(r: u8, g: u8, b: u8, a: u8) -> Self
+   {
+      const SCALE: f32 = 1.0 / 255.0;
+      Self::from_srgba(r as f32 * SCALE, g as f32 * SCALE, b as f32 * SCALE, a as f32 * SCALE)
+   }
 
     /// Packs clamped channels as `AABBGGRR`, with red in the least-significant byte.
     #[inline]

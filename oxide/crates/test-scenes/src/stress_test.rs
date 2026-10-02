@@ -264,11 +264,11 @@ impl StressTestScene {
         match self.current_mode {
             StressTestMode::ManyButtons => {
                 // Randomly press/release buttons
-                for (i, (_, state)) in self.buttons.iter_mut().enumerate() {
+                for (i, (button, state)) in self.buttons.iter_mut().enumerate() {
                     if i as u64 % 100 == self.metrics.frame_count % 100 {
                         // Toggle button press state
-                        state.on_pointer_down();
-                        state.on_pointer_up();
+                        state.on_pointer_down_with_style(&button.style);
+                        state.on_pointer_up_with_style(&button.style);
                     }
                 }
             }
@@ -311,11 +311,11 @@ impl StressTestScene {
 
             StressTestMode::MixedChaos => {
                 // Update everything at once
-                for (i, (_, state)) in self.buttons.iter_mut().enumerate() {
+                for (i, (button, state)) in self.buttons.iter_mut().enumerate() {
                     if i as u64 % 50 == self.metrics.frame_count % 50 {
                         // Toggle button press state
-                        state.on_pointer_down();
-                        state.on_pointer_up();
+                        state.on_pointer_down_with_style(&button.style);
+                        state.on_pointer_up_with_style(&button.style);
                     }
                 }
 
@@ -482,7 +482,7 @@ impl StressTestScene {
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         // Mode selector buttons
         let mut mode_to_set = None;
-        for (i, (_, state)) in self.mode_buttons.iter_mut().enumerate() {
+        for (i, (button, state)) in self.mode_buttons.iter_mut().enumerate() {
             let rect = gfx::RectF::new(
                 50.0 + (i % 4) as f32 * 120.0,
                 50.0 + (i / 4) as f32 * 35.0,
@@ -492,8 +492,8 @@ impl StressTestScene {
 
             if point_in_rect([x, y], rect) {
                 if buttons & 1 != 0 {
-                    state.on_pointer_down();
-                } else if state.on_pointer_up() {
+                    state.on_pointer_down_with_style(&button.style);
+                } else if state.on_pointer_up_with_style(&button.style) {
                     mode_to_set = Some(match i {
                         0 => StressTestMode::ManyButtons,
                         1 => StressTestMode::ManyBadges,
@@ -505,7 +505,7 @@ impl StressTestScene {
                     });
                 }
             } else if buttons == 0 {
-                state.on_pointer_cancel();
+                state.on_pointer_cancel_with_style(&button.style);
             }
         }
 

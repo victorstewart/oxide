@@ -116,6 +116,21 @@ fn descriptor(domain: PermissionDomain) -> &'static PermissionDescriptor {
     })
 }
 
+fn permission_button_style() -> elements::ButtonStyle
+{
+   elements::ButtonStyle {
+      corner: 12.0,
+      pad_x: 16.0,
+      pad_y: 12.0,
+      color: gfx::Color::rgba(0.28, 0.54, 0.96, 1.0),
+      color_pressed: gfx::Color::rgba(0.24, 0.48, 0.88, 1.0),
+      color_disabled: gfx::Color::rgba(0.36, 0.42, 0.52, 1.0),
+      text_px: 15.0,
+      text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
+      press_animation_ms: 100,
+   }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PermissionPrompt {
     pub domain: PermissionDomain,
@@ -172,7 +187,7 @@ impl PermissionOverlayUi {
             .map(PermissionPrompt::from)
             .next();
         if self.prompt.is_none() {
-            self.button_state.on_pointer_cancel();
+            self.button_state.on_pointer_cancel_with_style(&permission_button_style());
         }
     }
 
@@ -251,17 +266,7 @@ impl PermissionOverlayUi {
         let button_rect =
             gfx::RectF::new(card.x + 20.0, card.y + card.h - 64.0, card.w - 40.0, 44.0);
         self.last_button = Some(button_rect);
-        let button_style = elements::ButtonStyle {
-            corner: 12.0,
-            pad_x: 16.0,
-            pad_y: 12.0,
-            color: gfx::Color::rgba(0.28, 0.54, 0.96, 1.0),
-            color_pressed: gfx::Color::rgba(0.24, 0.48, 0.88, 1.0),
-            color_disabled: gfx::Color::rgba(0.36, 0.42, 0.52, 1.0),
-            text_px: 15.0,
-            text_color: gfx::Color::rgba(1.0, 1.0, 1.0, 1.0),
-            press_animation_ms: 100,
-        };
+        let button_style = permission_button_style();
         let button = elements::Button { text: button_text, style: button_style };
         button.encode(button_rect, device_scale, text, uploader, &self.button_state, builder);
     }
@@ -273,14 +278,14 @@ impl PermissionOverlayUi {
             x >= button.x && x <= button.x + button.w && y >= button.y && y <= button.y + button.h;
         if buttons & 1 != 0 {
             if inside {
-                self.button_state.on_pointer_down();
+                self.button_state.on_pointer_down_with_style(&permission_button_style());
             } else {
-                self.button_state.on_pointer_cancel();
+                self.button_state.on_pointer_cancel_with_style(&permission_button_style());
             }
             return None;
         }
         if self.button_state.is_pressed() {
-            let tapped = self.button_state.on_pointer_up();
+            let tapped = self.button_state.on_pointer_up_with_style(&permission_button_style());
             if tapped && inside {
                 return Some(prompt.domain);
             }

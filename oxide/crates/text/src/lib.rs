@@ -37,6 +37,16 @@ pub struct Font {
     data: std::sync::Arc<Vec<u8>>,
     parsed: Option<ParsedFont>,
     variations: Box<[RbVariation]>,
+    line_metrics: Option<FontLineMetrics>,
+}
+
+/// Font-wide distances from the baseline, in logical pixels at the requested size.
+#[derive(Clone, Copy, Debug)]
+pub struct FontLineMetrics
+{
+   pub ascent: f32,
+   pub descent: f32,
+   pub line_gap: f32,
 }
 
 impl Font {
@@ -55,7 +65,28 @@ impl Font {
             tag: rustybuzz::ttf_parser::Tag::from_bytes(&variation.tag),
             value: variation.value,
         }).collect();
-        Self { data: std::sync::Arc::new(data), parsed, variations }
+        let mut font = Self { data: std::sync::Arc::new(data), parsed, variations, line_metrics: None };
+        if let Some(face) = font.rustybuzz_ref()
+        {
+           let units = face.units_per_em() as f32;
+           font.line_metrics = Some(FontLineMetrics {
+              ascent: (face.ascender() as f32 / units).max(0.0),
+              descent: (-f32::from(face.descender()) / units).max(0.0),
+              line_gap: (face.line_gap() as f32 / units).max(0.0),
+           });
+        }
+        font
+    }
+
+    /// Metrics are parsed once when the font (including its variations) is created.
+    pub fn line_metrics(&self, font_px: f32) -> Option<FontLineMetrics>
+    {
+       if !font_px.is_finite() || font_px <= 0.0 {return None;}
+       self.line_metrics.map(|metrics| FontLineMetrics {
+          ascent: metrics.ascent * font_px,
+          descent: metrics.descent * font_px,
+          line_gap: metrics.line_gap * font_px,
+       })
     }
 
     #[must_use]

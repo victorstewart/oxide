@@ -230,7 +230,7 @@ impl OrchestrationScene {
 
         // Process button interactions
         let mut action_to_handle = None;
-        for (i, (_button, state, action)) in self.trigger_buttons.iter_mut().enumerate() {
+        for (i, (button, state, action)) in self.trigger_buttons.iter_mut().enumerate() {
             let rect = gfx::RectF::new(
                 350.0 + (i % 2) as f32 * 150.0,
                 100.0 + (i / 2) as f32 * 50.0,
@@ -240,12 +240,12 @@ impl OrchestrationScene {
 
             if point_in_rect([x, y], rect) {
                 if buttons & 1 != 0 {
-                    state.on_pointer_down();
-                } else if state.on_pointer_up() {
+                    state.on_pointer_down_with_style(&button.style);
+                } else if state.on_pointer_up_with_style(&button.style) {
                     action_to_handle = Some(action.clone());
                 }
             } else if buttons == 0 {
-                state.on_pointer_cancel();
+                state.on_pointer_cancel_with_style(&button.style);
             }
         }
 

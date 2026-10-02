@@ -464,17 +464,17 @@ impl IntegrationScene {
 
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         // Workflow selector buttons
-        for (i, (_button, state)) in self.workflow_buttons.iter_mut().enumerate() {
+        for (i, (button, state)) in self.workflow_buttons.iter_mut().enumerate() {
             let rect = gfx::RectF::new(50.0 + i as f32 * 180.0, 50.0, 170.0, 40.0);
 
             if point_in_rect([x, y], rect) {
                 if buttons & 1 != 0 {
-                    state.on_pointer_down();
-                } else if state.on_pointer_up() {
+                    state.on_pointer_down_with_style(&button.style);
+                } else if state.on_pointer_up_with_style(&button.style) {
                     self.active_workflow = i;
                 }
             } else if buttons == 0 {
-                state.on_pointer_cancel();
+                state.on_pointer_cancel_with_style(&button.style);
             }
         }
 
@@ -494,8 +494,8 @@ impl IntegrationScene {
         let action_rect = gfx::RectF::new(100.0, 200.0, 150.0, 40.0);
         if point_in_rect([x, y], action_rect) {
             if buttons & 1 != 0 {
-                workflow.action_button_state.on_pointer_down();
-            } else if workflow.action_button_state.on_pointer_up() {
+                workflow.action_button_state.on_pointer_down_with_style(&workflow.action_button.style);
+            } else if workflow.action_button_state.on_pointer_up_with_style(&workflow.action_button.style) {
                 if workflow.state == WorkflowState::RecordingMedia {
                     workflow.stop_recording();
                 } else {
@@ -503,7 +503,7 @@ impl IntegrationScene {
                 }
             }
         } else if buttons == 0 {
-            workflow.action_button_state.on_pointer_cancel();
+            workflow.action_button_state.on_pointer_cancel_with_style(&workflow.action_button.style);
         }
 
         // Record button (if visible)
@@ -527,13 +527,13 @@ impl IntegrationScene {
         let submit_rect = gfx::RectF::new(100.0, 400.0, 120.0, 40.0);
         if point_in_rect([x, y], submit_rect) {
             if buttons & 1 != 0 {
-                workflow.submit_state.on_pointer_down();
-            } else if workflow.submit_state.on_pointer_up() {
+                workflow.submit_state.on_pointer_down_with_style(&workflow.submit_button.style);
+            } else if workflow.submit_state.on_pointer_up_with_style(&workflow.submit_button.style) {
                 workflow.validate();
                 workflow.submit();
             }
         } else if buttons == 0 {
-            workflow.submit_state.on_pointer_cancel();
+            workflow.submit_state.on_pointer_cancel_with_style(&workflow.submit_button.style);
         }
 
         // Simulate text input for demo
@@ -558,24 +558,24 @@ impl IntegrationScene {
         let next_rect = gfx::RectF::new(400.0, 400.0, 100.0, 40.0);
         if point_in_rect([x, y], next_rect) {
             if buttons & 1 != 0 {
-                workflow.next_button_state.on_pointer_down();
-            } else if workflow.next_button_state.on_pointer_up() {
+                workflow.next_button_state.on_pointer_down_with_style(&workflow.next_button.style);
+            } else if workflow.next_button_state.on_pointer_up_with_style(&workflow.next_button.style) {
                 workflow.next_step();
             }
         } else if buttons == 0 {
-            workflow.next_button_state.on_pointer_cancel();
+            workflow.next_button_state.on_pointer_cancel_with_style(&workflow.next_button.style);
         }
 
         // Previous button
         let prev_rect = gfx::RectF::new(100.0, 400.0, 100.0, 40.0);
         if point_in_rect([x, y], prev_rect) && workflow.current_step > 0 {
             if buttons & 1 != 0 {
-                workflow.prev_button_state.on_pointer_down();
-            } else if workflow.prev_button_state.on_pointer_up() {
+                workflow.prev_button_state.on_pointer_down_with_style(&workflow.prev_button.style);
+            } else if workflow.prev_button_state.on_pointer_up_with_style(&workflow.prev_button.style) {
                 workflow.prev_step();
             }
         } else if buttons == 0 {
-            workflow.prev_button_state.on_pointer_cancel();
+            workflow.prev_button_state.on_pointer_cancel_with_style(&workflow.prev_button.style);
         }
     }
 

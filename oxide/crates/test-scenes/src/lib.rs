@@ -1162,16 +1162,16 @@ impl Controls {
     pub fn input_pointer(&mut self, x: f32, y: f32, _dx: f32, _dy: f32, buttons: u32) {
         let r = gfx::RectF::new(40.0, 40.0, 140.0, 40.0);
         if buttons & 1 != 0 && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h {
-            self.button_state.on_pointer_down();
+            self.button_state.on_pointer_down_with_style(&self.button.style);
         } else if self.button_state.is_pressed() {
-            let _ = self.button_state.on_pointer_up();
+            let _ = self.button_state.on_pointer_up_with_style(&self.button.style);
         }
     }
     pub fn key_space_down(&mut self) {
-        self.button_state.on_pointer_down();
+        self.button_state.on_pointer_down_with_style(&self.button.style);
     }
     pub fn key_space_up(&mut self) -> bool {
-        self.button_state.on_pointer_up()
+        self.button_state.on_pointer_up_with_style(&self.button.style)
     }
     pub fn key_arrow_left(&mut self) {
         let _ = self.slider_state.arrow_left(self.slider.step);
@@ -1841,11 +1841,11 @@ impl InputLab {
                 self.focus(FocusField::Password);
             } else if point_in_rect(point, self.last_submit_rect) {
                 if !self.submit_state.is_pressed() {
-                    self.submit_state.on_pointer_down();
+                    self.submit_state.on_pointer_down_with_style(&self.submit_button.style);
                 }
             } else {
                 if self.submit_state.is_pressed() {
-                    self.submit_state.on_pointer_cancel();
+                    self.submit_state.on_pointer_cancel_with_style(&self.submit_button.style);
                 }
                 self.focus(FocusField::None);
             }
@@ -1856,7 +1856,7 @@ impl InputLab {
             }
         } else if self.submit_state.is_pressed() {
             let tapped =
-                point_in_rect(point, self.last_submit_rect) && self.submit_state.on_pointer_up();
+                point_in_rect(point, self.last_submit_rect) && self.submit_state.on_pointer_up_with_style(&self.submit_button.style);
             if tapped {
                 self.handle_submit();
             }
