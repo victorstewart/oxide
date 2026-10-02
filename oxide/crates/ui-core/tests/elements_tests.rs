@@ -1597,6 +1597,36 @@ fn text_input_encodes_unfocused_marked_text_without_a_caret() {
 }
 
 #[test]
+fn text_input_composition_underline_stays_close_to_baseline()
+{
+   let mut text = TextCtx::default();
+   let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   for font_px in [18.0, 32.0]
+   {
+      let input = TextInput {style: TextInputStyle {font_id, font_px, ..TextInputStyle::default()}, ..TextInput::default()};
+      let mut state = TextInputState::new("");
+      state.handle_text_event(&TextEvent::Composition {range: 0..0, text: "cafe\u{301}".into()});
+      let rect = RectF::new(0.0, 20.0, 240.0, 100.0);
+      let mut builder = DrawListBuilder::new();
+      let mut uploader = CountingUploader::default();
+      input.encode(&state, rect, 3.0, &mut text, &mut uploader, &mut builder);
+      let metrics = text.fonts.font(font_id).unwrap().line_metrics(font_px).unwrap();
+      let content_height = rect.h - 3.0 - input.style.padding.top - input.style.padding.bottom;
+      let baseline = rect.y + 1.5 + input.style.padding.top
+         + (content_height - metrics.ascent - metrics.descent).max(0.0) * 0.5 + metrics.ascent;
+      let underline = builder.drawlist().items.iter().find_map(|item| match item
+      {
+         DrawCmd::RRect {rect, color, ..} if *color == input.style.composition => Some(rect),
+         _ => None,
+      }).expect("marked text underline");
+      assert!(underline.y >= baseline && underline.y <= baseline + 2.0,
+         "underline must follow the baseline at {font_px}px: baseline={baseline}, underline={underline:?}");
+   }
+}
+
+#[test]
 fn text_input_centers_an_empty_placeholder_on_its_text_baseline() {
     let mut text = TextCtx::default();
     let _ = text.fonts.add_font(oxide_text::Font::from_bytes(

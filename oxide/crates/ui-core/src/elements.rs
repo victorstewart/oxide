@@ -3411,8 +3411,10 @@ impl TextInput {
                     + prefix_metrics
                         .as_ref()
                         .map_or(0.0, |metrics| metrics.map.width_at(display_end));
+                // Composition marks follow the baseline, not the line box's
+                // reserved descender space.
                 let underline =
-                    gfx::RectF::new(sx, text_baseline + metrics.descent + 1.0, (ex - sx).max(1.0), 2.0);
+                    gfx::RectF::new(sx, text_baseline + 1.0, (ex - sx).max(1.0), 2.0);
                 builder.rrect(underline, [1.0; 4], style.composition);
             }
         }
