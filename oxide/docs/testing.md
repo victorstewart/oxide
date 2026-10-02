@@ -61,5 +61,8 @@ This repository intentionally does not run `cargo fmt` or `cargo clippy`; the pr
 style is maintained manually.
 
 Device-authoritative Oxide/UIKit performance remains a reviewed physical-iPhone flow
-through the `Justfile` device targets and the checked-in `benchmarks/oxide-device` and
-`benchmarks/uikit-device` reports.
+through the device targets. The Rust runner writes generated reports under
+`oxide/artifacts/perf-runner/`; the device runner writes them under
+`oxide/artifacts/oxide-device/`. Other evidence uses an explicitly selected ignored or
+external artifact directory. Benchmark contracts, fixtures, and goldens remain in source
+control.

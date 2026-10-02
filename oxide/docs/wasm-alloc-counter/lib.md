@@ -6,7 +6,7 @@
 
 ## Relation to the rest of the code
 
-`oxide-host-web` installs `CountingAllocator<std::alloc::System>` only for `target_arch = "wasm32"`. Browser benchmark exports snapshot the counters before and after each measured frame, then the report script persists the deltas in `benchmarks/web/latest.json` and `benchmarks/web/latest.md`.
+`oxide-host-web` installs `CountingAllocator<std::alloc::System>` only for `target_arch = "wasm32"`. Browser benchmark exports snapshot the counters before and after each measured frame, then the report script persists the deltas in `oxide/artifacts/performance/web/latest.json` and `oxide/artifacts/performance/web/latest.md`.
 
 Call flow:
 
@@ -14,7 +14,7 @@ Call flow:
 - `oxide_wasm_alloc_counter::CountingAllocator`
 - `oxide_host_web` benchmark frame loop
 - `scripts/check_webgpu_browser_golden.mjs`
-- `benchmarks/web/latest.*`
+- `oxide/artifacts/performance/web/latest.*`
 
 ## Entry points list
 

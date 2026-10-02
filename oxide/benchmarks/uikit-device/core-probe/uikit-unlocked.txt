@@ -1,2 +1,0 @@
-Waiting for device to boot
-Timed out waiting for device to boot: Victor’s iPhone (26.6)

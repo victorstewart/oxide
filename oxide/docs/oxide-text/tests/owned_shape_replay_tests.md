@@ -39,7 +39,7 @@
 
 ## Testing and benchmarks
 - Run with `cargo test --locked -p oxide-text --test owned_shape_replay_tests -- --nocapture`.
-- Browser companion: `node scripts/check_webgpu_browser_golden.mjs ... --json-report benchmarks/web/latest.json --markdown-report benchmarks/web/latest.md`.
+- Browser companion: `node scripts/check_webgpu_browser_golden.mjs ... --json-report oxide/artifacts/performance/web/latest.json --markdown-report oxide/artifacts/performance/web/latest.md`.
 
 ## Examples
 ```rust

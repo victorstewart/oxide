@@ -34,11 +34,13 @@ Call flow:
 - `host_exposes_prepared_chunk_browser_contract()`: requires the C25 256-chunk 8/16/32/64 workload, exact flat control, prepared renderer entry point, encode/queue/active-frame samples, cache/bundle/upload counters, lifecycle guardrails, and non-default page routing.
 - `host_exposes_dynamic_property_browser_contract()`: requires the C26 300-node mixed text/image workload, cached alternating/full-affine snapshots, property/geometry/event counters, and a real-RAF Chrome runner.
 - `host_exposes_local_layer_dimension_benchmark_and_edge_capture()`: requires C30's 100-card DPR2 workload, symmetric fixed-work GPU clock warmup, exact-frame-ID terminal postroll, warmup/raw GPU sample populations, local/full residency counters, real-browser resize/scale/purge/device/resource guardrails, stale-process/file-pressure health gates, page capture hook, bounded Chrome adapter, and local-layer visual classifier.
-- `committed_webgpu_browser_baseline_persists_nonzero_id_mask_current_row()`: parses `benchmarks/web/latest.json` and verifies the 23-row browser WebGPU matrix is present with report version 5, browser startup/package fields, nonzero current ID-mask timing, frame-pacing fields, pass-family counters, GPU timestamp stage totals reconciled to source rows, Chrome trace event counts, benchmark User Timing labels, and per-benchmark trace intervals from the duplicate benchmark-report run, current-row Rust/WASM allocation counters with bounded per-frame budgets and zero reallocations, frame-loop allocation stage totals, submit-substage allocation totals, zero WASM memory growth across benchmark marks after prewarm, zero warm-frame sampler creation, report-level and per-row current-row warm-resource-churn zero-growth summaries, backend-path coverage rows tying important WebGPU path families to distributions and explanatory counters, current glyph/RGBA upload rows with direct timestamp totals and retired legacy upload rows absent, effect-uniform A/B with direct GPU timestamp totals, current backdrop-batch coverage, mixed text/image/effects A/B, layer/damage/effects A/B, clean-layer A/B, command-family current coverage with the legacy row absent, glyph-run current, neon-marker A/B, direct-surface A/B, the Scene3D stress rows, and current-path wins.
+- Browser report contract tests validate a caller-provided generated artifact. They do
+  not require a checked-in report; the canonical output location is
+  `oxide/artifacts/performance/`.
 
 ## Logic narrative
 
-The first test checks RGBA buffer shape. The second test samples different tile positions and confirms they differ, which catches accidental one-color placeholder output. The static shell test catches regressions where the HTML page points at the wrong wasm-bindgen output path, stops invoking the backend smoke and perf hooks, stops probing timestamp-query capability, stops marking default benchmark families with browser User Timing, stops publishing the hidden report JSON, stops honoring capture-target query parameters, stops waiting after ID-mask capture, stops using the no-RAF deterministic app snapshot path for app captures, stops supporting startup-only repeat reports, or stops logging the browser-test markers. The source-inspection tests keep the browser-only WebGPU A/B exports that remain after upload retirement, the C19 lazy-target/selective-prewarm adapter, the C25 prepared-chunk adapter and lifecycle counters, the C30 local-layer sample/counter and real-browser lifecycle/resource adapters, explicit app/Scene3D/ID-mask/prepared/local-layer snapshot render hooks, direct-capture guard, bounded visual-capture retry, startup/package report evidence, repeated startup/package measurement output, upload and effect-uniform GPU timestamp fields, timestamp stage-breakdown reporting, current backdrop-batch coverage, mixed-scene A/B, clean-layer A/B, command-family current coverage, glyph-run current, neon-marker A/B, direct-surface A/B, diagnostic draw-item coalescing A/B, Chrome trace, benchmark mark, trace interval, zero WASM-memory growth, Rust/WASM allocation counters, frame-stage and submit-substage allocation counters, warm-resource-churn report contracts, and backend-path coverage visible to native CI without launching Chrome. The same source test also asserts the retired clip-state diagnostic export, upload A/B export, default backdrop/upload legacy rows, and command-family legacy row stay absent after their A/B wins. The committed-golden tests decode browser PNGs so missing files, wrong dimensions, blank captures, and app-vs-compositor target mixups fail in native tests. The persisted-report test prevents committed browser baselines from silently dropping report version 5, startup/package metrics, current ID-mask default coverage, frame-pacing fields, pass-family counters, timestamp-attribution status, GPU timestamp stage totals, duplicate benchmark-report Chrome trace event counts, benchmark labels, per-benchmark trace intervals, current-row Rust/WASM allocation counters with zero reallocations, frame-loop allocation stage totals, submit-substage allocation totals, zero WASM memory growth after prewarm, resource-lifetime counters, current glyph/RGBA upload and effect-uniform counters with direct GPU timestamp totals, current backdrop-batch counters, mixed-scene state/effect counters, clean-layer cache counters, command-family current counters, glyph-run current counters, neon-marker counters, direct-surface pass/GPU timestamp counters, the report-level and per-row current-row warm-resource-churn zero-growth summaries, backend-path coverage rows, capture target, or from regressing back to virtual-time zero measurements.
+The first test checks RGBA buffer shape. The second test samples different tile positions and confirms they differ, which catches accidental one-color placeholder output. The static shell test catches regressions where the HTML page points at the wrong wasm-bindgen output path, stops invoking the backend smoke and perf hooks, stops probing timestamp-query capability, stops marking default benchmark families with browser User Timing, stops publishing the hidden report JSON, stops honoring capture-target query parameters, stops waiting after ID-mask capture, stops using the no-RAF deterministic app snapshot path for app captures, stops supporting startup-only repeat reports, or stops logging the browser-test markers. The source-inspection tests keep the browser-only WebGPU A/B exports that remain after upload retirement, the C19 lazy-target/selective-prewarm adapter, the C25 prepared-chunk adapter and lifecycle counters, the C30 local-layer sample/counter and real-browser lifecycle/resource adapters, explicit app/Scene3D/ID-mask/prepared/local-layer snapshot render hooks, direct-capture guard, bounded visual-capture retry, startup/package report evidence, repeated startup/package measurement output, upload and effect-uniform GPU timestamp fields, timestamp stage-breakdown reporting, current backdrop-batch coverage, mixed-scene A/B, clean-layer A/B, command-family current coverage, glyph-run current, neon-marker A/B, direct-surface A/B, diagnostic draw-item coalescing A/B, Chrome trace, benchmark mark, trace interval, zero WASM-memory growth, Rust/WASM allocation counters, frame-stage and submit-substage allocation counters, warm-resource-churn report contracts, and backend-path coverage visible to native CI without launching Chrome. The same source test also asserts the retired clip-state diagnostic export, upload A/B export, default backdrop/upload legacy rows, and command-family legacy row stay absent after their A/B wins. The committed-golden tests decode browser PNGs so missing files, wrong dimensions, blank captures, and app-vs-compositor target mixups fail in native tests. Generated-report validation checks the selected artifact against the active contract; it does not make a prior result a repository fixture.
 
 C37 source coverage freezes the dedicated RRect count/DPR/pathological matrix, analytic instance/triangle/byte metrics, isolated page mode, and `rrect` capture route. Real-browser proof remains in the experiment artifacts rather than becoming a new default committed browser row.
 
@@ -80,66 +82,3 @@ pub fn texture() -> Vec<u8>
    oxide_host_web::generate_checker_rgba(16, 16)
 }
 ```
-
-## Changelog
-
-- 2026-07-15: froze C60 unique browser image sources and separated queue/paint-complete first display from immediate CPU submit timing.
-- 2026-07-14: added static coverage for the C41 neon-marker matrix, counters, and capture route.
-- 2026-07-14: added static coverage for the C40 spinner matrix, phased capture, timestamp handoff, and bounded displayed-frame animation evidence.
-- 2026-07-14: added static coverage for the C39 nine-slice matrix and capture route.
-- 2026-07-14: added static coverage for the C38 image matrix, compact-instance counters, and dedicated capture target.
-- 2026-07-14: added static coverage for the C37 count/DPR/pathological RRect matrix, analytic counters, and dedicated capture target.
-- 2026-07-14: froze the C35 seven-dimension exact browser field-matrix export and script route.
-- 2026-07-14: added C35 representation-aware cache-budget and packed-field memory-proof contracts.
-- 2026-07-14: added static C33 coverage for the cache-only browser route, complete invalidation matrix, valid direct timestamp samples, one-entry/LRU comparison, and pressure/device purge output.
-- 2026-07-14: added static C31 coverage for the bounded navigation-churn and purge benchmark route.
-- 2026-07-14: added static C30 coverage for the 100-card local-layer benchmark, raw timestamp cardinality, local/full residency, lifecycle/resource guardrails, and fractional nested/effect capture routing.
-- 2026-07-13: added static C25 coverage for the prepared snapshot workload, exact flat control, lifecycle guardrails, distributions, and cache/bundle/upload counters.
-- 2026-07-13: added static C26 coverage for dynamic property traffic, full-affine rendering, and RAF evidence routing.
-- 2026-07-13: added C20 static coverage for cached browser geometry, one-RAF invalidation coalescing, explicit animation demand, and the real scheduler adapter.
-- 2026-07-13: added static C19 coverage for pre-construction canvas sizing and construction/resize/selective-prewarm target evidence.
-- 2026-07-12: added static C16 adapter coverage for compact u16 quad streams and the large-mesh u32 fallback.
-- 2026-07-12: added static C15 atlas diagnostic/capture coverage and decoded A8/SDF glyph-golden assertions.
-
-- 2026-07-12: added static coverage for the two-draw asymmetric ID-mask oracle and uniform arena counters in host and browser report schemas.
-- 2026-06-22: updated static and committed-report checks after retiring the default backdrop-batch per-copy row with same-workload A/B proof.
-- 2026-06-02: added static and committed-report checks for WebGPU draw-item coalescing A/B rows and counters.
-- 2026-06-22: retired default committed-report checks for draw-item coalescing, draw-state cache, and clip-state cache standalone rows after same-workload A/B proof showed current wins.
-- 2026-06-22: updated source-inspection checks after retiring the explicit clip-state diagnostic export with repeated startup/package A/B proof.
-- 2026-06-22: added static and committed-report checks for browser startup timing and package-size evidence in WebGPU report version 3.
-- 2026-06-22: updated committed-report checks for browser WebGPU report version 5 after retiring the default upload legacy rows and upload A/B export with same-workload A/B proof.
-- 2026-06-22: updated static and committed-report checks after retiring the default glyph-run legacy row with same-workload A/B proof.
-- 2026-06-22: added static checks for the non-default repeated startup/package report mode.
-- 2026-06-22: added static checks for the non-default Canvas indexed-quad diagnostic report mode.
-- 2026-06-02: added static and committed-report checks for browser WebGPU Rust/WASM allocation audit fields and summary gates.
-- 2026-06-02: added static and committed-report checks for WebGPU timestamp stage-breakdown attribution.
-- 2026-06-02: added static and committed-report checks for browser WebGPU frame-loop allocation stage attribution.
-- 2026-06-01: added static and committed-report checks for WebGPU benchmark User Timing marks and trace labels.
-- 2026-06-02: added static and committed-report checks for per-benchmark Chrome trace interval attribution.
-- 2026-06-02: added static and committed-report checks for per-row WebGPU warm-resource-churn zero-growth details.
-- 2026-06-02: added static and committed-report checks for the WebGPU backend-path coverage matrix.
-- 2026-06-02: added static and committed-report checks for WebGPU submit sub-stage WASM allocation attribution.
-- 2026-06-02: added static and committed-report checks for WebGPU glyph/RGBA upload direct timestamp totals.
-- 2026-06-02: added static and committed-report checks for WebGPU mixed-scene current-versus-legacy A/B rows.
-- 2026-06-02: added static and committed-report checks for WebGPU layer/damage/effects current-versus-legacy A/B rows.
-- 2026-06-02: added static and committed-report checks for WebGPU retained clean-layer clean-versus-dirty A/B rows.
-- 2026-06-02: added static and committed-report checks for WebGPU neon-marker current-versus-legacy A/B rows.
-- 2026-06-02: added static and committed-report checks for WebGPU direct-surface current-versus-forced-scene-present A/B rows.
-- 2026-06-02: added static and committed-report checks for WebGPU glyph-run current-only rows.
-- 2026-06-22: updated static and committed-report checks after retiring the default command-family legacy row with same-workload A/B proof.
-- 2026-06-02: added static and committed-report checks for WebGPU command-family current-versus-legacy A/B rows before the default legacy row was retired.
-- 2026-06-01: added static and committed-report checks for WebGPU effect-uniform direct GPU timestamp A/B totals.
-- 2026-06-01: added static coverage for bounded WebGPU browser capture retries.
-- 2026-06-01: added static and committed-report checks for WebGPU backdrop-batch A/B rows and counters.
-- 2026-06-01: added static and committed-report checks for duplicate benchmark-report Chrome trace summary fields in the WebGPU browser baseline.
-- 2026-06-01: added static and committed-report checks for the browser WebGPU warm-resource-churn summary.
-- 2026-06-01: added static and committed-report checks for WebGPU effect-uniform A/B rows and counters.
-- 2026-06-01: added committed-report checks for the 96-instance Scene3D stress rows.
-- 2026-06-01: added committed-report checks for WebGPU pass-family attribution counters and timestamp-query capability status.
-- 2026-06-01: added committed-report checks for WebGPU sampler lifetime counters.
-- 2026-06-01: added static coverage for the direct-capture guard and post-render animation-frame settle used by WebGPU ID-mask browser golden capture.
-- 2026-06-01: added static coverage for the deterministic fixed-timestamp app snapshot hook used by browser app golden capture.
-- 2026-06-01: added native enforcement for the committed browser WebGPU ID-mask compositor golden and capture-target script hooks.
-- 2026-05-31: expanded static-shell and script tests for hidden browser report output plus persisted WebGPU frame-loop and ID-mask A/B baseline writes.
-- 2026-05-31: added committed web-baseline parsing coverage for nonzero WebGPU frame-loop and ID-mask current/legacy A/B rows.
-- Added static shell coverage for the generated package import and platform smoke hook.

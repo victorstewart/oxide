@@ -79,7 +79,7 @@ The headline cases deliberately avoid new benchmark-only abstractions. Reusing e
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies the new headline benchmark keys prepare the expected scenes and accept a step.
 - `oxide/crates/test-scenes/tests/onscreen_benchmark_tests.rs` verifies raw two-touch pinch events change the Zoom Image scene through the router without applying two-touch pan as a drag.
 - `oxide/crates/test-scenes/tests/damage_rect_tests.rs` verifies damage scene switching, partial damage, caller-owned damage storage reuse, and warmed overlay draw allocation reuse.
-- Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/benchmarks/oxide-device/`.
+- Device benchmark rows are selected by `oxide/xtask/src/lib.rs` and persisted under `oxide/artifacts/performance/oxide-device/`.
 
 ## Examples
 

@@ -58,7 +58,7 @@
 - Components `id_mask_compositor_neighborhood_ids` and `id_mask_compositor_seams`
   Encode the remaining ID-mask visualization modes without glow; the neighborhood-id and seam visualizations include 2x scale and non-square projection variants.
 - WebGPU browser golden
-  Is captured by `scripts/check_webgpu_browser_golden.mjs`; Rust tests enforce that the committed app, wide app, portrait app, square ID-mask compositor, wide ID-mask compositor, and portrait ID-mask compositor PNGs exist at the expected capture sizes with visible-signal checks, while browser execution remains an opt-in local check. The same script can also write `benchmarks/web/latest.json` and `benchmarks/web/latest.md` with the browser frame-loop and WebGPU ID-mask current/legacy A/B rows.
+  Is captured by `scripts/check_webgpu_browser_golden.mjs`; Rust tests enforce that the committed app, wide app, portrait app, square ID-mask compositor, wide ID-mask compositor, and portrait ID-mask compositor PNGs exist at the expected capture sizes with visible-signal checks, while browser execution remains an opt-in local check. The same script can also write `oxide/artifacts/performance/web/latest.json` and `oxide/artifacts/performance/web/latest.md` with the browser frame-loop and WebGPU ID-mask current/legacy A/B rows.
 
 ## Logic narrative
 - Standard components are converted into a `DrawList`, encoded through `MetalRenderer::encode_pass`, submitted, and read back as BGRA.

@@ -1,5 +1,6 @@
 # General
 .DS_Store
+**/__pycache__/
 *.swp
 *.swo
 *.log
@@ -7,8 +8,15 @@
 /tasks/
 .run/
 
+# Benchmark implementations and fixtures live with their source owners.
+# Keep this directory limited to maintained contracts, not generated run output.
+/oxide/benchmarks/*
+!/oxide/benchmarks/README.md
+!/oxide/benchmarks/CONTRACT.md
+
 # Rust/Cargo
 **/target/
+# Generated reports, captures, traces, energy exports, and build artifacts.
 artifacts/
 oxide/artifacts/
 **/*.xcresult/

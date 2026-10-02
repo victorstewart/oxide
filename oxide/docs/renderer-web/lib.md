@@ -127,13 +127,15 @@ The typed Canvas path enables the `web-sys/CanvasGradient` feature.
 
 ## Testing and benchmarks
 
-`oxide/crates/renderer-web/tests/lib_tests.rs` covers color conversion, scale normalization, layer sizing, native stub behavior including zero-work `CameraBg`, explicit diagnostic feature ownership independent of `snapshot-tests`, WebGPU-only public wasm exports, premultiplied-alpha surface configuration, generation-checked image-handle reclamation without append-only tombstones, direct-surface submission and its benchmark-only forced scene-present toggle, present-buffer caching, eager static pipeline initialization, revision-keyed and slot-reused ID-mask vertex caching, draw-item coalescing wiring and counters, draw-state and clip-state cache wiring and counters, scratch-storage reuse for hot draw lowering, direct image-upload scratch writes, effect-uniform batching/dynamic-offset wiring, backdrop batch planning, retained clean-layer counters and metric exposure, ID-mask uniforms, RGBA subresource update exposure, resource-counter wiring for image meshes, nine-slices, SDF glyphs, layer markers/cache, Scene3D, ID-mask, backdrop/effect/spinner/camera families, uploads, passes, timestamp-query resources/readback collection, aggregate and family-level CPU scratch growth, aggregate and family-level GPU resource creation, sampler lifetime, mesh creation, runtime object counters, and no-clone Scene3D render iteration. Browser pixel tests run through `oxide-host-web` after wasm-bindgen packaging, and the current browser WebGPU baseline is persisted in `oxide/benchmarks/web/latest.json` plus `oxide/benchmarks/web/latest.md` with browser startup/package evidence, mixed-scene current coverage, layer/damage/effects current coverage, clean-layer current reuse, command-family current coverage, glyph-run current, neon-marker current coverage, direct-surface current coverage, current upload rows with direct glyph/RGBA timestamp totals, effect-uniform, current backdrop-batch, report-level and per-row warm-resource-churn zero-growth rows including GPU resource and CPU scratch family attribution, explicit backend-path coverage rows, current-row Rust/WASM allocation counters with bounded per-frame budgets, zero reallocations, shared allocation-signature invariance across every checked current row, frame-loop stage allocation attribution, zero WASM memory growth plus Chrome JS heap sampling across benchmark marks after prewarm, in-app WebGPU timestamp attribution, and Chrome browser trace summaries plus per-benchmark User Timing labels and scoped trace-event attribution captured from a duplicate benchmark-report run while timing rows remain from the untraced baseline run.
+`oxide/crates/renderer-web/tests/lib_tests.rs` covers color conversion, scale
+normalization, layer sizing, image-handle reclamation, surface configuration, prepared
+and direct submission, pipeline setup, cache and scratch reuse, draw lowering, uploads,
+effects, layers, resource accounting, timestamp collection, and Scene3D iteration.
+Browser pixel tests run through `oxide-host-web` after wasm-bindgen packaging.
 
-C25 adds native source-contract coverage plus a real Chrome adapter for prepared-cache lifecycle guardrails, the 8/16/32/64 threshold sweep, exact flat/prepared captures, 15-pair clean and one-dirty encode distributions, and ten independent displayed-RAF pairs. The committed C25 experiment README and manifest record accepted and rejected branches; aggregate browser-baseline promotion remains assigned to C62.
-
-C26 keeps prepared WebGPU geometry resident for property-driven instances. The renderer resolves complete affine and cumulative opacity values into a dynamic-offset uniform ring, uploads only changed plan records, handles transform-linked clips, and reports property work separately from geometry work. Static C25 bundle eligibility and counters remain unchanged.
-
-The non-default Canvas indexed-quad report path is intentionally separate from the committed WebGPU baseline and exists only to prove Canvas fallback changes on the exact indexed `ImageMesh` workload.
+Browser performance reports, traces, and captures are generated evidence. Write them to
+`oxide/artifacts/performance/` or an explicit external artifact directory; keep the
+browser workload contract, fixtures, and goldens in source control.
 
 ## Examples
 
@@ -143,98 +145,3 @@ pub async fn build_renderer() -> Result<oxide_renderer_web::BrowserRenderer, oxi
    oxide_renderer_web::BrowserRenderer::from_canvas_id_webgpu("oxide").await
 }
 ```
-
-## Changelog
-- 2026-08-05: moved allocation, timestamp, CPU-submit timing, memory-scan, and Canvas benchmark instrumentation behind the explicit `diagnostic-instrumentation` feature while preserving the default public API and keeping `snapshot-tests` independent.
-- 2026-07-22: made `BrowserRenderer` constructors join one observable JavaScript page-session WebGPU device across independently compiled WASM modules, with route-local resources and terminal pagehide destruction.
-- 2026-07-14: exposed the C41 compact analytic neon-marker stream and instance/triangle/byte telemetry.
-- 2026-07-14: exposed the C40 compact procedural spinner stream, animation/property uniform ownership, and direct/prepared instance telemetry.
-- 2026-07-14: exposed the C39 compact WebGPU nine-slice instance stream and fixed-grid telemetry.
-- 2026-07-14: exposed the C38 compact WebGPU image instance stream, static indexed quad, ordered batching, and direct/prepared telemetry.
-- 2026-07-14: exposed the C37 analytic WebGPU RRect instance stream, prepared-path accounting, and instance/triangle/byte telemetry.
-- 2026-07-14: extended C35 snapshot proof to the real-Dawn seven-dimension exact raster/final-field matrix.
-- 2026-07-14: selected capability-validated two-texture `Rgba16Uint` ID-mask fields with exact semantic readback, representation-aware cache budgets, and a four-texture wide fallback.
-- 2026-07-14: exposed C33 ID-mask field-cache hit/miss, budget/residency/entry/eviction/purge telemetry and explicit cache budget/purge controls through `WebRendererStats` and `BrowserRenderer`.
-- 2026-07-14: exposed C31 layer-cache budget, resident/pool/CPU bytes, oldest last-use frame, pool reuse, eviction, recreation, purge count, and allocation-free purge-reason telemetry through `WebRendererStats` and `BrowserRenderer` controls.
-- 2026-07-13: exposed C26 property upload/update/ring counters and retained prepared geometry for affine/opacity instances.
-
-- 2026-08-05: added exact eager WebGPU construction profiles, one selected ID-mask backend, permanent fail-closed undeclared-use poisoning before prepared/layer GPU work, compatibility constructors, and deterministic 43/2/9 cold-start work contracts.
-- 2026-07-13: added persistent prepared WebGPU chunks, ordered bundle/direct plans, aggregate static snapshot replay, lifecycle invalidation, logical-byte LRU accounting, and explanatory counters.
-- 2026-07-13: constructed the WebGPU surface at its final backing size, made scene/scratch/depth targets feature-driven with selective prewarm, and removed per-submit viewport writes.
-- 2026-07-12: compacted generic WebGPU vertices from 32 to 20 bytes, added segmented u16 plus u32 fallback indices, and directly uploaded retained POD streams.
-- 2026-07-12: stored WebGPU A8/SDF atlases as `R8Unorm`, removed A8-to-RGBA upload conversion, sampled `.r`, and added padded-row, byte-accounting, browser glyph-golden, and cold/full/dirty diagnostic coverage.
-
-- 2026-07-12: replaced shared mutable ID-mask uniforms with one reusable aligned frame arena, immutable dynamic offsets per raster/seed/jump/compositor pass, one queue upload, and uniform write/byte/slot counters.
-- 2026-07-12: added sampled, saturating WebGPU resident-memory snapshots and complete frame-work/report counters with explicit logical-versus-allocated semantics.
-- 2026-07-12: added snapshot-only asynchronous ID-mask raster/final-field readback for CPU-reference parity.
-- 2026-07-12: added packed solid-color WebGPU lowering and the narrow six-vertex Canvas flat/opposing-edge gradient path.
-- 2026-07-10: replaced append-only WebGPU image tombstones with a constant-time generation-checked slot arena that reclaims metadata without stale-handle ABA.
-- 2026-07-09: added explicit, idempotent browser image release so Rust-owned runtime asset lifetimes reclaim WebGPU textures and bind groups.
-- 2026-06-22: retired the default browser WebGPU neon-marker legacy-rebind row after same-workload A/B proof while keeping current marker-overlay coverage and counters.
-- 2026-06-22: retired the default browser WebGPU effect-uniform per-backdrop uniform-write row after same-workload A/B proof, keeping current batched uniform coverage and direct GPU timestamp totals.
-- 2026-06-22: retired the default browser WebGPU backdrop-batch per-copy row after same-workload A/B proof while keeping current coalesced copy/pass coverage.
-- 2026-06-22: configured browser WebGPU surfaces with premultiplied alpha so transparent clears can reveal DOM content behind embedded canvases.
-- 2026-06-02: added WebGPU adjacent draw-item coalescing, counters, and browser current-versus-uncoalesced A/B coverage.
-- 2026-06-02: made the native web test stub mirror zero-work `CameraBg` behavior and documented web camera background as unavailable.
-- 2026-06-22: retired the default browser WebGPU clean-layer dirty rerender row after same-workload A/B proof while keeping current retained-layer cache coverage.
-- 2026-06-02: added retained clean-layer reuse in WebGPU plus initial browser comparison coverage before the dirty row was later retired.
-- 2026-06-22: retired the default browser WebGPU mixed text/image/effects legacy rebind/unbatched row after same-workload A/B proof; current mixed coverage remains.
-- 2026-06-02: added browser WebGPU mixed text/image/effects current-versus-legacy-rebind/unbatched A/B coverage.
-- 2026-06-02: moved all static WebGPU render pipelines to construction-time initialization and added a source gate against lazy frame-path pipeline creation.
-- 2026-06-02: added family-level WebGPU GPU resource counters and warm-resource report gates for draw, image, target, Scene3D, effect, and ID-mask resource churn.
-- 2026-06-02: added family-level WebGPU CPU scratch capacity/growth counters and warm-resource report gates for draw, Scene3D, effect, ID-mask, image-upload, and resource-table storage.
-- 2026-06-02: added browser WebGPU layer/damage/effects current-versus-legacy-rebind/unbatched A/B coverage.
-- 2026-06-22: retired the default browser WebGPU command-family legacy-rebind row after same-workload A/B proof, keeping current generic `ImageMesh`, `NineSlice`, SDF glyph, and zero web `CameraBg` coverage.
-- 2026-06-02: added browser WebGPU command-family current-versus-legacy-rebind A/B coverage before the default legacy row was retired.
-- 2026-06-22: retired the default browser WebGPU glyph-run legacy-rebind row after current-row A/B proof, keeping current atlas-backed A8 and SDF text draw coverage.
-- 2026-06-02: added browser WebGPU neon-marker current-versus-legacy-rebind A/B coverage for the generic marker overlay path.
-- 2026-06-02: added browser WebGPU direct-surface current-versus-forced-scene-present A/B coverage.
-- 2026-06-22: retired the default browser WebGPU direct-surface forced-scene-present row after current direct-surface submission proved lower-pass and lower-GPU-time on the same workload.
-- 2026-06-02: added per-benchmark Chrome trace interval attribution to the browser WebGPU report.
-- 2026-06-02: added browser WebGPU backend-path coverage matrix enforcement.
-- 2026-06-02: added browser WebGPU timestamp stage-breakdown report enforcement.
-- 2026-06-02: added browser WebGPU Rust/WASM frame allocation audit counters and current-row allocation budget gates.
-- 2026-06-02: added browser WebGPU submit sub-stage WASM allocation attribution.
-- 2026-06-02: added browser WebGPU frame-loop WASM allocation stage attribution.
-- 2026-06-02: sampled WebGPU timestamp readbacks every 8 frames while keeping pass timestamp writes and report interval coverage.
-- 2026-06-22: retired the default browser WebGPU upload legacy rows and upload A/B export after same-workload A/B proof; the version 5 browser report keeps current glyph/RGBA upload rows with direct timestamp totals.
-- 2026-06-02: added direct timestamp-total fields to the browser WebGPU glyph/RGBA upload A/B summary.
-- 2026-06-01: added WebGPU effect-uniform batching, shared same-parameter uploads, dynamic-offset mixed-effect support, counters, and browser A/B coverage.
-- 2026-06-01: added direct GPU timestamp-total fields to the WebGPU effect-uniform A/B report.
-- 2026-06-01: added per-benchmark browser User Timing marks to the WebGPU report and Chrome trace contract.
-- 2026-06-01: added conservative WebGPU backdrop copy/pass coalescing plus browser A/B coverage for coalesced versus per-backdrop copies.
-- 2026-06-01: added reusable WebGPU image-upload scratch storage, direct scratch texture writes, temp-allocation counters, and current-versus-legacy upload-scratch A/B coverage.
-- 2026-06-22: retired default browser upload-scratch report rows after same-workload A/B proof; kept the explicit diagnostic export and scratch counters.
-- 2026-06-22: added browser startup and package-size report evidence for future explicit diagnostic cleanup A/B tests.
-- 2026-06-22: added non-default repeated startup/package report support for explicit diagnostic cleanup A/B tests.
-- 2026-06-22: added non-default Canvas indexed-quad report support for same-workload Canvas fallback A/B tests.
-- 2026-06-01: added browser WebGPU draw-state cache counters and current-versus-legacy-rebind A/B coverage.
-- 2026-06-01: added browser WebGPU clip-state cache A/B coverage for nested `ClipPush`/`ClipPop` scissor runs.
-- 2026-06-22: retired standalone draw-item coalescing, draw-state cache, and clip-state cache rows from the default browser report after same-workload A/B proof showed current wins.
-- 2026-06-22: retired the explicit clip-state diagnostic export after repeated startup/package A/B proof while keeping renderer clip-depth counters covered by broader rows.
-- 2026-06-22: retired the default browser WebGPU layer-effects legacy row after same-workload A/B proof while keeping current layer/damage/effects coverage and counters.
-- 2026-06-22: retired the default browser ID-mask legacy row after same-workload A/B proof while keeping current ID-mask coverage and the explicit diagnostic export.
-- 2026-06-01: added browser WebGPU command-family report coverage and counters for generic `ImageMesh`, `NineSlice`, SDF glyph, and zero web `CameraBg` work.
-- 2026-06-01: added dedicated browser WebGPU layer/damage/effects report coverage for nested layer markers, multiple damage rects, backdrop copies, and timestamped passes.
-- 2026-06-01: added a 96-instance browser WebGPU Scene3D stress A/B row for retained-mesh resource proof.
-- 2026-06-01: added nonblocking browser WebGPU timestamp-query collection and persisted pass-family nanosecond buckets.
-- 2026-06-01: added browser-gated WebGPU sampler creation counters and a static startup-only sampler guard.
-- 2026-06-01: added browser-gated WebGPU CPU scratch growth counters and reused ID-mask vertex-cache slots across revision churn.
-- 2026-06-01: added direct WebGPU counters for Scene3D, ID-mask, backdrop, visual-effect, spinner, zero web camera-background work, and mesh creation paths.
-- 2026-06-01: added browser WebGPU Scene3D reused-mesh versus recreate-mesh A/B coverage for resource lifetime proof.
-- 2026-06-01: moved WebGPU solid/image-mesh/glyph/rounded-rect lowering onto reusable scratch buffers and removed Scene3D draw-list clones during render passes.
-- 2026-06-01: moved WebGPU ID-mask raster/compositor uniform serialization onto reusable scratch buffers.
-- 2026-06-01: added WebGPU resource counters for render passes, command buffers, upload bytes, buffer growth, texture creation, bind-group creation, and runtime pipeline-creation detection.
-- 2026-06-01: exposed WebGPU RGBA texture subresource updates for browser image-upload A/B coverage.
-- 2026-06-01: made WebGPU inline layer-marker handling explicit through `layer_draws` counters.
-- 2026-06-01: split WebGPU render-pass reporting into pass-family counters and texture-copy attribution.
-- 2026-05-25: shared Canvas2D fallback quad walking between image meshes and glyph runs.
-- 2026-05-25: expanded unindexed four-vertex WebGPU draw geometry into six triangle-list indices so image meshes and glyph quads render as complete quads.
-- Compacted repeated WebGPU non-indexed vertex expansion across solid, image-mesh, and glyph encoding.
-- Compacted WebGPU render-target, depth-target, and ID-mask texture creation through one 2D texture descriptor helper.
-- Compacted row-strided image copying and Canvas2D fallback camera/backdrop helper branches without changing the public WebGPU startup contract.
-- Added browser pixel verification and persisted Canvas2D wasm baseline coverage through `oxide-host-web`.
-- Hard-cut production browser rendering to WebGPU only; unsupported browsers now fail construction instead of drawing through Canvas2D.
-- Added async `BrowserRenderer` WebGPU selection, `WebGpuRenderer`, shader-backed A8/SDF/effect paths, and geometry-aware glyph replay.
-- Added offscreen layer compositing and sampled backdrop blur.
-- Added the initial Canvas2D WebAssembly renderer backend.

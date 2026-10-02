@@ -101,18 +101,19 @@ workflow, documentation, test, or performance obligations.
 - GitHub Actions CI is intentionally disabled. Run focused local checks for the
   touched scope; do not imply that hosted CI ran.
 - Official Oxide/UIKit comparison numbers are physical-device-only. Run the
-  touched Oxide and UIKit cases on the same iPhone and record them through
-  `oxide/benchmarks/oxide-device/*` and
-  `oxide/benchmarks/uikit-device/*`. Simulator and workspace measurements are
+  touched Oxide and UIKit cases on the same iPhone and record them through the
+  shared comparison or device runner into an explicit external or ignored
+  artifact directory. Simulator and workspace measurements are
   diagnostic and must not appear in official comparison tables.
 - For scoped device performance work, use in-app completed-command-buffer Metal
   timing as the basic GPU source, retain supported pass/counter evidence when it
   answers the active question, and scope external Metal traces to the launched
   app process. Never substitute a proxy or unsupported all-process trace for
   missing direct GPU or energy evidence.
-- Refresh committed device baselines only when the reviewed performance change
-  intentionally affects the touched cases. Missing hardware, counters, or energy
-  evidence makes only the corresponding claim `Verification Pending`.
+- Keep measured baselines, captures, traces, reports and run histories outside
+  Git. Commit benchmark source, reusable fixtures, regression goldens and concise
+  measurement summaries in change descriptions. Missing hardware, counters, or
+  energy evidence makes only the corresponding claim `Verification Pending`.
 - Official scroll and animation evidence uses real ProMotion hardware at native
   refresh. A separate 60 Hz study is opt-in diagnostic work.
 

@@ -132,21 +132,14 @@ Browser exports compile only for `target_arch = "wasm32"`. The host manifest exp
 
 ## Testing and benchmarks
 
-The `glyph` browser capture target renders a deterministic 512x512 grid containing ordinary A8 and SDF runs and compares it with `goldens/snapshots/webgpu_glyph_atlas.png`. `OxideWebApp::bench_webgpu_atlas_c15` is a non-default diagnostic for paired padded-row cold 1024x1024 creation, full 1024x1024 update, and 64x64 dirty-update evidence; it does not expand the committed default browser battery. `OxideWebApp::bench_webgpu_geometry_c16` similarly keeps the three compact-geometry proof workloads outside the default report until C62 promotion. C19 adds construction/resize/selective-prewarm target proof without expanding the default report. Run `node scripts/check_webgpu_browser_golden.mjs --target glyph --width 512 --height 512 --out /tmp/webgpu_glyph.png` after packaging the wasm host. Run one geometry sample with `CHROME_ARCH=arm64 node scripts/run_webgpu_geometry_c16.mjs host/web-app/www 3 24 glyphs /tmp/c16-glyphs.json`; replace `glyphs` with `images` or `large_mesh`. Run the C19 raw adapter with `CHROME_ARCH=arm64 node scripts/run_webgpu_targets_c19.mjs host/web-app/www 50 direct_ready_ms /tmp/c19-direct.json`; other selected prefixes retain the same 50-repeat process population.
+`oxide/host/web-app/oxide-host-web/tests/lib_tests.rs` verifies the static shell,
+procedural texture, platform and WebGPU smoke hooks, deterministic capture routes, and
+browser diagnostic wiring. The browser capture script compares requested images against
+committed goldens and may collect timing, trace, allocation, and backend diagnostics.
 
-For C25, `node scripts/run_webgpu_prepared_c25.mjs WEB_ROOT 1 300 0 0 8 RESULT 0 1` collects one prepared RAF side, while the paired workflow controls order, identity, and fresh-process populations. `node scripts/check_webgpu_browser_golden.mjs --target prepared --width 1200 --height 800 --out /tmp/webgpu-prepared.png` captures the prepared scene; add `--prepared-flat` for the exact control. The C25 experiment README and manifest retain accepted/rejected decisions, with raw reports kept in the experiment evidence directory and default browser-report promotion deferred to C62.
-
-For C46, `node scripts/check_webgpu_browser_golden.mjs --glyph-run-out /tmp/c46-glyph.json --chrome-arch arm64 --mixed-samples 6 --mixed-frames 24` collects the isolated 512-glyph compact-instance row without the default report battery. Replace `--glyph-run-out` with `--glyph-matrix-out` to run the opt-in 1,000-label Latin/RTL/CJK/emoji, four-page bitmap/SDF matrix shared with Metal C45. These diagnostics expose compact glyph instance/triangle/byte/buffer-bind counters and remain outside the committed default report until C62.
-
-For C56, `node scripts/check_webgpu_browser_golden.mjs --scene3d-out /tmp/c56-scene3d.json --scene3d-instances 1000 --scene3d-mode 0 --chrome-arch arm64` runs the isolated Scene3D matrix without the default report battery. Counts 96, 1,000, and 10,000 cover scaling; modes 0–3 select compatible opaque, mixed-state, transparent-order, and subviewport workloads. Rows expose compact instance bytes, draw and state-bind counts, direct Scene3D GPU time, CPU distributions, scratch capacity, logical GPU memory, and create/release churn. Default report promotion remains deferred to C62.
-
-For C60, open `?image_store_only=1&image_store_count=1000`; add `&image_store_standalone=1` for the same-pixel control. The host bounds counts at 10,000, generates the same deterministic unique 64-square PNG population as the native row before request timing, decodes in bounded 32-way async batches, records cold decode/upload/request-to-first-displayed-frame timing, and reports 20 immediate CPU submissions separately from displayed cadence. First display waits for submitted GPU work, one completion-side RAF, and one subsequent RAF so submit-only timing cannot be labeled visible. C61 owns the complete callback-to-callback real-browser cadence matrix and C62 owns committed baseline promotion.
-
-For C30, `CHROME_ARCH=arm64 node scripts/run_webgpu_local_layers_c30.mjs host/web-app/www 1920 1080 1 150 0 RESULT` records one clean process and changing the one-dirty argument to `1` records one-dirty. Use 3840×2160 for the 4K row; append `1` after `RESULT` to run lifecycle guardrails instead of timing. `node scripts/check_webgpu_browser_golden.mjs --target local-layers --width 512 --height 512 --dpr 2 ...` provides exact edge pixels. The paired workflow owns artifact identity, balanced order, fresh processes, sample aggregation, and confidence intervals.
-
-`oxide/host/web-app/oxide-host-web/tests/lib_tests.rs` verifies the procedural checker texture, guards the static shell import path plus platform, WebGPU, timing capability, render, sampled perf, current ID-mask coverage, current upload coverage, effect-uniform current coverage, backdrop-batch current coverage, Scene3D A/B, mixed current coverage, layer/damage/effects current coverage, clean-layer current coverage, command-family current coverage, glyph-run current, neon-marker current, direct-surface current coverage, non-default Canvas indexed-quad diagnostic reporting, browser startup/package reporting, benchmark User Timing marks, benchmark JS heap sampling, wasm allocation-audit and frame-stage fields, hidden JSON report, capture target, deterministic app snapshot, deterministic Scene3D snapshot, startup-only repeat reporting, and browser IME bridge hooks, asserts the committed WebGPU app, Scene3D, and ID-mask browser goldens exist with expected PNG dimensions and rendered pixels, and keeps the browser recapture script wired to target-specific pixel diffing plus persisted report writes. Browser startup, platform smoke output, WebGPU device probing, timestamp-query capability probing, sampled frame timing, input, and pixel verification run through the static page after wasm-bindgen packaging. Browser results are persisted in `oxide/benchmarks/web/latest.json` and `oxide/benchmarks/web/latest.md`, including startup timing and static package bytes, frame distribution, missed-frame/hitch fields, GPU-stage attribution status, a Chrome browser trace summary captured from a duplicate benchmark-report run, per-benchmark page and trace User Timing labels, per-benchmark Chrome trace intervals with scoped event/GPU/WebGPU counts, zero WASM memory growth and sampled JS heap growth across benchmark marks after prewarm, current-row Rust/WASM allocation counts/bytes with bounded per-frame budgets and zero reallocations, frame-loop stage allocation attribution, report-level and per-row warm-resource-churn summaries proving current warm rows have zero post-warmup growth, family-level GPU resource attribution for draw, image, target, layer, Scene3D, effect, and ID-mask resources, family-level scratch growth attribution for draw, Scene3D, effect, ID-mask, image-upload, and resource-table storage, an explicit 15-path backend coverage matrix tying every important default WebGPU path family to distribution rows and explanatory counters, current upload summaries with direct glyph/RGBA timestamp totals, and WebGPU backend counters for draws, draw items, coalesced draw items, draw pipeline binds, draw bind-group binds, draw scissor sets, solid triangles, image draws, image-mesh draws, nine-slice draws, glyph quads, SDF glyph quads, clip depth, damage rectangles, layer markers, layer cache hits/misses/skipped draws/passes, Scene3D draws, ID-mask draws, effect-family draws, effect uniform writes/bytes/slots, camera-background draws, total render passes, pass-family counts, texture-copy count, command buffers, timestamp-query support, collected timestamp frame id/pass count/family nanoseconds/max pass nanoseconds/readback skips, upload bytes, image-upload temp allocation bytes/counts, image-upload scratch capacity/growth, aggregate and family-level GPU resource creation, aggregate and family-level CPU scratch growth, mesh creation, sampler creation, and runtime pipeline-creation violations for the 17-row browser WebGPU matrix: frame-loop row, ID-mask current row, current glyph-atlas upload row, current RGBA image upload row, effect-uniform current row, backdrop-batch current row, two-instance Scene3D rows, 96-instance Scene3D stress rows, mixed text/image/effect current row, layer/damage/effects current row, clean-layer clean row, command-family current row, glyph-run current row, neon-marker current row, and direct-surface current row. The recapture script retries the visual capture a bounded number of times when Chrome returns a blank or mismatched startup frame; the final successful capture still must pass the normal pixel/golden thresholds and the duplicate trace must contain all benchmark User Timing labels and trace intervals before any report is written. Use `node scripts/check_webgpu_browser_golden.mjs --virtual-time-budget 30000 --out /tmp/webgpu_browser.png --json-report benchmarks/web/latest.json --markdown-report benchmarks/web/latest.md --trace-json /tmp/oxide-webgpu-browser-trace.json` to recapture the 320x240 Chrome/WebGPU app canvas, compare it against `goldens/snapshots/webgpu_browser.png`, refresh the browser WebGPU frame-loop plus ID-mask/upload/effect-uniform/backdrop-batch/Scene3D/mixed/layer-effects/clean-layer/command-family/glyph-run/neon-marker/direct-surface baseline from an untraced run, persist startup/package evidence, and attach Chrome trace evidence with benchmark User Timing labels and per-benchmark intervals from a duplicate benchmark-report run. Use `node scripts/check_webgpu_browser_golden.mjs --startup-report /tmp/oxide-webgpu-startup.json --startup-repeats 7 --chrome-arch arm64` to collect repeated startup/package distributions without changing the committed browser report matrix. Use `node scripts/check_webgpu_browser_golden.mjs --canvas-report /tmp/oxide-canvas-indexed-quads.json --canvas-repeats 5 --canvas-samples 6 --canvas-frames 24 --canvas-quads 512 --chrome-arch arm64` to collect repeated Canvas indexed-quad distributions without changing the committed browser report matrix. Use `node scripts/check_webgpu_browser_golden.mjs --target scene3d --width 512 --height 512 --out /tmp/webgpu_scene3d.png` to recapture and compare the committed square WebGPU Scene3D golden; use `--width 640 --height 360 --golden goldens/snapshots/webgpu_scene3d_wide.png` and `--width 360 --height 640 --golden goldens/snapshots/webgpu_scene3d_portrait.png` for the aspect goldens. Use `node scripts/check_webgpu_browser_golden.mjs --target id-mask --width 512 --height 512 --out /tmp/webgpu_id_mask.png` to recapture and compare the committed 512x512 WebGPU ID-mask compositor golden. On Rosetta shells, add `--chrome-arch arm64` or `CHROME_ARCH=arm64` so universal Chrome starts in the native architecture.
-
-Chrome screenshot capture is independently bounded. The runner removes stale output, waits until the new non-empty PNG is stable, and terminates only its own headless child when Chrome writes the requested screenshot but does not exit.
+Write generated browser reports, traces, and captures to
+`oxide/artifacts/performance/` or an explicit external artifact directory. The browser
+runner, scripts, workload definitions, fixtures, and goldens remain tracked source.
 
 ## Examples
 
@@ -171,103 +164,3 @@ console.log("oxide-webgpu-id-mask-current", window.oxideWebGpuIdMaskCurrent);
 window.oxideWebGpuScene3dAB = window.oxideApp.bench_webgpu_scene3d_ab(6, 24);
 console.log("oxide-webgpu-scene3d-ab", window.oxideWebGpuScene3dAB);
 ```
-
-## Changelog
-
-- 2026-08-05: explicitly enabled renderer diagnostics alongside the independent snapshot-test feature for this benchmark host.
-
-- 2026-07-15: made C61 browser proof validate the requested canvas CSS and physical CSS×DPR dimensions and restore those dimensions before displayed-frame measurement.
-- 2026-07-15: added explicit C61 CLI routing for the C60 100/1,000/10,000 atlas and standalone image-store browser matrix.
-- 2026-07-15: added the bounded C60 unique-image store browser export and query route with async display-size decode, split cold timing, and atlas/standalone controls.
-- 2026-07-15: added the isolated C56 variable-count/mode Scene3D browser matrix and compact instance/state counters.
-- 2026-07-14: added the C41 neon-marker architecture and real-Dawn capture adapters.
-- 2026-07-14: added the C40 spinner architecture, phased capture, and bounded displayed-frame animation adapters with compact-instance counters.
-- 2026-07-14: added the C39 nine-slice architecture and exact-capture adapters.
-- 2026-07-14: added the bounded C38 same/mixed-texture image matrix, compact-instance counters, and exact image capture target.
-- 2026-07-14: added the bounded C37 DPR-aware RRect architecture matrix, analytic instance counters, and pathological-radius capture target.
-- 2026-07-14: added the bounded `--id-mask-matrix-out` browser route for C35's seven-dimension exact raster/final-field proof.
-- 2026-07-14: made C33 cache budgets representation-aware and extended the exact ID-mask readback with C35 packed-format and field-byte proof.
-- 2026-07-14: added the C33 static/style/viewport/projection/content and one-entry-versus-LRU ID-mask cache adapter, direct WebGPU stage samples, compact hit-uniform counters, exact cached-field readback, and purge/reentry evidence.
-- 2026-07-14: added the C31 100-layer navigation-churn adapter with hard-budget, pool-reuse, frame-tail, memory-pressure, device-loss, and reentry evidence.
-- 2026-07-14: added the bounded C30 100-card local-layer CPU/GPU/residency adapter and fractional nested/effect capture target.
-- 2026-07-13: added the non-default C25 prepared-chunk timing, RAF, lifecycle, threshold, and exact-capture host contracts.
-- 2026-07-13: added the cached 300-instance C26 dynamic-property throughput, full-affine render, event-latency, and RAF contracts.
-- 2026-07-13: sized the canvas before WebGPU construction and added the non-default C19 construction/resize/selective-prewarm target-lifetime adapter.
-- 2026-07-12: added the non-default C16 Chrome adapter for immutable 10,000-glyph, 10,000-image, and 70,002-vertex geometry proof workloads.
-- 2026-07-12: added the C15 single-channel atlas diagnostic and dedicated A8/SDF browser capture target.
-
-- 2026-07-12: made the asymmetric WebGPU oracle encode a distractor and reference draw in one submission, persisted ID-mask warmup timing for paired analysis, and exposed exact uniform arena writes, bytes, and slots in browser reports.
-- 2026-07-12: added the opt-in ten-row C01 WebGPU architecture primitive matrix with fixed scaling points, direct timestamps, queue completion, one-submission-per-RAF pacing, and zero-pass rejection; normal app execution does not invoke this matrix.
-- 2026-06-22: retired the default browser WebGPU neon-marker legacy-rebind row after same-workload A/B proof while keeping current marker-overlay coverage.
-- 2026-06-22: retired the default browser WebGPU effect-uniform per-backdrop uniform-write row after same-workload A/B proof while keeping current batched effect-uniform coverage.
-- 2026-06-22: retired the default browser WebGPU backdrop-batch per-copy row after same-workload A/B proof while keeping current coalesced backdrop coverage.
-- 2026-06-02: added browser WebGPU draw-item coalescing current-versus-uncoalesced A/B rows and report gates.
-- 2026-06-01: added per-benchmark browser User Timing marks to the WebGPU report and duplicate Chrome trace contract.
-- 2026-06-02: added per-benchmark Chrome trace interval attribution to the WebGPU report contract.
-- 2026-06-02: added GPU timestamp stage-breakdown attribution to the WebGPU report contract.
-- 2026-06-02: added explicit browser WebGPU backend-path coverage matrix checks.
-- 2026-06-02: added browser WebGPU Rust/WASM frame allocation counters and current-row allocation budget gates.
-- 2026-06-02: added frame-loop stage allocation attribution and reusable draw-coalescing storage to reduce warm app-frame allocations.
-- 2026-06-22: retired the default browser WebGPU layer-effects legacy row after same-workload A/B proof, moving layer/damage/effects coverage to a current-only row.
-- 2026-06-22: retired the default browser WebGPU command-family legacy row after same-workload A/B proof, moving the browser report to a 23-row current-only command-family matrix.
-- 2026-06-22: retired the default browser WebGPU upload legacy rows and upload A/B export after same-workload A/B proof, moving upload coverage to current-only rows in report version 5.
-- 2026-06-02: added direct timestamp-total fields to the browser WebGPU glyph/RGBA upload A/B summary.
-- 2026-06-01: added direct GPU timestamp-total fields to the browser WebGPU effect-uniform A/B summary.
-- 2026-06-01: added browser WebGPU effect-uniform A/B rows, effect uniform counters, and report gates.
-- 2026-06-22: retired the default browser WebGPU mixed text/image/effects legacy rebind/unbatched row after same-workload A/B proof; the current row remains the default coverage gate.
-- 2026-06-02: added browser WebGPU mixed text/image/effects current-versus-legacy-rebind/unbatched A/B rows and report gates.
-- 2026-06-02: added browser WebGPU layer/damage/effects current-versus-legacy-rebind/unbatched A/B rows and report gates.
-- 2026-06-22: retired the default browser WebGPU clean-layer dirty rerender row after same-workload A/B proof while keeping current retained-layer cache coverage.
-- 2026-06-02: added browser WebGPU retained clean-layer comparison rows and report gates before the dirty row was later retired.
-- 2026-06-02: moved mixed and layer/effects WebGPU matrix damage lists into reusable benchmark resources.
-- 2026-06-02: added current-row WASM allocation-invariance report gates for the shared WebGPU submit-boundary profile.
-- 2026-06-02: added browser WebGPU submit sub-stage WASM allocation attribution.
-- 2026-06-02: added browser WebGPU glyph-run current-only rows and report gates.
-- 2026-06-02: added browser WebGPU neon-marker current-versus-legacy-rebind A/B rows and report gates.
-- 2026-06-02: added browser WebGPU direct-surface current-versus-forced-scene-present A/B rows and report gates.
-- 2026-06-22: retired the default browser direct-surface forced-scene-present row after same-workload A/B proof showed current direct-surface submission used fewer passes and lower direct GPU time.
-- 2026-06-22: retired default browser draw-item coalescing, draw-state cache, and clip-state cache standalone report rows after same-workload A/B proof showed current wins.
-- 2026-06-22: retired the explicit clip-state diagnostic export after repeated startup/package A/B proof showed a smaller wasm-bindgen package and lower report-ready distribution.
-- 2026-06-22: retired default browser upload-scratch standalone report rows after same-workload A/B proof showed current wins.
-- 2026-06-22: retired the default browser glyph-run legacy-rebind row after same-workload A/B proof showed current draw-state caching wins.
-- 2026-06-22: added browser startup and package-size report evidence for future same-workload diagnostic cleanup A/B tests.
-- 2026-06-22: added a non-default repeated startup report mode for package/export cleanup A/B tests.
-- 2026-06-22: added a non-default Canvas indexed-quad diagnostic report mode for same-workload Canvas fallback A/B tests.
-- 2026-06-02: added browser WebGPU command-family current-versus-legacy-rebind A/B rows and report gates before the default legacy row was retired.
-- 2026-06-01: added browser WebGPU backdrop-batch A/B rows, texture-copy/render-pass counters, and report gates.
-- 2026-06-01: added browser WebGPU upload-scratch A/B rows, image-upload temp/scratch counters, and a configurable browser report timeout.
-- 2026-06-01: added browser WebGPU draw-state cache A/B rows and report gates.
-- 2026-06-01: added browser WebGPU clip-state cache A/B rows and report gates.
-- 2026-06-01: added a dedicated browser WebGPU command-family matrix row for generic `ImageMesh`, `NineSlice`, SDF glyph, and zero web `CameraBg` work without product-specific globe hooks.
-- 2026-06-01: hardened browser WebGPU timestamp settling against stale prior-row readbacks and added an app-capture animation-frame settle before screenshot.
-- 2026-06-01: added a dedicated browser WebGPU layer/damage/effects matrix row and report gate.
-- 2026-06-01: persisted nonblocking WebGPU timestamp-query row metrics and kept report benchmarks isolated from the normal RAF loop during readback waits.
-- 2026-06-01: added 96-instance browser WebGPU Scene3D stress rows to the persisted report contract.
-- 2026-06-01: persisted and gated WebGPU sampler creation counters in the browser report contract.
-- 2026-06-01: persisted and gated WebGPU CPU scratch growth counters in the browser report contract.
-- 2026-06-02: added family-level WebGPU warm scratch attribution to host metrics and browser report gates.
-- 2026-06-02: added family-level WebGPU GPU resource attribution to host metrics and browser report gates.
-- 2026-06-01: added browser WebGPU Scene3D reused-mesh versus recreate-mesh A/B rows with direct resource lifetime counters.
-- 2026-06-01: added a deterministic browser WebGPU Scene3D capture target and committed golden coverage.
-- 2026-06-01: made browser WebGPU Scene3D capture dimension-aware and added wide/portrait golden coverage.
-- 2026-06-01: persisted WebGPU frame-loop backend counters beside browser timing distributions.
-- 2026-06-01: persisted WebGPU resource counters beside frame-loop and ID-mask A/B browser distributions.
-- 2026-06-01: added browser WebGPU glyph-atlas upload, RGBA image upload, and mixed text/image/effect workload rows.
-- 2026-06-01: added layer-marker counters to the browser WebGPU report contract.
-- 2026-06-01: guarded direct WebGPU ID-mask capture from host resize/redraw events and added a final animation-frame settle so the browser golden script captures the compositor instead of the app scene.
-- 2026-06-01: made the browser app golden deterministic by rendering a no-RAF fixed-timestamp WebGPU app snapshot for capture-only screenshots.
-- 2026-06-01: added browser capture-target support and a committed 512x512 WebGPU ID-mask compositor golden.
-- 2026-06-01: corrected the browser WebGPU ID-mask A/B geometry to rasterize the full 512 px mask instead of a corner-only screen-space grid.
-- 2026-05-31: added the WebGPU ID-mask compositor A/B benchmark hook to the static browser page.
-- 2026-05-31: added 60 Hz and 120 Hz missed-frame/hitch fields to the WebGPU browser frame-loop and ID-mask A/B baseline rows.
-- 2026-05-31: added hidden browser JSON report output and WebGPU baseline writing to the recapture script so frame-loop and ID-mask A/B rows are persisted instead of only logged.
-- 2026-05-31: added a committed 320x240 WebGPU browser canvas golden under `goldens/snapshots/webgpu_browser.png`.
-- 2026-05-31: added `scripts/check_webgpu_browser_golden.mjs` to recapture the Chrome/WebGPU canvas and pixel-diff it against the committed browser golden.
-- 2026-05-31: added `CHROME_ARCH` / `--chrome-arch` support to the WebGPU golden script for Rosetta-hosted macOS shells.
-- 2026-05-31: preserved browser touch/pen sample timestamps in `TouchEvent::timestamp_ns`.
-- Compacted DOM listener registration through a retained-listener helper while preserving the app-lifetime closure invariant.
-- Hard-cut web visual startup to WebGPU only; synchronous startup and unsupported browsers now return `Unsupported` instead of drawing through Canvas2D.
-- Added async WebGPU renderer selection and renderer-backend smoke logging.
-- Added the WebGPU smoke export and sampled browser frame benchmark hook.
-- Added hidden-textarea IME composition/input bridge wiring.
-- Added the platform smoke export and static shell hook for browser backend verification.
