@@ -14,6 +14,14 @@ inline float oxide_linear_to_srgb(float value)
     return copysign(encoded, value);
 }
 
+// RGBA image storage is premultiplied in linear light before filtering.
+inline float4 straight_image_sample(float4 color)
+{
+    if (color.a > 1e-6) color.rgb /= color.a;
+    else color.rgb = float3(0.0);
+    return color;
+}
+
 inline float4 source_to_output(float4 color)
 {
 #if OXIDE_SRGB_COMPOSITING

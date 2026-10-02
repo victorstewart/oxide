@@ -52,7 +52,7 @@ fn replay_drawlist_impl(list: &DrawList, encoder: &mut dyn RenderEncoder, fallba
     let mut clip_stack = Vec::new();
     for cmd in &list.items {
         match cmd {
-            DrawCmd::LayerBegin { .. } | DrawCmd::LayerEnd => {}
+            DrawCmd::LayerBegin { .. } | DrawCmd::LayerBeginWithOpacity { .. } | DrawCmd::LayerEnd => {}
             DrawCmd::Solid { vb, color, .. } => {
                 let Some(slice) = slice_vertices(list, *vb) else {
                     continue;

@@ -228,8 +228,8 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
    );
    assert_eq!(
       source.matches("checked_rgba8_layout(").count(),
-      4,
-      "one validator definition must serve policy create, sampled create, and append",
+      5,
+      "one validator definition must serve policy create, sampled create, update, and append",
    );
 
    let policy = source_block(
@@ -242,6 +242,7 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
       "fn image_create_store_rgba8_sampled(",
       "fn image_create_store_rgba8_empty(",
    );
+   let update = source_block(source, "pub fn image_update_rgba8(", "/// Publishes a previously unsampled");
    let append = source_block(source, "fn image_append_rgba8(", "pub fn image_release(");
    for (name, block, mutations) in [
       (
@@ -253,6 +254,11 @@ fn rgba_upload_layout_is_checked_once_before_native_or_bookkeeping_work()
          "sampled create",
          sampled,
          &["shared_image_texture(", "texture_upload_bytes", "next_image_id"] as &[&str],
+      ),
+      (
+         "update",
+         update,
+         &["replace_region(", "texture_upload_bytes"] as &[&str],
       ),
       (
          "append",
@@ -737,7 +743,7 @@ fn metal_draw_cmd_debug_capture_names_are_frozen() {
         "#[inline(always)]\nfn running_on_ios_simulator",
     ));
     let expected = [
-        r#"api::DrawCmd::LayerBegin{..}=>"layer_begin""#,
+        r#"api::DrawCmd::LayerBegin{..}|api::DrawCmd::LayerBeginWithOpacity{..}=>"layer_begin""#,
         r#"api::DrawCmd::LayerEnd=>"layer_end""#,
         r#"api::DrawCmd::Solid{..}=>"solid""#,
         r#"api::DrawCmd::Image{..}=>"image""#,
@@ -760,7 +766,7 @@ fn metal_draw_cmd_debug_capture_names_are_frozen() {
             .unwrap_or_else(|| panic!("missing Metal draw command debug mapping {pattern}"));
         previous = offset + pattern.len();
     }
-    assert_eq!(mapping.matches("api::DrawCmd::").count(), expected.len());
+    assert_eq!(mapping.matches("api::DrawCmd::").count(), expected.len() + 1);
 }
 
 fn source_block<'a>(source: &'a str, start: &str, end: &str) -> &'a str {

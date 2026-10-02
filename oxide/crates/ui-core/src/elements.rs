@@ -2940,9 +2940,33 @@ impl TextInputState {
         style: &TextInputStyle,
         text_ctx: &mut TextCtx,
     ) {
+        self.handle_pointer_with_content_width(local, f32::INFINITY, style, text_ctx);
+    }
+
+    /// Focuses and picks a caret from a field-local point inside `rect`.
+    /// This accounts for the focused single-line viewport used by `TextInput::encode`.
+    pub fn handle_pointer_in_rect(
+        &mut self,
+        local: [f32; 2],
+        rect: gfx::RectF,
+        style: &TextInputStyle,
+        text_ctx: &mut TextCtx,
+    ) {
+        let content_w = (rect.w - 3.0 - style.padding.left - style.padding.right).max(0.0);
+        self.handle_pointer_with_content_width(local, content_w, style, text_ctx);
+    }
+
+    fn handle_pointer_with_content_width(
+        &mut self,
+        local: [f32; 2],
+        content_w: f32,
+        style: &TextInputStyle,
+        text_ctx: &mut TextCtx,
+    ) {
+        let horizontal_offset = self.horizontal_offset(content_w, style, text_ctx);
         self.focus();
         self.selection = None;
-        self.cursor = self.pick_cursor(local[0], style, text_ctx);
+        self.cursor = self.pick_cursor(local[0] + horizontal_offset - 1.5, style, text_ctx);
         self.reset_caret();
     }
 
@@ -3210,6 +3234,21 @@ impl TextInputState {
         metrics.map.cursor_for_x(x - style.padding.left).min(len)
     }
 
+    fn horizontal_offset(&self, content_w: f32, style: &TextInputStyle, text_ctx: &mut TextCtx) -> f32 {
+        if !self.focused || !content_w.is_finite() {
+            return 0.0;
+        }
+        let display = self.display_text();
+        text_ctx.cached_prefix_metrics(&display, style.font_id, style.font_px)
+            .map_or(0.0, |metrics| self.horizontal_offset_for_caret(metrics.map.width_at(self.cursor), content_w))
+    }
+
+   fn horizontal_offset_for_caret(&self, caret_x: f32, content_w: f32) -> f32
+   {
+      if self.focused && content_w.is_finite() {(caret_x - content_w + 1.5).max(0.0)}
+      else {0.0}
+   }
+
     fn display_text(&self) -> String {
         if self.otp.is_some() {
             return self.text.clone();
@@ -3334,17 +3373,26 @@ impl TextInput {
         }
 
         let prefix_metrics = text_ctx.cached_prefix_metrics(&display, style.font_id, style.font_px);
+        let caret_x = prefix_metrics.as_ref().map_or(0.0, |metrics| metrics.map.width_at(state.cursor));
+        let horizontal_offset = state.horizontal_offset_for_caret(caret_x, content.w);
+        let content_clip = gfx::RectI::new(
+            content.x.floor() as i32,
+            content.y.floor() as i32,
+            content.w.ceil().max(0.0) as i32,
+            content.h.ceil().max(0.0) as i32,
+        );
+        builder.clip_push(content_clip);
 
         if let Some(sel) = &state.selection {
             if sel.start < sel.end {
-                let sx = content.x
+                let sx = content.x - horizontal_offset
                     + prefix_metrics
                         .as_ref()
                         .map_or(0.0, |metrics| metrics.map.width_at(sel.start));
-                let ex = content.x
+                let ex = content.x - horizontal_offset
                     + prefix_metrics
                         .as_ref()
-                        .map_or(sx - content.x, |metrics| metrics.map.width_at(sel.end));
+                        .map_or(0.0, |metrics| metrics.map.width_at(sel.end));
                 let highlight =
                     gfx::RectF::new(sx, text_top - 2.0, (ex - sx).max(1.0), metrics.ascent + metrics.descent + 4.0);
                 builder.rrect(highlight, [4.0; 4], style.selection);
@@ -3355,14 +3403,14 @@ impl TextInput {
             let marked_len = text_cursor_len(&comp.text);
             let display_end = comp.range.start.saturating_add(marked_len).max(comp.range.end);
             if comp.range.start < display_end {
-                let sx = content.x
+                let sx = content.x - horizontal_offset
                     + prefix_metrics
                         .as_ref()
                         .map_or(0.0, |metrics| metrics.map.width_at(comp.range.start));
-                let ex = content.x
+                let ex = content.x - horizontal_offset
                     + prefix_metrics
                         .as_ref()
-                        .map_or(sx - content.x, |metrics| metrics.map.width_at(display_end));
+                        .map_or(0.0, |metrics| metrics.map.width_at(display_end));
                 let underline =
                     gfx::RectF::new(sx, text_baseline + metrics.descent + 1.0, (ex - sx).max(1.0), 2.0);
                 builder.rrect(underline, [1.0; 4], style.composition);
@@ -3384,7 +3432,7 @@ impl TextInput {
         let _ = bake_cached_label_line::<false>(
             line,
             style.text,
-            content.x,
+            content.x - horizontal_offset,
             text_baseline,
             device_scale,
             text_ctx,
@@ -3392,12 +3440,13 @@ impl TextInput {
         );
 
         if state.focused && state.caret_on {
-            let caret_w =
-                prefix_metrics.as_ref().map_or(0.0, |metrics| metrics.map.width_at(state.cursor));
+            let caret_w = caret_x;
             let caret_rect =
-                gfx::RectF::new(content.x + caret_w, text_top - 1.0, 1.5, metrics.ascent + metrics.descent + 2.0);
+                gfx::RectF::new(content.x - horizontal_offset + caret_w, text_top - 1.0, 1.5, metrics.ascent + metrics.descent + 2.0);
             builder.rrect(caret_rect, [0.8; 4], style.caret);
         }
+
+        builder.clip_pop();
 
         if state.text.is_empty() || state.placeholder_t > 0.01 {
             let px =
@@ -3476,7 +3525,8 @@ impl TextInput {
                 {
                     let width = shape.width();
                     let text_x = inner.x + (inner.w - width).max(0.0) * 0.5;
-                    let text_y = inner.y + (inner.h - style.font_px).max(0.0) * 0.5;
+                    let text_y = font.line_metrics(style.font_px)
+                        .map_or(inner.y, |metrics| inner.y + (inner.h - metrics.ascent - metrics.descent).max(0.0) * 0.5 + metrics.ascent);
                     let color =
                         if chars.get(idx).is_some() { style.text } else { style.placeholder };
                     let mut runs = core::mem::take(&mut text_ctx.frame.glyph_runs);

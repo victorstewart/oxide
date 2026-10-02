@@ -595,7 +595,7 @@ fn encode_debug_stride() -> usize {
 #[inline(always)]
 fn draw_cmd_kind(cmd: &api::DrawCmd) -> &'static str {
     match cmd {
-        api::DrawCmd::LayerBegin { .. } => "layer_begin",
+        api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerBeginWithOpacity { .. } => "layer_begin",
         api::DrawCmd::LayerEnd => "layer_end",
         api::DrawCmd::Solid { .. } => "solid",
         api::DrawCmd::Image { .. } => "image",
@@ -1010,6 +1010,43 @@ fn checked_rgba8_layout(w: u32, h: u32, data_len: usize, row_bytes: usize) -> Op
       return None;
    }
    Some(bytes_per_row)
+}
+
+fn srgb8_to_linear(value: u8) -> f32
+{
+   let value = value as f32 / 255.0;
+   if value <= 0.04045 {value / 12.92}
+   else {((value + 0.055) / 1.055).powf(2.4)}
+}
+
+fn linear_to_srgb8(value: f32) -> u8
+{
+   let value = value.clamp(0.0, 1.0);
+   let encoded = if value <= 0.0031308 {value * 12.92}
+      else {1.055 * value.powf(1.0 / 2.4) - 0.055};
+   (encoded * 255.0).round() as u8
+}
+
+/// Converts straight-alpha sRGBA8 source pixels into premultiplied linear-light
+/// color encoded for an sRGB texture. This makes hardware linear filtering alpha-safe.
+fn premultiplied_srgba8(data: &[u8], w: u32, h: u32, bytes_per_row: usize) -> Vec<u8>
+{
+   let mut output = vec![0; bytes_per_row.saturating_mul(h as usize)];
+   for row in 0 .. h as usize
+   {
+      let offset = row * bytes_per_row;
+      let available = data.len().saturating_sub(offset).min(bytes_per_row);
+      output[offset .. offset + available].copy_from_slice(&data[offset .. offset + available]);
+      for pixel in 0 .. w as usize
+      {
+         let index = offset + pixel * 4;
+         let alpha = data[index + 3] as f32 / 255.0;
+         output[index] = linear_to_srgb8(srgb8_to_linear(data[index]) * alpha);
+         output[index + 1] = linear_to_srgb8(srgb8_to_linear(data[index + 1]) * alpha);
+         output[index + 2] = linear_to_srgb8(srgb8_to_linear(data[index + 2]) * alpha);
+      }
+   }
+   output
 }
 
 #[repr(C)]
@@ -3302,6 +3339,13 @@ impl MetalRenderer {
       self.apply_layer_cache_stats();
    }
 
+   #[cfg(feature = "snapshot-tests")]
+   #[doc(hidden)]
+   pub fn set_layer_cache_enabled_for_snapshot_tests(&mut self, enabled: bool)
+   {
+      self.layer_cache_enabled = enabled;
+   }
+
    /// Releases every retained and pooled layer texture.
    pub fn purge_layer_cache(&mut self)
    {
@@ -4191,13 +4235,14 @@ impl MetalRenderer {
       {
          return api::ImageHandle(0);
       };
+      let data = premultiplied_srgba8(data, w, h, bpr);
       let image = if private
       {
          self.private_image_texture(
             MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
-            data,
+            &data,
             bpr as u64,
             mipmapped,
          )
@@ -4208,14 +4253,14 @@ impl MetalRenderer {
             MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
-            data,
+            &data,
             bpr as u64,
             true,
          )
       }
       else
       {
-         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
+         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, &data, bpr as u64)
       };
       self.last_stats.texture_upload_bytes = self
          .last_stats
@@ -4245,20 +4290,21 @@ impl MetalRenderer {
       {
          return api::ImageHandle(0);
       };
+      let data = premultiplied_srgba8(data, w, h, bpr);
       let mut image = if mipmapped
       {
          self.shared_image_texture_with_mips(
             MTLPixelFormat::RGBA8Unorm_sRGB,
             w,
             h,
-            data,
+            &data,
             bpr as u64,
             true,
          )
       }
       else
       {
-         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, data, bpr as u64)
+         self.shared_image_texture(MTLPixelFormat::RGBA8Unorm_sRGB, w, h, &data, bpr as u64)
       };
       image.sampling = sampling;
       self.last_stats.texture_upload_bytes = self
@@ -4311,11 +4357,16 @@ impl MetalRenderer {
       });
       if let Some((texture, storage, mipmapped)) = image
       {
+         let Some(bytes_per_row) = checked_rgba8_layout(w, h, data.len(), row_bytes) else
+         {
+            return;
+         };
+         let data = premultiplied_srgba8(data, w, h, bytes_per_row);
          let region = MTLRegion {
             origin: MTLOrigin { x: x as u64, y: y as u64, z: 0 },
             size: MTLSize { width: w as u64, height: h as u64, depth: 1 },
          };
-         let bpr = if row_bytes == 0 { (w as usize) * 4 } else { row_bytes } as u64;
+         let bpr = bytes_per_row as u64;
          match storage
          {
             ImageStorage::Shared =>
@@ -4335,7 +4386,7 @@ impl MetalRenderer {
                   y,
                   w,
                   h,
-                  data,
+                  &data,
                   bpr,
                );
             }
@@ -4367,6 +4418,7 @@ impl MetalRenderer {
       {
          return;
       };
+      let data = premultiplied_srgba8(data, w, h, bpr);
       if u64::from(x).saturating_add(u64::from(w)) > image.texture.width()
          || u64::from(y).saturating_add(u64::from(h)) > image.texture.height()
       {
@@ -7066,14 +7118,16 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 }
                 i += 1;
             }
-            api::DrawCmd::LayerBegin { rect, .. } => {
+            api::DrawCmd::LayerBegin { rect, .. }
+            | api::DrawCmd::LayerBeginWithOpacity { rect, .. } => {
                 let mut depth = 1usize;
                 let mut j = i + 1;
                 if rect_intersects(rect, &sc) {
                     out.items.push(list.items[i].clone());
                     while j < list.items.len() && depth > 0 {
                         match &list.items[j] {
-                            api::DrawCmd::LayerBegin { .. } => {
+                            api::DrawCmd::LayerBegin { .. }
+                            | api::DrawCmd::LayerBeginWithOpacity { .. } => {
                                 depth += 1;
                                 out.items.push(list.items[j].clone());
                             }
@@ -7088,7 +7142,8 @@ fn filter_drawlist_by_dp_scissor(list: &api::DrawList, sc: api::RectI, out: &mut
                 } else {
                     while j < list.items.len() && depth > 0 {
                         match &list.items[j] {
-                            api::DrawCmd::LayerBegin { .. } => depth += 1,
+                            api::DrawCmd::LayerBegin { .. }
+                            | api::DrawCmd::LayerBeginWithOpacity { .. } => depth += 1,
                             api::DrawCmd::LayerEnd => depth -= 1,
                             _ => {}
                         }
@@ -7156,6 +7211,14 @@ fn build_layer_sublist(
                     id: *id,
                     rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
                     dirty: *dirty,
+                });
+            }
+            api::DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => {
+                sub.items.push(api::DrawCmd::LayerBeginWithOpacity {
+                    id: *id,
+                    rect: api::RectF::new(rect.x - ox, rect.y - oy, rect.w, rect.h),
+                    dirty: *dirty,
+                    opacity: *opacity,
                 });
             }
             api::DrawCmd::LayerEnd => sub.items.push(api::DrawCmd::LayerEnd),
@@ -7286,9 +7349,6 @@ impl MetalRenderer {
     fn build_layer_plans(&mut self, list: &api::DrawList) {
         self.layer_plans.clear();
         self.layer_plan_stack.clear();
-        if !self.layer_cache_enabled {
-            return;
-        }
         for (index, command) in list.items.iter().enumerate() {
             if !self.layer_plan_stack.is_empty() {
                 self.acc_layer_body_commands_scanned =
@@ -7301,6 +7361,17 @@ impl MetalRenderer {
                         begin: index,
                         rect: *rect,
                         dirty: *dirty,
+                        opacity: 1.0,
+                        unsupported: false,
+                    });
+                }
+                api::DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => {
+                    self.layer_plan_stack.push(LayerPlanStackEntry {
+                        id: *id,
+                        begin: index,
+                        rect: *rect,
+                        dirty: *dirty,
+                        opacity: opacity.clamp(0.0, 1.0),
                         unsupported: false,
                     });
                 }
@@ -7323,11 +7394,19 @@ impl MetalRenderer {
                                 && entry.prepared_key.is_none()
                         })
                         .unwrap_or(false);
-                    let refresh = !pending.unsupported && (pending.dirty || !valid_size);
+                    let requires_composite = pending.opacity != 1.0;
+                    let refresh = !pending.unsupported && if self.layer_cache_enabled
+                    {
+                        pending.dirty || !valid_size
+                    }
+                    else
+                    {
+                        requires_composite
+                    };
                     let generation = existing.map_or(1, |entry| {
                         if refresh { entry.generation.wrapping_add(1) } else { entry.generation }
                     });
-                    let action = if pending.unsupported {
+                    let action = if pending.unsupported || (!self.layer_cache_enabled && !requires_composite) {
                         LayerPlanAction::Inline
                     } else {
                         LayerPlanAction::Composite
@@ -7336,7 +7415,7 @@ impl MetalRenderer {
                         if let Some(parent) = self.layer_plan_stack.last_mut() {
                             parent.unsupported = true;
                         }
-                    } else if refresh {
+                    } else if refresh && self.layer_cache_enabled {
                         if let Some(parent) = self.layer_plan_stack.last_mut() {
                             parent.dirty = true;
                         }
@@ -7351,6 +7430,7 @@ impl MetalRenderer {
                         begin: pending.begin,
                         end: index,
                         rect: pending.rect,
+                        opacity: pending.opacity,
                         generation,
                         refresh,
                         action,
@@ -7386,10 +7466,15 @@ impl MetalRenderer {
         {
             for plan in &mut self.layer_plans
             {
-                plan.action = LayerPlanAction::Inline;
-                plan.refresh = false;
+                if plan.opacity == 1.0
+                {
+                    plan.action = LayerPlanAction::Inline;
+                    plan.refresh = false;
+                }
             }
-            self.layer_frame_ids.clear();
+            self.layer_frame_ids.retain(|id| self.layer_plans.iter().any(|plan| {
+                plan.id == *id && plan.action == LayerPlanAction::Composite
+            }));
         }
     }
 
@@ -7741,7 +7826,9 @@ impl api::Renderer for MetalRenderer {
                         visual_effect_plan = plan;
                     }
                 }
-                api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerEnd => {
+                api::DrawCmd::LayerBegin { .. }
+                | api::DrawCmd::LayerBeginWithOpacity { .. }
+                | api::DrawCmd::LayerEnd => {
                     has_layer_commands = true;
                 }
                 _ => {}
@@ -9289,7 +9376,7 @@ fn encode_cached_layer(
         layer.w as f32,
         layer.h as f32,
         api::Insets::new(0.0, 0.0, 0.0, 0.0),
-        1.0,
+        plan.opacity,
     );
     enc.set_fragment_bytes(
         1,
@@ -9574,7 +9661,8 @@ fn encode_draws_range(
                 i += 1;
                 continue;
             }
-            api::DrawCmd::LayerBegin { id, rect, dirty: _ } => {
+            api::DrawCmd::LayerBegin { id, rect, dirty: _ }
+            | api::DrawCmd::LayerBeginWithOpacity { id, rect, dirty: _, opacity: _ } => {
                 let plan = if prepass { None } else { r.layer_plan(*id, i) };
                 let planned_end = plan.and_then(|plan| {
                     let end = i.checked_add(plan.end.saturating_sub(plan.begin))?;
@@ -9587,7 +9675,8 @@ fn encode_draws_range(
                     let mut cursor = i + 1;
                     while cursor < item_end && depth > 0 {
                         match &list.items[cursor] {
-                            api::DrawCmd::LayerBegin { .. } => depth += 1,
+                            api::DrawCmd::LayerBegin { .. }
+                            | api::DrawCmd::LayerBeginWithOpacity { .. } => depth += 1,
                             api::DrawCmd::LayerEnd => depth -= 1,
                             _ => {}
                         }
@@ -11976,6 +12065,7 @@ struct LayerPlan {
     begin: usize,
     end: usize,
     rect: api::RectF,
+    opacity: f32,
     generation: u64,
     refresh: bool,
     action: LayerPlanAction,
@@ -11987,6 +12077,7 @@ struct LayerPlanStackEntry {
     begin: usize,
     rect: api::RectF,
     dirty: bool,
+    opacity: f32,
     unsupported: bool,
 }
 

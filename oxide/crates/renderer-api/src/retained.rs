@@ -1457,6 +1457,13 @@ fn canonicalize_draw_list(source: &DrawList, index_mode: ChunkIndexMode) -> Resu
             scopes.push(Scope::Layer);
             DrawCmd::LayerBegin { id: *id, rect: *rect, dirty: *dirty }
          }
+         DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => {
+            layer_depth = layer_depth.checked_add(1).ok_or(RenderChunkError::GeometryTooLarge)?;
+            ordering.max_layer_depth = ordering.max_layer_depth.max(layer_depth);
+            ordering.has_layer = true;
+            scopes.push(Scope::Layer);
+            DrawCmd::LayerBeginWithOpacity { id: *id, rect: *rect, dirty: *dirty, opacity: *opacity }
+         }
          DrawCmd::LayerEnd => {
             if layer_depth == 0 {
                return Err(RenderChunkError::LayerUnderflow { command });
@@ -1618,7 +1625,8 @@ fn prepare_spatial_metadata(list: &DrawList) -> Result<(RenderSpatialBounds, Vec
             commands[begin].matching_scope = Some(command_index);
             current_clip = previous;
          }
-         DrawCmd::LayerBegin { rect, .. } =>
+         DrawCmd::LayerBegin { rect, .. }
+         | DrawCmd::LayerBeginWithOpacity { rect, .. } =>
          {
             let bounds = intersect_spatial(command_spatial_bounds(list, command), current_clip);
             commands[index] = RenderCommandSpatial {
@@ -1736,6 +1744,7 @@ fn command_spatial_bounds(list: &DrawList, command: &DrawCmd) -> RenderSpatialBo
       DrawCmd::GlyphRun { run } =>
          outset_spatial(span_spatial_bounds(&list.vertices, run.vb), RASTER_AA_OUTSET_DP),
       DrawCmd::LayerBegin { rect, .. }
+      | DrawCmd::LayerBeginWithOpacity { rect, .. }
       | DrawCmd::Image { dst: rect, .. }
       | DrawCmd::RRect { rect, .. }
       | DrawCmd::NineSlice { rect, .. } =>
@@ -2107,10 +2116,11 @@ fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], o
    out.vertices.reserve(list.vertices.len());
    out.indices.reserve(list.indices.len());
    if let Some(layer) = instance.layer {
-      out.items.push(DrawCmd::LayerBegin {
+      out.items.push(DrawCmd::LayerBeginWithOpacity {
          id: layer.id,
          rect: translate_rect(layer.rect, translation),
          dirty: layer.dirty,
+         opacity,
       });
    }
    if let Some(clip) = instance.clip {
@@ -2121,7 +2131,8 @@ fn append_flat_instance(instance: &RenderChunkInstance, translation: [f32; 2], o
       out.items.push(DrawCmd::ClipPush { rect: flat_clip_rect(clip, properties)? });
    }
    for command in &list.items {
-      out.items.push(flat_command(command, vertex_base, index_base, translation, opacity)?);
+      let content_opacity = if instance.layer.is_some() { 1.0 } else { opacity };
+      out.items.push(flat_command(command, vertex_base, index_base, translation, content_opacity)?);
    }
    for _ in instance.dynamic_clips.iter()
    {
@@ -2189,6 +2200,7 @@ fn flat_command(command: &DrawCmd, vertex_base: u32, index_base: u32, translatio
    };
    Ok(match command {
       DrawCmd::LayerBegin { id, rect, dirty } => DrawCmd::LayerBegin { id: *id, rect: translated(*rect), dirty: *dirty },
+      DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => DrawCmd::LayerBeginWithOpacity { id: *id, rect: translated(*rect), dirty: *dirty, opacity: *opacity },
       DrawCmd::LayerEnd => DrawCmd::LayerEnd,
       DrawCmd::Solid { vb, ib, color } => DrawCmd::Solid { vb: offset_vb(*vb)?, ib: offset_ib(*ib)?, color: color_with_opacity(*color, opacity) },
       DrawCmd::Image { tex, dst, src, alpha } => DrawCmd::Image { tex: *tex, dst: translated(*dst), src: *src, alpha: alpha * opacity },

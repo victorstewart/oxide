@@ -5,6 +5,37 @@ use oxide_ui_core::{
 };
 
 #[test]
+fn builder_keeps_an_opacity_layer_after_a_label_content_clip()
+{
+   let mut builder = DrawListBuilder::new();
+   // This is the content clip emitted by a preceding label/button title.
+   builder.clip_push(gfx::RectI::new(8, 8, 80, 24));
+   builder.rrect(
+      gfx::RectF::new(8.0, 8.0, 80.0, 24.0),
+      [0.0; 4],
+      gfx::Color::rgba(0.1, 0.1, 0.1, 1.0),
+   );
+   builder.clip_pop();
+   builder.layer_begin_with_opacity(44, gfx::RectF::new(0.0, 0.0, 96.0, 64.0), false, 0.5);
+   builder.rrect(
+      gfx::RectF::new(12.0, 12.0, 64.0, 40.0),
+      [4.0; 4],
+      gfx::Color::rgba(0.3, 0.6, 0.9, 0.8),
+   );
+   builder.layer_end();
+
+   let list = builder.into_inner();
+   assert!(matches!(list.items[3], gfx::DrawCmd::LayerBeginWithOpacity { id: 44, opacity, .. } if opacity == 0.5));
+   gfx::RenderChunk::new(
+      gfx::RenderChunkId(44),
+      gfx::RenderChunkRevisions::default(),
+      list,
+      gfx::ChunkIndexMode::Local,
+      &[],
+   ).expect("opacity layer remains paired after the label clip");
+}
+
+#[test]
 fn builder_records_advanced_draws() {
     let mut builder = DrawListBuilder::new();
     let tex = gfx::ImageHandle(9);

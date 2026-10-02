@@ -411,6 +411,9 @@ pub enum DrawCmd {
     // Layered rendering: render nested items into an offscreen texture, then composite.
     // Nested items appear between LayerBegin and LayerEnd and are not drawn directly to target.
     LayerBegin { id: u32, rect: RectF, dirty: bool },
+    /// Like `LayerBegin`, but applies opacity once when the completed layer is composited.
+    /// This preserves source-over blending between overlapping descendants.
+    LayerBeginWithOpacity { id: u32, rect: RectF, dirty: bool, opacity: f32 },
     LayerEnd,
     Solid { vb: VertexSpan, ib: IndexSpan, color: Color },
     Image { tex: ImageHandle, dst: RectF, src: RectF, alpha: f32 },

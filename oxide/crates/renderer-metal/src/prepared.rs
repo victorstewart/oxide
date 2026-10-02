@@ -117,7 +117,6 @@ pub(super) struct PreparedLayerKey
    dynamic_generation: u64,
    bounds: [u32; 4],
    scale: [u32; 2],
-   opacity: u32,
    target_scale: u32,
    effect_outset: u32,
 }
@@ -135,6 +134,7 @@ pub(super) struct PreparedLayerFrame
 {
    pub key: PreparedLayerKey,
    pub rect: api::RectF,
+   pub opacity: f32,
    pub local_uniform: PreparedInstanceUniform,
    pub width: u32,
    pub height: u32,
@@ -185,12 +185,12 @@ fn prepared_layer_frame(renderer: &MetalRenderer, layer: api::RenderLayerInstanc
       return None;
    }
    let rect = api::RectF::new(min_x + translate_x, min_y + translate_y, width_dp, height_dp);
-   let opacity = uniform.values[8];
+   let opacity = uniform.values[8].clamp(0.0, 1.0);
    let local_uniform = PreparedInstanceUniform {
       values: [
          scale_x, 0.0, 0.0, scale_y,
          -min_x, -min_y, width_dp, height_dp,
-         opacity, if scale_x == 1.0 && scale_y == 1.0 { 1.0 } else { 0.0 }, 0.0, 0.0,
+         1.0, if scale_x == 1.0 && scale_y == 1.0 { 1.0 } else { 0.0 }, 0.0, 0.0,
       ],
    };
    let revisions = chunk.revisions();
@@ -206,11 +206,11 @@ fn prepared_layer_frame(renderer: &MetalRenderer, layer: api::RenderLayerInstanc
             layer.rect.w.to_bits(), layer.rect.h.to_bits(),
          ],
          scale: [scale_x.to_bits(), scale_y.to_bits()],
-         opacity: opacity.to_bits(),
          target_scale: target_scale.to_bits(),
          effect_outset: effect_outset.to_bits(),
       },
       rect,
+      opacity,
       local_uniform,
       width: width as u32,
       height: height as u32,
@@ -1968,7 +1968,7 @@ fn encode_prepared_layer_composite(encoder: &RenderCommandEncoderRef, renderer: 
       entry.w as f32,
       entry.h as f32,
       api::Insets::new(0.0, 0.0, 0.0, 0.0),
-      1.0,
+      layer.opacity,
    );
    encoder.set_fragment_bytes(
       1,

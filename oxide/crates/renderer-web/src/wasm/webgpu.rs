@@ -5433,7 +5433,8 @@ impl WebGpuRenderer {
         {
             match &list.items[index]
             {
-                api::DrawCmd::LayerBegin { id, .. } =>
+                api::DrawCmd::LayerBegin { id, .. }
+                | api::DrawCmd::LayerBeginWithOpacity { id, .. } =>
                 {
                     self.record_profiled_draw_kind(DrawKind::Layer { id: *id });
                     layer_depth = layer_depth.saturating_add(1);
@@ -6079,8 +6080,8 @@ impl WebGpuRenderer {
         true
     }
 
-    fn push_layer_draw(&mut self, id: u32, rect: api::RectF) {
-        let color = api::Color::rgba(1.0, 1.0, 1.0, 1.0);
+    fn push_layer_draw(&mut self, id: u32, rect: api::RectF, opacity: f32) {
+        let color = api::Color::rgba(1.0, 1.0, 1.0, opacity.clamp(0.0, 1.0));
         let vertices = quad_vertices(rect, 0.0, 0.0, 1.0, 1.0, color);
         self.push_draw(DrawKind::Layer { id }, &vertices);
     }
@@ -6092,6 +6093,7 @@ impl WebGpuRenderer {
         id: u32,
         rect: api::RectF,
         dirty: bool,
+        opacity: f32,
     ) {
         self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
         if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -6126,7 +6128,7 @@ impl WebGpuRenderer {
                 self.stats.layer_cache_hits = self.stats.layer_cache_hits.saturating_add(1);
                 self.stats.layer_cache_skipped_draws =
                     self.stats.layer_cache_skipped_draws.saturating_add(skipped);
-                self.push_layer_draw(id, cached_rect);
+                self.push_layer_draw(id, cached_rect, opacity);
                 return;
             }
         }
@@ -6151,7 +6153,7 @@ impl WebGpuRenderer {
         let _ = self.target_stack.pop();
         let end = self.frame.draws.len();
         self.frame.layer_passes.push(FrameLayerPass { id, start, end });
-        self.push_layer_draw(id, frame.composite_rect);
+        self.push_layer_draw(id, frame.composite_rect, opacity);
     }
 
     fn encode_items(&mut self, list: &api::DrawList, index: &mut usize, stop_at_layer_end: bool) {
@@ -6160,7 +6162,11 @@ impl WebGpuRenderer {
             match &list.items[*index] {
                 api::DrawCmd::LayerBegin { id, rect, dirty } => {
                     *index += 1;
-                    self.encode_layer(list, index, *id, *rect, *dirty);
+                    self.encode_layer(list, index, *id, *rect, *dirty, 1.0);
+                }
+                api::DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => {
+                    *index += 1;
+                    self.encode_layer(list, index, *id, *rect, *dirty, *opacity);
                 }
                 api::DrawCmd::LayerEnd => {
                     *index += 1;
@@ -6178,7 +6184,7 @@ impl WebGpuRenderer {
 
     fn encode_draw_cmd(&mut self, list: &api::DrawList, item: &api::DrawCmd) {
         match item {
-            api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerEnd => {}
+            api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerBeginWithOpacity { .. } | api::DrawCmd::LayerEnd => {}
             api::DrawCmd::Solid { vb, ib, color } => self.encode_solid(list, *vb, *ib, *color),
             api::DrawCmd::Image { tex, dst, src, alpha } => {
                 self.encode_image(*tex, *dst, *src, *alpha, false)
@@ -7516,7 +7522,7 @@ impl WebGpuRenderer
             let end = self.frame.draws.len();
             self.frame.layer_passes.push(FrameLayerPass { id: frame.key.id, start, end });
          }
-         self.push_layer_draw(frame.key.id, frame.rect);
+         self.push_layer_draw(frame.key.id, frame.rect, 1.0);
       }
       self.prepared_layer_key_indices = layer_keys;
       self.prepared_layer_plan = plan;
@@ -8083,6 +8089,7 @@ impl WebGpuRenderer
       !chunk.ordering().has_layer && !chunk.draw_list().items.iter().any(|item| {
          matches!(item,
             api::DrawCmd::LayerBegin { .. }
+            | api::DrawCmd::LayerBeginWithOpacity { .. }
             | api::DrawCmd::LayerEnd
             | api::DrawCmd::Backdrop { .. }
             | api::DrawCmd::VisualEffect { .. }
@@ -13660,7 +13667,8 @@ fn skip_layer_body(list: &api::DrawList, index: &mut usize) -> u32 {
     let mut skipped = 0_u32;
     while *index < list.items.len() && depth > 0 {
         match list.items[*index] {
-            api::DrawCmd::LayerBegin { .. } => depth = depth.saturating_add(1),
+            api::DrawCmd::LayerBegin { .. }
+            | api::DrawCmd::LayerBeginWithOpacity { .. } => depth = depth.saturating_add(1),
             api::DrawCmd::LayerEnd => depth = depth.saturating_sub(1),
             _ => skipped = skipped.saturating_add(1),
         }

@@ -116,7 +116,9 @@ impl DrawListBuilder {
                 let _ = self.clip_stack.pop();
                 self.list.items.push(gfx::DrawCmd::ClipPop);
             }
-            gfx::DrawCmd::LayerBegin { .. } | gfx::DrawCmd::LayerEnd => {
+            gfx::DrawCmd::LayerBegin { .. }
+            | gfx::DrawCmd::LayerBeginWithOpacity { .. }
+            | gfx::DrawCmd::LayerEnd => {
                 self.list.items.push(cmd);
             }
             _ if self.draw_visible() && draw_cmd_visible(&cmd) => self.list.items.push(cmd),
@@ -220,6 +222,14 @@ impl DrawListBuilder {
     pub fn layer_begin(&mut self, id: u32, rect: gfx::RectF, dirty: bool) {
         self.push_draw_cmd(gfx::DrawCmd::LayerBegin { id, rect, dirty });
     }
+
+    /// Begins a retained group whose completed contents are composited at `opacity`.
+    /// Descendants retain their normal source-over blending before this opacity is applied.
+    #[inline]
+   pub fn layer_begin_with_opacity(&mut self, id: u32, rect: gfx::RectF, dirty: bool, opacity: f32)
+   {
+      self.push_draw_cmd(gfx::DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity });
+   }
 
     #[inline]
     pub fn layer_end(&mut self) {
@@ -469,6 +479,7 @@ fn visual_effect_visible(effect: gfx::VisualEffect) -> bool {
 fn draw_cmd_visible(cmd: &gfx::DrawCmd) -> bool {
     match cmd {
         gfx::DrawCmd::LayerBegin { .. }
+        | gfx::DrawCmd::LayerBeginWithOpacity { .. }
         | gfx::DrawCmd::LayerEnd
         | gfx::DrawCmd::ClipPush { .. }
         | gfx::DrawCmd::ClipPop => true,
@@ -606,6 +617,12 @@ fn offset_draw_cmd(
         C::LayerBegin { id, rect, dirty } => {
             Some(C::LayerBegin { id: *id, rect: *rect, dirty: *dirty })
         }
+        C::LayerBeginWithOpacity { id, rect, dirty, opacity } => Some(C::LayerBeginWithOpacity {
+            id: *id,
+            rect: *rect,
+            dirty: *dirty,
+            opacity: *opacity,
+        }),
         C::LayerEnd => Some(C::LayerEnd),
         C::Solid { vb, ib, color } => {
             validate_vertex_span(list, *vb)?;
@@ -730,7 +747,7 @@ fn key_for(pd: &PreparedDraw) -> BatchKey {
     };
 
     match &pd.cmd {
-        C::LayerBegin { .. } | C::LayerEnd => BatchKey(7, 0, clip_hash),
+        C::LayerBegin { .. } | C::LayerBeginWithOpacity { .. } | C::LayerEnd => BatchKey(7, 0, clip_hash),
         C::Solid { .. } => BatchKey(0, 0, clip_hash),
         C::Image { tex, .. } => BatchKey(1, tex.0, clip_hash),
         C::ImageMesh { tex, .. } => BatchKey(1, tex.0, clip_hash),
@@ -1245,7 +1262,9 @@ pub(crate) fn drawlist_retained_replay_safe_for(
     text_atlases: Option<&[(gfx::ImageHandle, u64)]>,
 ) -> bool {
     list.items.iter().all(|cmd| match cmd {
-        gfx::DrawCmd::LayerBegin { .. } | gfx::DrawCmd::LayerEnd => false,
+        gfx::DrawCmd::LayerBegin { .. }
+        | gfx::DrawCmd::LayerBeginWithOpacity { .. }
+        | gfx::DrawCmd::LayerEnd => false,
         gfx::DrawCmd::GlyphRun { run } => match text_atlases {
             Some(atlases) => atlases
                 .iter()

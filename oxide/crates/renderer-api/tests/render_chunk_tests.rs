@@ -338,13 +338,14 @@ fn flat_fallback_applies_instance_metadata_and_reports_every_copy()
    assert_eq!(flat.items.len(), 5);
    assert!(matches!(
       flat.items[0],
-      DrawCmd::LayerBegin { rect, .. } if rect == RectF::new(12.0, 23.0, 100.0, 100.0)
+      DrawCmd::LayerBeginWithOpacity { rect, opacity, .. }
+         if rect == RectF::new(12.0, 23.0, 100.0, 100.0) && opacity == 0.5
    ));
    assert_eq!(flat.items[1], DrawCmd::ClipPush { rect: RectI::new(12, 23, 100, 100) });
    match &flat.items[2] {
       DrawCmd::RRect { rect, color, .. } => {
          assert_eq!(*rect, RectF::new(12.0, 23.0, 20.0, 10.0));
-         assert_eq!(color.a, 0.4);
+         assert_eq!(color.a, 0.8);
       }
       command => panic!("unexpected flattened command: {command:?}"),
    }

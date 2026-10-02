@@ -130,7 +130,7 @@ fragment float4 f_prepared_text(TextVSOut in [[stage_in]], texture2d<float> atla
 }
 
 fragment float4 f_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]]) {
-    float4 c = img.sample(s, in.uv);
+    float4 c = straight_image_sample(img.sample(s, in.uv));
     c.rgb *= uni.color.rgb;
     c.a *= uni.color.a;
     return source_to_output(c);
@@ -138,7 +138,7 @@ fragment float4 f_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[t
 
 fragment float4 f_prepared_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
-    float4 c = img.sample(s, in.uv);
+    float4 c = straight_image_sample(img.sample(s, in.uv));
     c.rgb *= uni.color.rgb;
     c.a *= uni.color.a * instance.opacityAndPadding.x;
     return source_to_output(c);

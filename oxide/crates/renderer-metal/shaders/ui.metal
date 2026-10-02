@@ -174,6 +174,14 @@ float mapNine(float x, float L, float R, float Wt, float Ws)
     return L + xc * (Ws - L - R);
 }
 
+float mapNineSample(float x, float L, float R, float Wt, float Ws)
+{
+    if (x < L || x > Wt - R) return mapNine(x, L, R, Wt, Ws);
+    float centerStart = L + 0.5;
+    float centerEnd = max(centerStart, Ws - R - 0.5);
+    return clamp(mapNine(x, L, R, Wt, Ws), centerStart, centerEnd);
+}
+
 fragment float4 f_nine_slice(UIVSOut in [[stage_in]],
                              texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]],
                              const device NineSliceParams* parr [[buffer(1)]])
@@ -181,10 +189,10 @@ fragment float4 f_nine_slice(UIVSOut in [[stage_in]],
     NineSliceParams p = parr[in.iid];
     float2 xy = in.pos_px - in.rect_origin;
     if (xy.x < 0.0 || xy.y < 0.0 || xy.x > p.rect.z || xy.y > p.rect.w) discard_fragment();
-    float u = mapNine(xy.x, p.sliceLTRB.x, p.sliceLTRB.z, p.rect.z, p.texSize.x);
-    float v = mapNine(xy.y, p.sliceLTRB.y, p.sliceLTRB.w, p.rect.w, p.texSize.y);
+    float u = mapNineSample(xy.x, p.sliceLTRB.x, p.sliceLTRB.z, p.rect.z, p.texSize.x);
+    float v = mapNineSample(xy.y, p.sliceLTRB.y, p.sliceLTRB.w, p.rect.w, p.texSize.y);
     float2 uv = float2(u / p.texSize.x, v / p.texSize.y);
-    float4 c = img.sample(s, uv);
+    float4 c = straight_image_sample(img.sample(s, uv));
     c.a *= p.alpha;
     return source_to_output(c);
 }
@@ -198,7 +206,7 @@ fragment float4 f_layer_composite(UIVSOut in [[stage_in]],
     if (xy.x < 0.0 || xy.y < 0.0 || xy.x > p.rect.z || xy.y > p.rect.w) discard_fragment();
     float u = mapNine(xy.x, p.sliceLTRB.x, p.sliceLTRB.z, p.rect.z, p.texSize.x);
     float v = mapNine(xy.y, p.sliceLTRB.y, p.sliceLTRB.w, p.rect.w, p.texSize.y);
-    return img.sample(s, float2(u / p.texSize.x, v / p.texSize.y));
+    return img.sample(s, float2(u / p.texSize.x, v / p.texSize.y)) * p.alpha;
 }
 
 fragment float4 f_layer_composite_aligned(UIVSOut in [[stage_in]],
@@ -210,7 +218,7 @@ fragment float4 f_layer_composite_aligned(UIVSOut in [[stage_in]],
     float2 xy = in.pos_px - in.rect_origin;
     if (xy.x < 0.0 || xy.y < 0.0 || xy.x > p.rect.z || xy.y > p.rect.w) discard_fragment();
     float2 texel = xy * (p.texSize / max(p.rect.zw, float2(1e-5)));
-    return img.sample(alignedSampler, texel);
+    return img.sample(alignedSampler, texel) * p.alpha;
 }
 
 struct SpinnerParams { float2 center; float radius; float thickness; float phase; float alpha; };
@@ -247,7 +255,7 @@ fragment float4 f_image(UIVSOut in [[stage_in]],
     float2 uv_px = float2(p.srcRect.x, p.srcRect.y) + xy * float2(p.srcRect.z / max(p.rect.z, 1e-5),
                                                                   p.srcRect.w / max(p.rect.w, 1e-5));
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
-    float4 c = A.imgs[p.texIndex].sample(s, uv);
+    float4 c = straight_image_sample(A.imgs[p.texIndex].sample(s, uv));
     c.a *= p.alpha;
     return source_to_output(c);
 }
@@ -264,7 +272,7 @@ fragment float4 f_prepared_image(UIVSOut in [[stage_in]],
     float2 uv_px = float2(p.srcRect.x, p.srcRect.y) + xy * float2(p.srcRect.z / max(p.rect.z, 1e-5),
                                                                   p.srcRect.w / max(p.rect.w, 1e-5));
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
-    float4 color = A.imgs[p.texIndex].sample(s, uv);
+    float4 color = straight_image_sample(A.imgs[p.texIndex].sample(s, uv));
     color.a *= p.alpha * instance.opacityAndPadding.x;
     return source_to_output(color);
 }
@@ -280,7 +288,7 @@ fragment float4 f_image_single(UIVSOut in [[stage_in]],
     float2 uv_px = float2(p.srcRect.x, p.srcRect.y) + xy * float2(p.srcRect.z / max(p.rect.z, 1e-5),
                                                                   p.srcRect.w / max(p.rect.w, 1e-5));
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
-    float4 c = img.sample(s, uv);
+    float4 c = straight_image_sample(img.sample(s, uv));
     c.a *= p.alpha;
     return source_to_output(c);
 }
@@ -297,7 +305,7 @@ fragment float4 f_prepared_image_single(UIVSOut in [[stage_in]],
     float2 uv_px = float2(p.srcRect.x, p.srcRect.y) + xy * float2(p.srcRect.z / max(p.rect.z, 1e-5),
                                                                   p.srcRect.w / max(p.rect.w, 1e-5));
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
-    float4 color = img.sample(s, uv);
+    float4 color = straight_image_sample(img.sample(s, uv));
     color.a *= p.alpha * instance.opacityAndPadding.x;
     return source_to_output(color);
 }

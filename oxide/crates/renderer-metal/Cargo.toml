@@ -28,4 +28,5 @@ msaa-4x = []
 snapshot-tests = []
 
 [dev-dependencies]
+oxide-ui-core = { path = "../ui-core" }
 png = "0.17"

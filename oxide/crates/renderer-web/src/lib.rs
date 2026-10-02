@@ -1302,7 +1302,7 @@ mod wasm {
 
         fn finish_open_layers(&mut self) {
             while !self.layer_stack.is_empty() {
-                let _ = self.end_layer_context();
+                let _ = self.end_layer_context(1.0);
             }
         }
 
@@ -1316,7 +1316,11 @@ mod wasm {
                 match &list.items[*index] {
                     api::DrawCmd::LayerBegin { id, rect, dirty } => {
                         *index += 1;
-                        self.encode_layer(list, index, *id, *rect, *dirty);
+                        self.encode_layer(list, index, *id, *rect, *dirty, 1.0);
+                    }
+                    api::DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } => {
+                        *index += 1;
+                        self.encode_layer(list, index, *id, *rect, *dirty, *opacity);
                     }
                     api::DrawCmd::LayerEnd => {
                         *index += 1;
@@ -1334,7 +1338,7 @@ mod wasm {
 
         fn encode_draw_cmd(&mut self, list: &api::DrawList, item: &api::DrawCmd) {
             match item {
-                api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerEnd => {}
+                api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerBeginWithOpacity { .. } | api::DrawCmd::LayerEnd => {}
                 api::DrawCmd::Solid { vb, ib, color } => {
                     self.draw_solid_span(list, *vb, *ib, *color)
                 }
@@ -1383,19 +1387,20 @@ mod wasm {
             id: u32,
             rect: api::RectF,
             dirty: bool,
+            opacity: f32,
         ) {
             let (width, height) = layer_dimensions(rect, self.scale);
             if !dirty {
                 if let Some(canvas) = self.cached_layer_canvas(id, width, height) {
                     skip_layer_body(list, index);
-                    self.draw_layer_canvas(&canvas, rect);
+                    self.draw_layer_canvas_with_opacity(&canvas, rect, opacity);
                     return;
                 }
             }
 
             if self.begin_layer_context(id, rect, width, height).is_ok() {
                 self.encode_items(list, index, true);
-                if let Some((layer_id, cached)) = self.end_layer_context() {
+                if let Some((layer_id, cached)) = self.end_layer_context(opacity) {
                     if layer_id != 0 {
                         self.layers.insert(layer_id, cached);
                     }
@@ -1456,7 +1461,7 @@ mod wasm {
             Ok(())
         }
 
-        fn end_layer_context(&mut self) -> Option<(u32, CachedLayer)> {
+        fn end_layer_context(&mut self, opacity: f32) -> Option<(u32, CachedLayer)> {
             let frame = self.layer_stack.pop()?;
             self.reset_clip_stack();
             let layer_ctx = self.ctx.clone();
@@ -1464,7 +1469,7 @@ mod wasm {
             self.clip_depth = frame.parent_clip_depth;
             drop(layer_ctx);
 
-            self.draw_layer_canvas(&frame.canvas, frame.rect);
+            self.draw_layer_canvas_with_opacity(&frame.canvas, frame.rect, opacity);
             let cached = CachedLayer {
                 width: frame.canvas.width(),
                 height: frame.canvas.height(),
@@ -1489,6 +1494,18 @@ mod wasm {
                 self.stats.draws = self.stats.draws.saturating_add(1);
                 self.stats.layer_draws = self.stats.layer_draws.saturating_add(1);
             }
+        }
+
+        fn draw_layer_canvas_with_opacity(
+            &mut self,
+            canvas: &HtmlCanvasElement,
+            rect: api::RectF,
+            opacity: f32,
+        ) {
+            self.ctx.save();
+            self.ctx.set_global_alpha(opacity.clamp(0.0, 1.0) as f64);
+            self.draw_layer_canvas(canvas, rect);
+            self.ctx.restore();
         }
 
         fn draw_solid_span(
@@ -2429,7 +2446,8 @@ mod wasm {
         let mut depth = 1_u32;
         while *index < list.items.len() && depth > 0 {
             match list.items[*index] {
-                api::DrawCmd::LayerBegin { .. } => depth = depth.saturating_add(1),
+                api::DrawCmd::LayerBegin { .. }
+                | api::DrawCmd::LayerBeginWithOpacity { .. } => depth = depth.saturating_add(1),
                 api::DrawCmd::LayerEnd => depth = depth.saturating_sub(1),
                 _ => {}
             }
@@ -2606,6 +2624,7 @@ mod native_stub {
                         item,
                         api::DrawCmd::CameraBg { .. }
                             | api::DrawCmd::LayerBegin { .. }
+                            | api::DrawCmd::LayerBeginWithOpacity { .. }
                             | api::DrawCmd::LayerEnd
                             | api::DrawCmd::ClipPush { .. }
                             | api::DrawCmd::ClipPop

@@ -6,6 +6,7 @@
 use oxide_renderer_api::{self as api, Renderer};
 use oxide_renderer_metal::scene3d::{self, Instance3d, Mesh3dData, Pass3d, Vertex3d};
 use oxide_renderer_metal::{CameraRenderMode, CameraTextureSource, MetalRenderer};
+use oxide_ui_core::DrawListBuilder;
 
 fn approx_eq(a: u8, b: u8, tol: u8) -> bool {
     let d = a.abs_diff(b);
@@ -883,6 +884,277 @@ fn prepared_layer_main_format_matches_flat_translucent_rrect_pixels()
       .map(|(offset, (candidate, reference))| (offset, *candidate, *reference))
       .collect::<Vec<_>>();
    assert!(differences.is_empty(), "main-format prepared layer pixel differences: {differences:?}");
+}
+
+#[test]
+fn group_opacity_composites_overlapping_children_before_fading()
+{
+   fn render(list: &api::DrawList) -> Vec<u8>
+   {
+      let mut renderer = MetalRenderer::new_default().expect("metal");
+      renderer.resize(96, 96, 1.0).expect("resize");
+      let frame = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(list);
+      renderer.submit(frame).expect("submit");
+      renderer.readback_bgra8().expect("readback").2
+   }
+
+   let background = api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 96.0, 96.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+   };
+   let red = api::DrawCmd::RRect {
+      rect: api::RectF::new(12.0, 12.0, 44.0, 44.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.9, 0.1, 0.1, 0.8),
+   };
+   let blue = api::DrawCmd::RRect {
+      rect: api::RectF::new(36.0, 12.0, 44.0, 44.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.1, 0.2, 0.9, 0.8),
+   };
+   let grouped = api::DrawList {
+      items: vec![
+         background.clone(),
+         api::DrawCmd::LayerBeginWithOpacity {
+            id: 9_100,
+            rect: api::RectF::new(8.0, 8.0, 76.0, 52.0),
+            dirty: false,
+            opacity: 0.5,
+         },
+         red.clone(),
+         blue.clone(),
+         api::DrawCmd::LayerEnd,
+      ],
+      ..api::DrawList::default()
+   };
+   let individually_faded = api::DrawList {
+      items: vec![
+         background,
+         api::DrawCmd::RRect {
+            rect: api::RectF::new(12.0, 12.0, 44.0, 44.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.9, 0.1, 0.1, 0.4),
+         },
+         api::DrawCmd::RRect {
+            rect: api::RectF::new(36.0, 12.0, 44.0, 44.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.1, 0.2, 0.9, 0.4),
+         },
+      ],
+      ..api::DrawList::default()
+   };
+   let grouped_pixels = render(&grouped);
+   let individually_faded_pixels = render(&individually_faded);
+   let overlap = (24 * 96 + 44) * 4;
+   let single_child = (24 * 96 + 20) * 4;
+   assert!(
+      grouped_pixels[single_child..single_child + 4]
+         .iter()
+         .zip(&individually_faded_pixels[single_child..single_child + 4])
+         .all(|(grouped, individual)| grouped.abs_diff(*individual) <= 1),
+      "a non-overlapping child must receive the same effective alpha",
+   );
+   assert_ne!(
+      &grouped_pixels[overlap..overlap + 4],
+      &individually_faded_pixels[overlap..overlap + 4],
+      "overlapping children must compose before group opacity is applied",
+   );
+}
+
+#[test]
+fn snapshot_embedded_group_opacity_falls_back_and_fades_the_completed_group()
+{
+   let panel = api::Color::rgba(0.15, 0.18, 0.22, 1.0);
+   let red = api::Color::rgba(0.9, 0.15, 0.15, 1.0);
+   let blue = api::Color::rgba(0.1, 0.2, 0.9, 1.0);
+   let panel_rect = api::RectF::new(0.0, 0.0, 96.0, 64.0);
+   let red_rect = api::RectF::new(12.0, 12.0, 28.0, 28.0);
+   let blue_rect = api::RectF::new(56.0, 12.0, 28.0, 28.0);
+
+   let mut builder = DrawListBuilder::new();
+   builder.rrect(panel_rect, [0.0; 4], panel);
+   builder.layer_begin_with_opacity(9_400, red_rect, false, 0.5);
+   builder.rrect(red_rect, [0.0; 4], red);
+   builder.layer_end();
+   builder.layer_begin_with_opacity(9_401, blue_rect, false, 0.0);
+   builder.rrect(blue_rect, [0.0; 4], blue);
+   builder.layer_end();
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(9_400),
+      api::RenderChunkRevisions { structural: 1, geometry: 1, ..api::RenderChunkRevisions::default() },
+      builder.into_inner(),
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("embedded opacity chunk");
+   assert!(chunk.ordering().has_layer);
+   let snapshot = api::RenderSnapshot::new(
+      vec![api::RenderChunkInstance::new(chunk, [0.0, 0.0])],
+      Vec::new(),
+      api::Damage { rects: Vec::new() },
+   ).expect("embedded opacity snapshot");
+
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(96, 64, 1.0).expect("resize");
+   renderer.set_layer_cache_enabled_for_snapshot_tests(false);
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode snapshot");
+   renderer.submit(frame).expect("submit snapshot");
+   let (_, _, actual) = renderer.readback_bgra8().expect("read snapshot");
+   let stats = renderer.last_stats();
+   assert_eq!(stats.chunks_prepared, 0, "embedded layers must use the flat layer pipeline: {stats:?}");
+   assert!(stats.commands_copied > 0, "embedded layer fallback must flatten its chunk: {stats:?}");
+
+   let expected = api::DrawList {
+      items: vec![
+         api::DrawCmd::RRect { rect: panel_rect, radii: [0.0; 4], color: panel },
+         api::DrawCmd::RRect { rect: red_rect, radii: [0.0; 4], color: api::Color::rgba(red.r, red.g, red.b, 0.5) },
+      ],
+      ..api::DrawList::default()
+   };
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(96, 64, 1.0).expect("reference resize");
+   let frame = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&expected);
+   reference.submit(frame).expect("submit reference");
+   let (_, _, expected) = reference.readback_bgra8().expect("read reference");
+   let pixel = |pixels: &[u8], x: usize, y: usize| {
+      let index = (y * 96 + x) * 4;
+      [pixels[index], pixels[index + 1], pixels[index + 2], pixels[index + 3]]
+   };
+   let red_actual = pixel(&actual, 24, 24);
+   let red_expected = pixel(&expected, 24, 24);
+   assert!(red_actual.into_iter().zip(red_expected).all(|(actual, expected)| actual.abs_diff(expected) <= 1),
+      "a half-opacity group must fade the completed red child: {red_actual:?} vs {red_expected:?}");
+   assert_eq!(pixel(&actual, 68, 24), pixel(&expected, 68, 24), "a zero-opacity group must leave its panel visible");
+}
+
+#[test]
+fn nested_group_opacity_multiplies_and_reuses_cached_content()
+{
+   fn frame(renderer: &mut MetalRenderer, list: &api::DrawList) -> (Vec<u8>, oxide_renderer_metal::PerfStats)
+   {
+      let token = renderer.begin_frame(&api::FrameTarget, None);
+      renderer.encode_pass(list);
+      renderer.submit(token).expect("submit");
+      let pixels = renderer.readback_bgra8().expect("readback").2;
+      (pixels, renderer.last_stats())
+   }
+
+   let background = api::DrawCmd::RRect {
+      rect: api::RectF::new(0.0, 0.0, 96.0, 96.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(1.0, 1.0, 1.0, 1.0),
+   };
+   let child = api::DrawCmd::RRect {
+      rect: api::RectF::new(16.0, 16.0, 48.0, 48.0),
+      radii: [0.0; 4],
+      color: api::Color::rgba(0.8, 0.2, 0.1, 1.0),
+   };
+   let nested = api::DrawList {
+      items: vec![
+         background.clone(),
+         api::DrawCmd::LayerBeginWithOpacity { id: 9_200, rect: api::RectF::new(8.0, 8.0, 64.0, 64.0), dirty: false, opacity: 0.5 },
+         api::DrawCmd::LayerBeginWithOpacity { id: 9_201, rect: api::RectF::new(8.0, 8.0, 64.0, 64.0), dirty: false, opacity: 0.5 },
+         child.clone(),
+         api::DrawCmd::LayerEnd,
+         api::DrawCmd::LayerEnd,
+      ],
+      ..api::DrawList::default()
+   };
+   let flat = api::DrawList {
+      items: vec![
+         background.clone(),
+         api::DrawCmd::RRect {
+            rect: api::RectF::new(16.0, 16.0, 48.0, 48.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.8, 0.2, 0.1, 0.25),
+         },
+      ],
+      ..api::DrawList::default()
+   };
+   let mut nested_renderer = MetalRenderer::new_default().expect("metal");
+   nested_renderer.resize(96, 96, 1.0).expect("resize");
+   let (nested_pixels, _) = frame(&mut nested_renderer, &nested);
+   let (_, clean_stats) = frame(&mut nested_renderer, &nested);
+
+   let mut flat_renderer = MetalRenderer::new_default().expect("flat metal");
+   flat_renderer.resize(96, 96, 1.0).expect("flat resize");
+   let (flat_pixels, _) = frame(&mut flat_renderer, &flat);
+   let pixel = (32 * 96 + 32) * 4;
+   assert_eq!(&nested_pixels[pixel..pixel + 4], &flat_pixels[pixel..pixel + 4]);
+   assert_eq!(clean_stats.layer_cache_hits, 2);
+
+   let mut zero = nested.clone();
+   if let api::DrawCmd::LayerBeginWithOpacity { opacity, .. } = &mut zero.items[1] { *opacity = 0.0; }
+   let (zero_pixels, zero_stats) = frame(&mut nested_renderer, &zero);
+   let mut restored = zero.clone();
+   if let api::DrawCmd::LayerBeginWithOpacity { opacity, .. } = &mut restored.items[1] { *opacity = 1.0; }
+   let (restored_pixels, restored_stats) = frame(&mut nested_renderer, &restored);
+   assert_eq!(&zero_pixels[pixel..pixel + 4], &[255, 255, 255, 255]);
+   assert_ne!(&restored_pixels[pixel..pixel + 4], &zero_pixels[pixel..pixel + 4]);
+   assert_eq!(zero_stats.layer_cache_hits, 2);
+   assert_eq!(restored_stats.layer_cache_hits, 2);
+}
+
+#[test]
+fn retained_layer_instance_opacity_matches_group_composition()
+{
+   let chunk = api::RenderChunk::new(
+      api::RenderChunkId(9_300),
+      api::RenderChunkRevisions { geometry: 1, ..api::RenderChunkRevisions::default() },
+      api::DrawList {
+         items: vec![
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(12.0, 12.0, 44.0, 44.0),
+               radii: [0.0; 4],
+               color: api::Color::rgba(0.9, 0.1, 0.1, 0.8),
+            },
+            api::DrawCmd::RRect {
+               rect: api::RectF::new(36.0, 12.0, 44.0, 44.0),
+               radii: [0.0; 4],
+               color: api::Color::rgba(0.1, 0.2, 0.9, 0.8),
+            },
+         ],
+         ..api::DrawList::default()
+      },
+      api::ChunkIndexMode::Local,
+      &[],
+   ).expect("layer chunk");
+   let mut instance = api::RenderChunkInstance::new(chunk, [0.0, 0.0]);
+   instance.layer = Some(api::RenderLayerInstance {
+      id: 9_300,
+      rect: api::RectF::new(8.0, 8.0, 76.0, 52.0),
+      dirty: false,
+   });
+   instance.property_slots = vec![api::RenderPropertySlotId(1)].into();
+   let snapshot = api::RenderSnapshot::new(
+      vec![instance],
+      vec![api::RenderPropertySlot {
+         id: api::RenderPropertySlotId(1),
+         revision: 1,
+         value: api::RenderPropertyValue::Opacity(0.5),
+      }],
+      api::Damage { rects: Vec::new() },
+   ).expect("layer snapshot");
+   let mut flat = api::DrawList::default();
+   snapshot.flatten_into(&mut flat).expect("flatten group reference");
+
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(96, 96, 1.0).expect("resize");
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_snapshot(&snapshot).expect("encode retained layer");
+   renderer.submit(token).expect("submit retained layer");
+   let (_, _, actual) = renderer.readback_bgra8().expect("read retained layer");
+
+   let mut reference = MetalRenderer::new_default().expect("reference metal");
+   reference.resize(96, 96, 1.0).expect("reference resize");
+   let token = reference.begin_frame(&api::FrameTarget, None);
+   reference.encode_pass(&flat);
+   reference.submit(token).expect("submit group reference");
+   let (_, _, expected) = reference.readback_bgra8().expect("read group reference");
+   assert_eq!(actual, expected);
 }
 
 #[test]
@@ -2355,6 +2627,43 @@ fn snapshot_rgba_image_upload_preserves_red_and_blue_channels()
 }
 
 #[test]
+fn snapshot_linear_rgba_sampling_ignores_hidden_transparent_texel_rgb()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(8, 8, 1.0).expect("resize");
+   let image = renderer.image_create_rgba8_sampled(
+      2,
+      1,
+      &[0, 255, 0, 255, 255, 0, 255, 0],
+      8,
+      api::ImageSampling::Linear,
+   );
+   let list = api::DrawList {
+      items: vec![
+         api::DrawCmd::RRect {
+            rect: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+            radii: [0.0; 4],
+            color: api::Color::rgba(0.0, 0.0, 0.0, 1.0),
+         },
+         api::DrawCmd::Image {
+            tex: image,
+            dst: api::RectF::new(0.0, 0.0, 8.0, 8.0),
+            src: api::RectF::new(0.0, 0.0, 2.0, 1.0),
+            alpha: 1.0,
+         },
+      ],
+      ..api::DrawList::default()
+   };
+   let token = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(token).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+   let edge = readback_pixel(&pixels, 8, 3, 4);
+   assert!(edge[0] <= 8 && edge[2] <= 8, "transparent magenta leaked into edge: {edge:?}");
+   assert!(edge[1] > 40, "edge lost the opaque green contribution: {edge:?}");
+}
+
+#[test]
 fn snapshot_runtime_image_sampling_covers_flat_image_families()
 {
    let mut renderer = MetalRenderer::new_default().expect("metal");
@@ -2417,6 +2726,36 @@ fn snapshot_runtime_image_sampling_covers_flat_image_families()
          "linear resource at x={x} did not blend across the source transition: {transition:?}",
       );
    }
+}
+
+#[test]
+fn snapshot_nine_slice_linear_center_does_not_sample_adjacent_caps()
+{
+   let mut renderer = MetalRenderer::new_default().expect("metal");
+   renderer.resize(20, 4, 1.0).expect("resize");
+   let pixels = [
+      255, 0, 0, 255, 255, 0, 0, 255,
+      0, 255, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 0, 0, 255, 255,
+   ];
+   let image = renderer.image_create_rgba8_sampled(6, 1, &pixels, 24, api::ImageSampling::Linear);
+   let list = api::DrawList {
+      items: vec![api::DrawCmd::NineSlice {
+         tex: image,
+         rect: api::RectF::new(0.0, 0.0, 20.0, 4.0),
+         slice: api::Insets::new(2.0, 0.0, 2.0, 0.0),
+         alpha: 1.0,
+      }],
+      ..api::DrawList::default()
+   };
+   let frame = renderer.begin_frame(&api::FrameTarget, None);
+   renderer.encode_pass(&list);
+   renderer.submit(frame).expect("submit");
+   let (_, _, pixels) = renderer.readback_bgra8().expect("readback");
+   assert_pixel_eq(readback_pixel(&pixels, 20, 2, 2), [0, 255, 0, 255],
+      "the first stretched center pixel must not blend with the left cap");
+   assert_pixel_eq(readback_pixel(&pixels, 20, 17, 2), [0, 255, 0, 255],
+      "the final stretched center pixel must not blend with the right cap");
 }
 
 #[test]

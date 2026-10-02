@@ -1514,6 +1514,89 @@ fn text_input_centers_glyphs_inside_its_padded_content_box() {
 }
 
 #[test]
+fn text_input_keeps_an_end_caret_inside_its_horizontal_content_viewport() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let mut state = TextInputState::new("Name");
+    state.focus();
+    state.handle_text_event(&TextEvent::Commit {text: "A long field value that must scroll to the end".into()});
+    let rect = RectF::new(0.0, 0.0, 180.0, 52.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, rect, 2.0, &mut text, &mut uploader, &mut builder);
+
+    let content_right = rect.w - 1.5 - input.style.padding.right;
+    let caret = builder.drawlist().items.iter().rev().find_map(|item| match item {
+        DrawCmd::RRect {rect, color, ..} if *color == input.style.caret => Some(*rect),
+        _ => None,
+    }).expect("focused field emits a caret");
+    assert!(caret.x >= input.style.padding.left);
+    assert!(caret.x + caret.w <= content_right + f32::EPSILON);
+}
+
+#[test]
+fn text_input_pointer_pick_uses_the_focused_horizontal_viewport_offset() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let style = TextInputStyle {font_id: 0, ..TextInputStyle::default()};
+    let mut state = TextInputState::new("Name");
+    state.focus();
+    state.handle_text_event(&TextEvent::Commit {text: "A long field value that must scroll to the end".into()});
+    let length = state.text().chars().count();
+    let rect = RectF::new(0.0, 0.0, 180.0, 52.0);
+
+    state.handle_pointer_in_rect([style.padding.left + 4.0, 20.0], rect, &style, &mut text);
+
+    assert!(state.cursor_index() > 0);
+    assert!(state.cursor_index() < length);
+}
+
+#[test]
+fn text_input_keeps_floating_placeholder_outside_the_scrolling_clip() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let mut state = TextInputState::new("Email address");
+    state.focus();
+    for _ in 0..20 {state.tick(100);}
+    let rect = RectF::new(0.0, 40.0, 180.0, 64.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, rect, 2.0, &mut text, &mut uploader, &mut builder);
+
+    let content_top = rect.y + 1.5 + input.style.padding.top;
+    let glyph_top = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::INFINITY, f32::min);
+    assert!(glyph_top < content_top, "floating placeholder was clipped: glyph_top={glyph_top} content_top={content_top}");
+}
+
+#[test]
+fn text_input_encodes_unfocused_marked_text_without_a_caret() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let mut state = TextInputState::new("");
+    state.handle_text_event(&TextEvent::Composition {range: 0..0, text: "cafe\u{301}".into()});
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, RectF::new(0.0, 0.0, 180.0, 64.0), 2.0, &mut text, &mut uploader, &mut builder);
+
+    assert!(builder.drawlist().items.iter().any(|item| matches!(item, DrawCmd::RRect {color, ..} if *color == input.style.composition)));
+    assert!(!builder.drawlist().items.iter().any(|item| matches!(item, DrawCmd::RRect {color, ..} if *color == input.style.caret)));
+}
+
+#[test]
 fn text_input_centers_an_empty_placeholder_on_its_text_baseline() {
     let mut text = TextCtx::default();
     let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
@@ -1814,6 +1897,27 @@ fn text_input_one_time_code_setup() {
     assert_eq!(st.text(), "1234");
     assert_eq!(st.max_length(), Some(6));
     assert!(st.otp_config().is_some());
+}
+
+#[test]
+fn text_input_one_time_code_centers_glyphs_on_the_slot_font_baseline() {
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput {style: TextInputStyle {font_id, font_px: 18.0, ..TextInputStyle::default()}, ..TextInput::default()};
+    let mut state = TextInputState::new("OTP");
+    state.configure_one_time_code(1);
+    state.focus();
+    state.handle_text_event(&TextEvent::Commit {text: "4".into()});
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, RectF::new(0.0, 0.0, 180.0, 64.0), 2.0, &mut text, &mut uploader, &mut builder);
+
+    let glyph_top = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::INFINITY, f32::min);
+    let glyph_bottom = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::NEG_INFINITY, f32::max);
+    assert!(((glyph_top + glyph_bottom) * 0.5 - 32.0).abs() < 4.0, "top={glyph_top} bottom={glyph_bottom}");
 }
 
 #[test]
