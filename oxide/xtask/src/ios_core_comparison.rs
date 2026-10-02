@@ -9,15 +9,13 @@ use anyhow::{bail, ensure, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-const SWEEP_CASES: &[&str] = &["shapes", "text", "images", "local", "animation", "scroll", "visual-controls", "visual-editing", "visual-typography", "visual-composition", "visual-layout", "visual-pickers", "visual-opacity", "visual-images", "visual-geometry", "visual-editing-edges"];
-
-const CASES: &[&str] = &["shapes", "text", "images", "local", "animation", "scroll"];
+const CASES: &[&str] = &["shapes", "text", "images", "local", "animation", "scroll", "visual-controls", "visual-editing", "visual-typography", "visual-composition", "visual-layout", "visual-pickers", "visual-opacity", "visual-images", "visual-geometry", "visual-editing-edges"];
 
 #[derive(Default)]
 struct Cli
 {
    cases: Vec<String>, device: Option<String>, output: Option<PathBuf>,
-   team: Option<String>, apps: Option<PathBuf>, visual: Option<PathBuf>, pilot: bool,
+   team: Option<String>, apps: Option<PathBuf>, visual: Option<PathBuf>, qualification: Option<PathBuf>, pilot: bool,
    sweep: bool, sweep_energy_only: bool, sweep_attempt_limit: Option<usize>, sweep_resume: Option<PathBuf>, pilot_renewal: bool, instruments_launch: bool, pilot_resume: Option<PathBuf>, pilot_history: Vec<PathBuf>, pilot_order: Option<String>,
 }
 
@@ -39,7 +37,7 @@ pub(super) fn run(args: &[String]) -> Result<()>
    ensure!(cli.pilot_history.is_empty() && cli.pilot_order.is_none(), "pilot history/order require --pilot or --pilot-renewal");
    let cases: Vec<String> = if cli.cases.is_empty() {CASES.iter().map(|v| v.to_string()).collect()} else {cli.cases};
    for case in &cases {ensure!(CASES.contains(&case.as_str()), "unknown case {case}");}
-   let visual_path = cli.visual.unwrap_or_else(|| root.join("benchmarks/core-visuals/visual-evidence.json"));
+   let visual_path = cli.visual.context("--visual-evidence must name a current-run visual evidence JSON")?;
    let visual: Value = serde_json::from_slice(&fs::read(&visual_path)?)?;
    let source_hash = source_hash(&root)?;
    ensure!(visual["source_sha256"].as_str() == Some(&source_hash), "visual evidence source identity does not match current fixtures");
@@ -47,7 +45,7 @@ pub(super) fn run(args: &[String]) -> Result<()>
    {
       let checks = visual["cases"][case]["checkpoints"].as_array().context("missing visual checkpoints")?;
       ensure!(visual["cases"][case]["status"] == "passed" && checks.len() == 3, "{case}: visual equivalence is blocked: {}", visual["cases"][case]["reason"]);
-      for (check, time) in checks.iter().zip([0.0, 10.0, 19.9])
+      for (check, time) in checks.iter().zip(checkpoint_times(case))
       {
          ensure!(check["time"].as_f64() == Some(time), "invalid checkpoint time");
          for side in ["oxide", "uikit"]
@@ -69,10 +67,17 @@ pub(super) fn run(args: &[String]) -> Result<()>
    for name in ["OxideBenchIOS", "UIKitBenchIOS"]
    {
       let app = find_app(&apps, name)?;
-      identities.insert(name.into(), json!({"app":app,"executable_sha256":hash_file(&app.join(name))?}));
+      let executable_sha256 = hash_file(&app.join(name))?;
+      let side = if name == "OxideBenchIOS" {"oxide"} else {"uikit"};
+      if let Some(expected) = visual.get("device_binaries").and_then(|binaries| binaries[side].as_str())
+      {
+         ensure!(expected == executable_sha256, "visual evidence binary identity differs for {side}");
+      }
+      identities.insert(name.into(), json!({"app":app,"executable_sha256":executable_sha256}));
       bounded(&root, "xcrun", &strings(&["devicectl", "device", "install", "app", "--device", &device.udid, &app.to_string_lossy()]), &out.join(format!("install-{name}.log")), 120)?;
    }
-   write_json(&out.join("identity.json"), &json!({"schema_version":1,"source_sha256":source_hash,"visual_evidence":visual,
+   write_json(&out.join("identity.json"), &json!({"schema_version":2,"source_sha256":source_hash,"visual_evidence":visual,
+      "visual_evidence_path":visual_path,"visual_evidence_sha256":hash_file(&visual_path)?,
       "device":{"name":device.name,"udid":device.udid,"product_type":device.product_type,"os_version":device.os_version,"os_build":device.os_build},
       "apps":identities,"protocol":{"warmup_seconds":5,"measured_seconds":20,"settled_seconds":5,"pairs":5,"maximum_replacement_pairs":1}}))?;
    let mut results = Vec::new();
@@ -146,7 +151,7 @@ fn completed_sweep_group(runs: &[Value], case_index: usize, mode: &str) -> Optio
    let count = if mode == "energy" {4} else {2};
    for attempt in 0..2
    {
-      let mut group: Vec<Value> = runs.iter().filter(|run| run["case"] == SWEEP_CASES[case_index] && run["mode"] == mode && run["attempt"] == attempt).cloned().collect();
+      let mut group: Vec<Value> = runs.iter().filter(|run| run["case"] == CASES[case_index] && run["mode"] == mode && run["attempt"] == attempt).cloned().collect();
       group.sort_by_key(|run| run["index"].as_u64());
       if group.len() == count && group.iter().enumerate().all(|(index, run)| run["status"] == "captured" && run["index"] == index && run["side"] == order[index]) {return Some(group);}
    }
@@ -160,20 +165,21 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
    let diagnostic_blocker = if cli.sweep_energy_only {Some("Repeated Instruments diagnostic recordings lack a complete measurement window; detailed diagnostics remain blocked. Whole-device energy is measured independently.")} else {None};
    let attempt_limit = cli.sweep_attempt_limit.unwrap_or(102);
    ensure!((1..=102).contains(&attempt_limit), "sweep attempt limit must be between 1 and 102");
-   let qualification: Value = serde_json::from_slice(&fs::read(root.join("benchmarks/energy-comparison-2026-09-07/completed-qualification/status.json"))?)?;
+   let qualification_path = cli.qualification.as_ref().context("--sweep requires --qualification naming a current-run qualification JSON")?;
+   let qualification: Value = serde_json::from_slice(&fs::read(qualification_path)?)?;
    ensure!(qualification["normal_and_stall_probes_valid"] == true && qualification["energy_captures_in_quartet"] == 4, "measurement qualification is incomplete");
    let visual_path = cli.visual.context("--sweep requires refreshed --visual-evidence")?;
    let visual: Value = serde_json::from_slice(&fs::read(&visual_path)?)?;
    let source = source_hash(root)?;
    ensure!(visual["source_sha256"] == source, "visual source identity differs from measured fixtures");
-   for case in SWEEP_CASES
+   for case in CASES
    {
       let entry = &visual["cases"][*case];
       if entry["status"] == "blocked" {ensure!(entry["reason"].as_str().is_some_and(|v| !v.is_empty()), "blocked case requires exact reason"); continue;}
       ensure!(entry["status"] == "passed" && entry["repeated_cycles_verified"] == true, "{case}: visual/repeated-cycle verification is incomplete");
       let checkpoints = entry["checkpoints"].as_array().context("missing checkpoints")?;
       ensure!(checkpoints.len() == 3, "{case}: three checkpoints required");
-      for (check, expected) in checkpoints.iter().zip(if case.starts_with("visual-") {[0.0, 1.0, 2.0]} else {[0.0, 10.0, 19.9]})
+      for (check, expected) in checkpoints.iter().zip(checkpoint_times(case))
       {
          ensure!(check["time"].as_f64() == Some(expected), "checkpoint time mismatch");
          for side in ["oxide", "uikit"]
@@ -203,7 +209,7 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
       identities.insert(side.into(), json!({"app":app,"executable_sha256":hash}));
       bounded(root, "xcrun", &strings(&["devicectl", "device", "install", "app", "--device", &device.udid, &app.to_string_lossy()]), &out.join(format!("install-{side}.log")), 120)?;
    }
-   write_json(&out.join("identity.json"), &json!({"source_sha256":source,"apps":identities,"visual":visual,"device":details,"protocol":{"cases":SWEEP_CASES,"energy_captures":64,"diagnostic_captures":32,"maximum_energy_replacement_quartets":1,"maximum_diagnostic_replacement_pairs":1,"maximum_sweep_attempts":attempt_limit,"diagnostic_blocker":diagnostic_blocker,"qualification_attempts":18,"maximum_program_attempts":120}}))?;
+   write_json(&out.join("identity.json"), &json!({"source_sha256":source,"apps":identities,"visual":visual,"device":details,"protocol":{"cases":CASES,"energy_captures":64,"diagnostic_captures":32,"maximum_energy_replacement_quartets":1,"maximum_diagnostic_replacement_pairs":1,"maximum_sweep_attempts":attempt_limit,"diagnostic_blocker":diagnostic_blocker,"qualification_attempts":18,"maximum_program_attempts":120}}))?;
    let mut runs = Vec::new();
    if let Some(previous) = &cli.sweep_resume
    {
@@ -215,7 +221,7 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
       {
          ensure!(retained.iter().filter(|run| run["mode"] == "diagnostic" && run["status"] == "acquisition-failed" && run["reason"].as_str().is_some_and(|reason| reason.contains("diagnostic capture lacks the completed measurement window"))).count() >= 2, "energy-only continuation requires two retained diagnostic window failures");
       }
-      for case_index in 0..SWEEP_CASES.len()
+      for case_index in 0..CASES.len()
       {
          for mode in ["energy", "diagnostic"]
          {
@@ -226,7 +232,7 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
                   let directory = PathBuf::from(run["directory"].as_str().context("missing retained directory")?);
                   let completion: Value = serde_json::from_slice(&fs::read(directory.join("completion.json"))?)?;
                   let recording: Value = serde_json::from_slice(&fs::read(directory.join("recording.json"))?)?;
-                  ensure!(completion == run["result"]["completion"] && completion["case"] == SWEEP_CASES[case_index] && capture_completed(&completion, recording["run_id"].as_str().context("missing retained run ID")?, mode), "retained completion differs");
+                  ensure!(completion == run["result"]["completion"] && completion["case"] == CASES[case_index] && capture_completed(&completion, recording["run_id"].as_str().context("missing retained run ID")?, mode), "retained completion differs");
                   let (filename, key, valid) = if mode == "energy" {("power-metrics.json", "power", "valid_energy")} else {("metrics.json", "metrics", "valid_capture")};
                   let metrics: Value = serde_json::from_slice(&fs::read(directory.join(filename))?)?;
                   ensure!(metrics == run["result"][key] && metrics[valid] == true, "retained metrics differ or are invalid");
@@ -255,7 +261,7 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
    let mut energy_replacement_used = false;
    let mut diagnostic_replacement_used = false;
    let mut attempts = 0;
-   for (case_index, case) in SWEEP_CASES.iter().enumerate()
+   for (case_index, case) in CASES.iter().enumerate()
    {
       if visual["cases"][*case]["status"] == "blocked"
       {
@@ -317,13 +323,19 @@ fn run_sweep(root: &Path, cli: Cli) -> Result<()>
       if !completed
       {
          let reason = runs.last().and_then(|run| run.get("reason")).cloned().unwrap_or(json!("acquisition failed"));
-         for pending in &SWEEP_CASES[case_index + 1..] {cases.push(json!({"case":pending,"status":"acquisition-blocked","reason":reason}));}
+         for pending in &CASES[case_index + 1..] {cases.push(json!({"case":pending,"status":"acquisition-blocked","reason":reason}));}
          write_json(&out.join("cases.json"), &json!(cases))?;
          break;
       }
    }
    write_json(&out.join("status.json"), &json!({"status":"sweep-acquisition-complete-review-pending","attempts":attempts,"cases":cases,"energy_replacement_used":energy_replacement_used,"diagnostic_replacement_used":diagnostic_replacement_used,"equal_delivery_efficiency_claim":false}))?;
    Ok(())
+}
+
+fn checkpoint_times(case: &str) -> [f64; 3]
+{
+   if case.starts_with("visual-") {[0.0, 1.0, 2.0]}
+   else {[0.0, 10.0, 19.9]}
 }
 
 fn parse(args: &[String]) -> Result<Cli>
@@ -351,6 +363,7 @@ fn parse(args: &[String]) -> Result<Cli>
          "--team" => cli.team = Some(value.clone()),
          "--apps" => cli.apps = Some(value.into()),
          "--visual-evidence" => cli.visual = Some(value.into()),
+         "--qualification" => cli.qualification = Some(value.into()),
          _ => bail!("unknown option {option}"),
       }
    }
@@ -827,7 +840,7 @@ fn reduce_energy_capture(root: &Path, directory: &Path, side: &str, completion: 
 fn run_pilot_renewal(root: &Path, cli: Cli) -> Result<()>
 {
    ensure!(!cli.pilot && cli.pilot_order.is_none() && cli.cases.is_empty(), "--pilot-renewal has a fixed protocol and does not accept --pilot, --pilot-order or --case");
-   ensure!(!cli.pilot_history.is_empty(), "--pilot-renewal requires --pilot-history entries containing the original eight attempts");
+   let out = cli.output.clone().context("--pilot-renewal requires --output pointing to a new evidence directory")?;
    let mut histories = std::collections::BTreeSet::new();
    let mut run_ids = std::collections::BTreeSet::new();
    let mut prior_attempts = 0;
@@ -847,10 +860,8 @@ fn run_pilot_renewal(root: &Path, cli: Cli) -> Result<()>
    }
    let finish_managed = cli.instruments_launch && cli.pilot_resume.is_some();
    let reviewed_resume = finish_managed && cli.pilot_resume.as_ref().is_some_and(|path| path.join("validated-resume.json").is_file());
-   let expected_history = if reviewed_resume {13} else if finish_managed {12} else if cli.instruments_launch {10} else {8};
    let requested = if reviewed_resume {5} else if finish_managed {6} else if cli.instruments_launch {2} else {8};
    let maximum_attempts = if finish_managed {18} else {16};
-   ensure!(prior_attempts == expected_history, "qualification history must contain {expected_history} recorder attempts, found {prior_attempts}");
    ensure!(prior_attempts + requested <= maximum_attempts, "renewal would exceed the approved cumulative budget");
    let mut resumed = Vec::new();
    let mut resumed_identity = None;
@@ -902,7 +913,6 @@ fn run_pilot_renewal(root: &Path, cli: Cli) -> Result<()>
    let resume_count = resumed.len();
    let device = super::resolve_uikit_physical_device(root, cli.device.as_deref())?;
    if let Some(identity) = &resumed_identity {ensure!(identity["device"]["udid"] == device.udid, "resume device differs");}
-   let out = cli.output.context("--pilot-renewal requires --output pointing to a new evidence directory")?;
    ensure!(!out.exists() || fs::read_dir(&out)?.next().is_none(), "renewal output must be new/empty; attempts are never overwritten or retried");
    fs::create_dir_all(&out)?;
    bounded(root, "xcodebuild", &strings(&["-version"]), &out.join("xcode-version.log"), 15)?;
@@ -1097,10 +1107,10 @@ mod qualification_tests
    }
 
    #[test]
-   fn sweep_contract_has_sixteen_cases_and_alternating_quartets()
+   fn shared_case_registry_has_sixteen_cases_and_alternating_quartets()
    {
-      assert_eq!(SWEEP_CASES.len(), 16);
-      assert_eq!(SWEEP_CASES.iter().collect::<std::collections::BTreeSet<_>>().len(), 16);
+      assert_eq!(CASES.len(), 16);
+      assert_eq!(CASES.iter().collect::<std::collections::BTreeSet<_>>().len(), 16);
       for index in 0..16
       {
          let order = sweep_order(index);
@@ -1113,6 +1123,23 @@ mod qualification_tests
       assert!(parse(&strings(&["--sweep", "--sweep-energy-only"])).unwrap().sweep_energy_only);
       assert_eq!(parse(&strings(&["--sweep", "--sweep-attempt-limit", "1"])).unwrap().sweep_attempt_limit, Some(1));
       assert_eq!(parse(&strings(&["--sweep", "--sweep-resume", "/retained"])).unwrap().sweep_resume, Some(PathBuf::from("/retained")));
+   }
+
+   #[test]
+   fn ordinary_admission_requires_explicit_visual_evidence()
+   {
+      let cli = parse(&strings(&["--case", "visual-layout", "--visual-evidence", "/current/visual.json"])).unwrap();
+      assert_eq!(cli.cases, [String::from("visual-layout")]);
+      assert_eq!(cli.visual, Some(PathBuf::from("/current/visual.json")));
+      assert_eq!(cli.qualification, None);
+      assert!(CASES.contains(&"visual-layout"));
+   }
+
+   #[test]
+   fn checkpoint_times_match_the_core_and_visual_fixture_timelines()
+   {
+      assert_eq!(checkpoint_times("text"), [0.0, 10.0, 19.9]);
+      assert_eq!(checkpoint_times("visual-layout"), [0.0, 1.0, 2.0]);
    }
 
    #[test]
@@ -1208,10 +1235,10 @@ mod qualification_tests
    }
 
    #[test]
-   fn renewal_requires_history_before_device_access()
+   fn fresh_qualification_requires_output_before_device_access()
    {
       let cli = Cli {pilot_renewal: true, ..Cli::default()};
-      assert!(run_pilot_renewal(Path::new("/unused"), cli).unwrap_err().to_string().contains("requires --pilot-history"));
+      assert!(run_pilot_renewal(Path::new("/unused"), cli).unwrap_err().to_string().contains("requires --output"));
    }
 
    #[test]

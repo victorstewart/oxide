@@ -1,157 +1,42 @@
-# Oxide/UIKit Perf Contract
+# Sixteen-case Apple comparison contract
 
-## Scope
+The Apple comparison harness has one named sixteen-case registry. It keeps shared
+geometry, font bytes, image bytes, colors, state timelines, and checkpoint semantics
+between the Oxide and UIKit adapters. It does not change Oxide production APIs or
+renderer policy.
 
-This benchmark suite exists to support one claim only: under an identical visible-scene specification, geometry, timing, cache state, and interaction path, compare Oxide against UIKit honestly.
+| Group | Cases | Workload coverage |
+| --- | --- | --- |
+| Core | `shapes`, `text`, `local`, `images`, `animation`, `scroll` | clipping/transparency, wrapped and changing text, local control updates, image crop/scale, card animation, and 1,000-row virtualization |
+| Visual | `visual-controls`, `visual-editing`, `visual-typography`, `visual-composition`, `visual-layout`, `visual-pickers`, `visual-opacity`, `visual-images`, `visual-geometry`, `visual-editing-edges` | production controls/editing, shaping/wrapping, clips/layers, layout/collection mutation, picker dynamics, group opacity, image generation, fractional geometry, and input edge cases |
 
-The contract is Oxide/UIKit-native. External or legacy apps must not appear in the persisted policy, report language, or benchmark definitions.
+All content is 390 × 844 logical points at 3×. Core checkpoints are 0, 10, and
+19.9 seconds; visual checkpoints are 0, 1, and 2. The visual review must retain
+matching content, geometry, clipping, order, color, transitions, and resource
+restoration. A faster result that changes these properties is invalid.
 
-## Layers
+## Admission and recording
 
-- `engine`: microbenchmarks for primitives, animations, author-facing APIs, layout hot paths, and renderer/runtime internals.
-- `flow`: representative user-visible screens and journeys that reflect what a user sees, feels, and waits on.
-- `os-bridge`: app-owned wrapper overhead around permissions, pickers, import/export, networking, and other native bridges.
+Before a physical recording, provide current-run external visual evidence to
+`cargo xtask ios compare-core`. The runner validates the source hash, all selected
+checkpoint hashes, and executable hashes when the evidence producer recorded them.
+The energy sweep separately requires a human-reviewed external qualification bundle
+whose established predicate is `normal_and_stall_probes_valid: true` and
+`energy_captures_in_quartet: 4`. Callback timing, simulator output, GPU completion,
+or a native-macOS receipt alone is insufficient presentation admission evidence.
 
-## Required Battery
+A normal case uses five seconds warmup, twenty seconds measured, and five seconds
+settled, with five alternating Oxide/UIKit pairs and at most one replacement pair.
+Use a Release build, the same physical ProMotion iPhone, matched native-refresh
+requests, fixed brightness, nominal thermal state, and no interaction. Keep all
+outputs outside Git in a new directory. The scorecard records unavailable or blocked
+metrics rather than manufacturing a comparison claim.
 
-Each platform report should classify coverage against these workload families:
+The reusable native-macOS background/offscreen tools are diagnostic. They preserve
+the same workloads and resource/capture checks, but do not measure or claim iPhone
+presentation latency. Foreground native-Mac receipts keep their own drawable and
+presentation accounting.
 
-1. `launch-lifecycle`
-2. `primitive-lifecycle`
-3. `layout-invalidation`
-4. `text-input`
-5. `image-pipeline`
-6. `lists-grids-chat`
-7. `navigation-input`
-8. `animation-effects`
-9. `state-reconcile`
-10. `os-bridge`
-11. `endurance-thermal`
-12. `stress-pathological`
-
-If a selected run contains no evidence for a family, the report must say `missing`. Use `partial` only when at least one selected row genuinely represents that family, and `implemented` only when the defined complete set is present.
-
-The committed device baselines are canonical signal batteries, not every registered row. They preserve distinct workload families, idiomatic-versus-optimized style comparisons where they matter, and the highest-signal scaling points. Dense near-duplicate count/style permutations remain exact touched-case runs; there is no run-everything device mode.
-
-The official publication proof is one canonical promotion run. Two narrower modes remain available without becoming prerequisites:
-
-- `watchable smoke`: optional visual QA for a visibly changed build, using one idiomatic row from component, animation, navigation, and journey plus both camera surfaces (six UIKit rows and five deduplicated Oxide rows)
-- `family diagnostic`: an explicit two-row UIKit and one-row Oxide investigation for one comparison family
-- `promotion`: the sole publication proof, using all ten canonical UIKit rows and five deduplicated Oxide rows; partial `--case` selection is rejected
-
-A routine baseline refresh runs promotion once. A visibly changed build may run watchable smoke first, then the same single promotion. Family diagnostics are investigative tools, not promotion gates.
-
-## UIKit Baselines
-
-UIKit parity must maintain two styles for the same workload family:
-
-- `idiomatic`: what a normal UIKit implementation looks like.
-- `optimized`: a hand-tuned UIKit implementation that raises the bar for Oxide.
-
-If only one style exists for a family, the report must mark style coverage as partial.
-
-## Shared Scene Spec
-
-Oxide and UIKit cases must share the same:
-
-- strings and fonts
-- colors, borders, shadows, and corner radii
-- image bytes
-- geometry and spacing
-- animation curves and durations
-- scroll physics and interaction cadence
-- visible effects and quality level
-
-Faster is invalid if it silently renders fewer pixels, weaker effects, or lower-quality text.
-
-## Unsupported Accessibility
-
-Accessibility is intentionally outside the Oxide product and comparison contract. Do not add OS accessibility trees, VoiceOver behavior, accessibility metadata, roles/actions, dynamic-type policy, parity workloads, admission gates, report metrics, or optimization constraints.
-
-Do not add platform accessibility or automation identifiers to benchmark code. Use app/window queries, raw coordinates, and non-accessibility lifecycle signals instead. Existing identifier-based harness controls are cleanup candidates and must not expand. Oxide retains no accessibility-named product or benchmark API slot; do not introduce or restore one.
-
-## Shared Phases
-
-Use the same phase names whenever the workload exposes them:
-
-- `app.launch`
-- `screen.mount`
-- `layout`
-- `text.measure`
-- `diff.apply`
-- `image.decode`
-- `texture.upload`
-- `draw.encode`
-- `frame.present`
-- `first.interactive`
-- `transition`
-- `scroll`
-- `native.bridge`
-
-## Metric Surface
-
-Each persisted report row should move toward this shape:
-
-- `test_id`
-- `device`
-- `refresh_mode`
-- `variant` or `style`
-- `cache_state`
-- `measure_iterations`
-- `benchmark_iterations`
-- `p50_ms`
-- `p95_ms`
-- `p99_ms`
-- `peak_ms`
-- `hitch_ms_per_s`
-- `missed_frames`
-- `first_frame_ms`
-- `first_interactive_ms`
-- `cpu_pct`
-- `main_thread_pct`
-- `peak_rss_mb`
-- `steady_rss_mb`
-- `gpu_mem_mb`
-- `logical_writes_kb`
-- `energy_score`
-
-Image and transport workloads should also split:
-
-- `network_ms`
-- `decode_ms`
-- `upload_ms`
-- `render_ms`
-
-Oxide-owned reports should additionally preserve explanatory counters when available:
-
-- `dirty_nodes`
-- `layout_passes`
-- `draw_calls`
-- `encoded_bytes`
-- `texture_bytes`
-
-When a persisted metric is derived from multiple potential collectors, the report should also preserve:
-
-- canonical metric source
-- per-metric provenance
-- structured fallback modes when trace reduction had to widen attribution
-
-## Device Rules
-
-- Keep `cold`, `warm`, and `hot` cache states separate.
-- Run real user-visible scroll and animation flows on real ProMotion hardware at native refresh in the official device harness.
-- Treat simulator probes as debug-only and never as committed baselines, official comparison numbers, or user-facing summary data.
-- Native-only is the official Oxide/UIKit device contract. Any separate 60 Hz study is diagnostic-only and must not expand or slow the default committed battery.
-- Camera preview has two reporting buckets:
-  - the official today bucket is the parked microscope comparison between the pure custom Oxide-owned visible preview path and the matching `AVCaptureVideoPreviewLayer` baseline on the same unchanged build and device
-  - the actual app-host comparison is a separate shipping-oriented bucket and must be reported as partial or blocked until the UI-test runner path is stable
-- Hybrid camera visible-preview-layer paths are diagnostic-only. They must never appear in committed default baselines or user-facing summary tables.
-- Treat Oxide's in-app Metal command-buffer and counter-sample timing as its first GPU source; use real-device process-scoped Metal System Trace as the external cross-check.
-- Treat manual device-side Power Profiler traces as the authoritative energy source when available.
-
-## Reporting Rules
-
-- Prefer hitch ratio, first frame, first interactive, and input-event-to-visible-response over headline FPS.
-- Report partial coverage truthfully instead of implying the battery is already comprehensive.
-- Keep the canonical device baseline honest: if a workload row is noncanonical, do not imply it was measured there; select that exact case when its surface is touched.
-- Keep app-owned UI separate from system-owned UI; system surfaces count as bridge overhead, not renderer wins.
+The comparison harness preserves its shared fixtures, hosts, reducers, visual
+goldens, and physical-device restrictions. Historical benchmark evidence is not an
+admission dependency.
