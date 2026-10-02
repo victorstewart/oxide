@@ -8,20 +8,17 @@ settings:
     "ARCHS[sdk=iphonesimulator*]": arm64
     IPHONEOS_DEPLOYMENT_TARGET: 18.0
 schemes:
-  OxideUIKitPerf:
+  OxideHost:
     build:
       targets:
         OxideHost:
-          - test
-        OxideHostPerfTests:
           - test
         OxideHostUITests:
           - test
       buildImplicitDependencies: false
     test:
-      config: Release
+      config: Debug
       targets:
-        - OxideHostPerfTests
         - OxideHostUITests
 targets:
   OxideHost:
@@ -33,10 +30,7 @@ targets:
           - OxideHost.xcodeproj
           - project.yml
           - OxideHostUITests
-          - OxideHostPerfTests
-          - PerfShared
           - Resources
-      - path: PerfShared
     resources:
       - Info.plist
       - capabilities.toml
@@ -131,18 +125,3 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: 18.0
     dependencies:
       - target: OxideHost
-  OxideHostPerfTests:
-    type: bundle.unit-test
-    platform: iOS
-    sources:
-      - path: PerfShared
-      - path: OxideHostPerfTests
-    dependencies:
-      - target: OxideHost
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.oxide.host.PerfTests
-        INFOPLIST_FILE: OxideHostPerfTests/Info.plist
-        SWIFT_VERSION: 5.0
-        TARGETED_DEVICE_FAMILY: "1,2"
-        IPHONEOS_DEPLOYMENT_TARGET: 18.0

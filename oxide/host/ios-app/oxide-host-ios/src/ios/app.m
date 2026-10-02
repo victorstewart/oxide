@@ -213,16 +213,6 @@ static NSString *OxidePerfCaseName(void) {
   return caseName;
 }
 
-static BOOL OxidePerfParkedBenchmarkLaunchEnabled(void) {
-  NSDictionary<NSString *, NSString *> *environment =
-      NSProcessInfo.processInfo.environment;
-  NSString *parked = [environment objectForKey:@"OXIDE_PERF_PARKED"];
-  NSString *uikitLaunch =
-      [environment objectForKey:@"OXIDE_PERF_UIKIT_LAUNCH"];
-  return (parked != nil && parked.intValue != 0) ||
-         (uikitLaunch != nil && uikitLaunch.intValue != 0);
-}
-
 static BOOL OxidePerfActualAppCustomCameraBenchmarkEnabled(void) {
   return OxidePerfCameraRealAppHostEnabled() &&
          [OxidePerfCaseName()
@@ -887,18 +877,7 @@ static BOOL IsRunningPerfBenchmarkHost(void) {
   static BOOL checked = NO;
   static BOOL cached = NO;
   if (!checked) {
-    NSDictionary<NSString *, NSString *> *env =
-        NSProcessInfo.processInfo.environment;
-    NSString *bundlePath = [env objectForKey:@"XCTestBundlePath"];
-    NSString *injectPath = [env objectForKey:@"XCInjectBundleInto"];
-    cached =
-        (bundlePath != nil &&
-         [bundlePath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
-         NSNotFound) ||
-        (injectPath != nil &&
-         [injectPath rangeOfString:@"OxideHostPerfTests.xctest"].location !=
-         NSNotFound) ||
-        OxidePerfCameraRealAppHostEnabled();
+    cached = OxidePerfCameraRealAppHostEnabled();
     if (!cached) {
       cached = OxidePerfStaticIdleRealAppHostEnabled();
     }
@@ -3556,7 +3535,6 @@ int32_t oxide_host_thermal_state(void) {
 @property(nonatomic) uint8_t perfStaticIdleEndHostFrameDirty;
 @property(nonatomic) uint8_t perfStaticIdleEndHostSettleFramesRemaining;
 @property(nonatomic) BOOL hasRealScenes;
-@property(nonatomic, strong) id<UIWindowSceneDelegate> parkedPerfSceneDelegate;
 - (IBAction)sceneChanged:(UISegmentedControl *)control;
 - (IBAction)onOverlaySwitch:(UISwitch *)sw;
 - (void)updateDisplayLinkRange;
@@ -3575,7 +3553,6 @@ int32_t oxide_host_thermal_state(void) {
 - (void)requestDisplayLinkWake:(uint64_t)generation;
 - (void)installCameraDrivenSchedulingCallbackIfNeeded;
 - (void)handleActualAppBenchmarkStart;
-- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded;
 @end
 
 void oxide_host_request_display_link_wake(uint64_t generation) {
@@ -3723,23 +3700,6 @@ static void OxidePerfCameraBenchmarkStartCallback(
 }
 
 @implementation RustSceneDelegate
-- (id<UIWindowSceneDelegate>)parkedPerfSceneDelegateIfNeeded {
-  if (!OxidePerfParkedBenchmarkLaunchEnabled()) {
-    return nil;
-  }
-  if (self.parkedPerfSceneDelegate != nil) {
-    return self.parkedPerfSceneDelegate;
-  }
-  Class delegateClass = NSClassFromString(@"OxidePerfParkedSceneDelegate");
-  if (delegateClass == nil) {
-    @throw [NSException exceptionWithName:NSInternalInconsistencyException
-                                   reason:@"missing OxidePerfParkedSceneDelegate"
-                                 userInfo:nil];
-  }
-  self.parkedPerfSceneDelegate = [[delegateClass alloc] init];
-  return self.parkedPerfSceneDelegate;
-}
-
 - (void)updateActualAppCameraBenchmarkIterationStartObserver {
   CFNotificationCenterRef center = CFNotificationCenterGetDarwinNotifyCenter();
   if (self.perfBenchmarkIterationStartNotificationName.length > 0) {
@@ -4983,16 +4943,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 - (void)scene:(UIScene *)scene
     willConnectToSession:(UISceneSession *)session
                  options:(UISceneConnectionOptions *)connectionOptions {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate scene:scene
-       willConnectToSession:session
-                    options:connectionOptions];
-    }
-    return;
-  }
   (void)session;
   (void)connectionOptions;
   if (![scene isKindOfClass:[UIWindowScene class]]) {
@@ -5571,14 +5521,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidBecomeActive:(UIScene *)scene {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate sceneDidBecomeActive:scene];
-    }
-    return;
-  }
   (void)scene;
   gAppDebugPerf.scene_did_become_active_calls += 1;
   self.displayLinkForegroundActive = YES;
@@ -5600,14 +5542,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillResignActive:(UIScene *)scene {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate sceneWillResignActive:scene];
-    }
-    return;
-  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;
@@ -5618,14 +5552,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidEnterBackground:(UIScene *)scene {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate sceneDidEnterBackground:scene];
-    }
-    return;
-  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;
@@ -5637,14 +5563,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneWillEnterForeground:(UIScene *)scene {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate sceneWillEnterForeground:scene];
-    }
-    return;
-  }
   (void)scene;
   gAppDebugPerf.scene_will_enter_foreground_calls += 1;
   self.displayLinkForegroundActive = YES;
@@ -5661,15 +5579,6 @@ static void OxidePerfEmitBenchmarkFailure(NSString *message) {
 }
 
 - (void)sceneDidDisconnect:(UIScene *)scene {
-  id<UIWindowSceneDelegate> parkedDelegate =
-      [self parkedPerfSceneDelegateIfNeeded];
-  if (parkedDelegate != nil) {
-    if ([parkedDelegate respondsToSelector:_cmd]) {
-      [parkedDelegate sceneDidDisconnect:scene];
-    }
-    self.parkedPerfSceneDelegate = nil;
-    return;
-  }
   (void)scene;
   self.displayLinkForegroundActive = NO;
   self.displayLinkSuspendedForIdle = NO;

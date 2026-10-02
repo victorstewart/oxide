@@ -29,7 +29,7 @@
 - The production shell counts thermal-state and Low Power Mode notifications cumulatively. Benchmark apps snapshot those counters at readiness and completion so a transient environment change cannot disappear behind matching endpoint state.
 - Camera perf hooks translate AVFoundation sample/event data into compact C typedefs before invoking Rust callbacks.
 - `_Static_assert` guards freeze the host-local camera typedef size/alignment so changes are caught before callbacks decode incompatible payloads.
-- Additional `_Static_assert` guards freeze `oxide_host_stats_t`, `oxide_host_camera_tick_perf_t`, and `oxide_host_app_debug_perf_t`, because those structs are read by benchmark harnesses and feed persisted device evidence.
+- Additional `_Static_assert` guards freeze `oxide_host_stats_t`, `oxide_host_camera_tick_perf_t`, and `oxide_host_app_debug_perf_t` for the legacy host profiling boundary.
 
 ## Preconditions and postconditions
 - Rust callback declarations and Objective-C typedefs must stay ABI-compatible.
@@ -56,7 +56,7 @@
 
 ## Testing and benchmarks
 - Production source selection and purity are covered by `production_shell_tests`.
-- Host camera typedef, host stats, tick perf, debug perf, and Swift mirror guard retention are covered by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
+- Host camera typedef, host stats, tick perf, and debug perf guard retention are covered by `cargo test --locked -j$(sysctl -n hw.ncpu) -p oxide-host-ios --test abi_layout_tests`.
 
 ## Changelog
 - 2026-08-06: added cumulative thermal-state and Low Power Mode transition counters for honest run admission.

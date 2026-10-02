@@ -47,7 +47,7 @@
 - Emitters copy the function pointer out of the slot before invoking it, so callback code does not run while holding the registry mutex.
 - Fallback logging for text, key, and push payloads validates null/length pairs before constructing slices; a null pointer with zero length is treated as an empty payload.
 - Renderer and app lifecycle behavior remains unchanged by callback hardening.
-- The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C or the Swift perf runtime, then submit the prepared frame to Metal or cancel it if no drawable is returned.
+- The drawable-backed iOS path now mirrors macOS: prepare Rust frame work first, acquire `nextDrawable` late with timeout enabled in Objective-C, then submit the prepared frame to Metal or cancel it if no drawable is returned.
 - The runtime-image uploader forwards A8 create/append/update/release operations plus row-major RGBA bytes and immutable nearest-or-linear sampling directly into the Metal resource owner. Append-only atlas growth preserves prepared users of earlier texels; destructive updates retain normal invalidation. It maps Metal's invalid zero-handle sentinel to `None` and releases successful handles through the same owner. The host performs no channel conversion, staging copy, or per-draw sampling decision.
 - Apps that use the original `App::draw` contract can render through one persistent host-owned `DrawListBuilder` adapter. `RenderContext` borrows it for the draw callback, and the host clears and reuses its storage rather than allocating an intermediate command graph each frame.
 - Apps with an owned `PreparedFrame` submit that draw list directly. The host only copies damage into reusable scratch and preserves the prepared frame across a generation-bound retry when drawable acquisition, Metal backpressure, or submission fails.
@@ -120,7 +120,7 @@ oxide_host_emit_touch(10, 0, 1.0, 2.0, 0.5, 1, 0.0, 0.0, 0, 0, 100);
 - 2026-07-14: routed critical memory warnings through the production retained-layer storage purge before requesting the rebuild frame.
 - 2026-07-13: purged byte-budgeted prepared Metal chunks alongside effect targets on critical memory pressure.
 - 2026-07-13: selected the three-slot visible Metal frame-resource mode instead of retaining the deeper offscreen/perf allocation.
-- 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts, including Swift benchmark-runtime host-stat mirror fields.
+- 2026-06-22: froze host stats and camera benchmark snapshot ABI layouts.
 - 2026-06-22: added iOS host camera typedef ABI static-assert retention coverage.
 - 2026-06-01: added macOS-side source gates keeping `AVCaptureVideoPreviewLayer` out of the product custom camera preview path.
 - 2026-06-01: enabled timeout-capable `CAMetalLayer.nextDrawable` acquisition on the product iOS host so prepared frames can cancel instead of blocking indefinitely under drawable pressure.

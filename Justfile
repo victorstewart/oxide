@@ -23,19 +23,11 @@ perf:
 perf-baseline:
     cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline
 
-ios-perf: ios-device-perf
+oxide-device-perf:
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --compare benchmarks/oxide-device/latest.json --json-out benchmarks/oxide-device/ci-current.json --markdown-out benchmarks/oxide-device/ci-current.md
 
-ios-perf-baseline: ios-device-perf-baseline
-
-ios-device-perf:
-    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios compare-device-perf --uikit-compare benchmarks/uikit-device/latest.json --oxide-compare benchmarks/oxide-device/latest.json
-
-ios-device-perf-baseline:
-    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios compare-device-perf --write-baseline
-
-oxide-device-perf: ios-device-perf
-
-oxide-device-perf-baseline: ios-device-perf-baseline
+oxide-device-perf-baseline:
+    cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline
 
 golden:
     ./scripts/run_golden.sh

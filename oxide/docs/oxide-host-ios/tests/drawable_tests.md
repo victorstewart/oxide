@@ -2,17 +2,17 @@
 
 ## Intention and purpose
 
-Protect late drawable acquisition and prepared-frame ownership in the iOS product and benchmark hosts.
+Protect late drawable acquisition and prepared-frame ownership in the iOS product and legacy test-scene hosts.
 
 ## Relation to the rest of the code
 
-- Reads production `src/ios/product_app.m`, legacy `src/ios/app.m`, the Swift benchmark runtime, and Rust `src/lib.rs` as static host contracts.
+- Reads production `src/ios/product_app.m`, legacy `src/ios/app.m`, and Rust `src/lib.rs` as static host contracts.
 - Complements fresh external A/B measurement of the real native host preparation path without adding a benchmark dependency or toggle to the product host.
 
 ## Entry points list
 
 - `frame_with_drawable_stub()` verifies the uninitialized status code.
-- `ios_tick_prepares_frame_before_acquiring_drawable()` and `ios_perf_runtime_prepares_frame_before_acquiring_drawable()` verify prepare/acquire/submit ordering and cancellation.
+- `ios_tick_prepares_frame_before_acquiring_drawable()` verifies prepare/acquire/submit ordering and cancellation.
 - `ios_metal_layer_uses_timeout_capable_drawable_acquisition()` verifies timeout support.
 - `native_frame_coalescing_reuses_app_storage()` verifies app-owned command storage survives host coalescing without a duplicate frame allocation.
 - `native_damage_handoff_reuses_router_and_submit_storage()` verifies router damage and submit scratch remain reusable across native frames.
@@ -20,11 +20,6 @@ Protect late drawable acquisition and prepared-frame ownership in the iOS produc
 - `raw_touch_and_display_link_timestamps_preserve_os_samples()` protects exact OS timing.
 - `injected_frame_demand_is_acknowledged_only_after_submit()` protects retry and wake-generation semantics, including rejection and drawable cancellation before a backpressure-skipped frame can emit observational submit feedback.
 - `memory_warnings_purge_effect_targets_and_request_a_frame()` requires critical pressure to purge effect targets, retained layers, prepared chunks, and immutable ID-mask fields before requesting a rebuild.
-- The remaining tests protect parked benchmark launch routing and foreground execution.
-- Parked launches keep the display awake through the ready/start/completion
-  handshake, then restore the prior idle policy and exit after publishing
-  completion. The device harness attaches Instruments to the already-ready
-  process, so the app owns its normal direct-launch lifecycle.
 
 ## Logic narrative
 
