@@ -26,6 +26,59 @@ struct ParsedFont
    swash_key: CacheKey,
 }
 
+#[cfg(test)]
+mod variation_cache_tests
+{
+   use super::{bake_paged_glyphs_into, Font, FontVariation, GlyphKey, PagedAtlas, RasterCtx, TextShaper};
+
+   const VARIABLE_FONT: &[u8] = include_bytes!("../tests/fixtures/NotoSans-VF.ttf");
+
+   #[test]
+   fn variable_font_coordinates_isolate_rasterization_after_bold()
+   {
+      let regular = Font::from_bytes(VARIABLE_FONT.to_vec());
+      let bold = Font::from_bytes_with_variations(
+         VARIABLE_FONT.to_vec(),
+         &[FontVariation {tag: *b"wght", value: 700.0}],
+      );
+      let mut shaper = TextShaper::default();
+      let regular_shape = shaper.shape(&regular, 0, "Regular and bold:", 18.0).unwrap();
+      let regular_advance = regular_shape.width();
+      let regular_glyphs = regular_shape.raw_glyphs();
+      let bold_shape = shaper.shape(&bold, 1, "Regular and bold:", 18.0).unwrap();
+      assert_ne!(regular_advance, bold_shape.width());
+      let bold_glyphs = shaper.shape(&bold, 1, "H", 32.0).unwrap().raw_glyphs();
+      let mut raster = RasterCtx::default();
+      let mut atlas = PagedAtlas::new(256, 256, 1);
+      let mut vertices = Vec::new();
+      let mut indices = Vec::new();
+      let mut runs = Vec::new();
+      bake_paged_glyphs_into::<false>(&bold, 1, 32.0, &bold_glyphs, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs, super::api::Color::rgba(0.0, 0.0, 0.0, 1.0), 0.0, 0.0, 1.0);
+      bake_paged_glyphs_into::<false>(&regular, 0, 32.0, &regular_glyphs, &mut raster, &mut atlas, &mut vertices, &mut indices, &mut runs, super::api::Color::rgba(0.0, 0.0, 0.0, 1.0), 0.0, 0.0, 1.0);
+      let regular_key = GlyphKey {font: 0, gid: regular_glyphs[0].glyph_id, raster_px: 32, sdf: true};
+      let after_bold = atlas.pages[0].atlas.map.get(&regular_key).unwrap();
+      let after_bold_pixels = glyph_pixels(&atlas.pages[0].atlas, after_bold);
+
+      let mut clean_raster = RasterCtx::default();
+      let mut clean_atlas = PagedAtlas::new(256, 256, 1);
+      bake_paged_glyphs_into::<false>(&regular, 0, 32.0, &regular_glyphs, &mut clean_raster, &mut clean_atlas, &mut Vec::new(), &mut Vec::new(), &mut Vec::new(), super::api::Color::rgba(0.0, 0.0, 0.0, 1.0), 0.0, 0.0, 1.0);
+      let clean = clean_atlas.pages[0].atlas.map.get(&regular_key).unwrap();
+      assert_eq!((after_bold.w, after_bold.h, after_bold.l, after_bold.t), (clean.w, clean.h, clean.l, clean.t));
+      assert_eq!(after_bold_pixels, glyph_pixels(&clean_atlas.pages[0].atlas, clean));
+   }
+
+   fn glyph_pixels(atlas: &super::Atlas, entry: &super::GlyphAtlasEntry) -> Vec<u8>
+   {
+      let mut pixels = Vec::with_capacity(entry.w as usize * entry.h as usize);
+      for row in entry.v as usize..entry.v as usize + entry.h as usize
+      {
+         let start = row * atlas.width as usize + entry.u as usize;
+         pixels.extend_from_slice(&atlas.data[start..start + entry.w as usize]);
+      }
+      pixels
+   }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontVariation
 {
@@ -124,6 +177,7 @@ impl Font {
           value: variation.value,
        })
     }
+
 }
 
 pub struct FontDb {
@@ -2558,6 +2612,7 @@ fn bake_paged_glyphs_into<const COUNT_STATS: bool>(
                         .builder(fontref)
                         .size(raster_px)
                         .hint(true)
+                        .normalized_coords(core::iter::empty::<i16>())
                         .variations(font.swash_variations())
                         .build(),
                 );
@@ -2802,6 +2857,7 @@ fn bake_glyphs_into<const COUNT_STATS: bool>(
                         .builder(fontref)
                         .size(raster_px)
                         .hint(true)
+                        .normalized_coords(core::iter::empty::<i16>())
                         .variations(font.swash_variations())
                         .build(),
                 );
