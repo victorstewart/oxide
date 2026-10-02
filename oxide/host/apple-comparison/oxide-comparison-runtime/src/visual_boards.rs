@@ -156,7 +156,7 @@ impl CachedRootChunk
 
 fn visual_error(error: impl std::fmt::Debug)
 {
-   let _ = std::fs::write(std::env::temp_dir().join("oxide-visual-render-error.txt"), format!("{error:?}"));
+   eprintln!("Oxide visual benchmark: {error:?}");
 }
 
 #[cfg(test)]

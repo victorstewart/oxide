@@ -616,7 +616,7 @@ fn submit_snapshot(runtime: &mut Runtime, drawable: *mut c_void, snapshot: &gfx:
    let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
    if let Err(error) = runtime.renderer.encode_snapshot(snapshot)
    {
-      let _ = std::fs::write(std::env::temp_dir().join("oxide-visual-render-error.txt"), format!("{error:?}\n{snapshot:#?}"));
+      eprintln!("Oxide visual benchmark: {error:?}\n{snapshot:#?}");
       return -9;
    }
    if runtime.renderer.submit(token).is_err() {return -5;}

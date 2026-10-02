@@ -168,7 +168,7 @@ fn visual_boards_restore_repeated_cycles_through_the_production_snapshot_path()
       let mut initial = None;
       for stage in [0, 1, 2, 0, 1, 2, 0]
       {
-         let snapshot = board.draw(stage, &mut text, &mut renderer, &mut builder).unwrap_or_else(|_| panic!("{name}/{stage}: {:?}", std::fs::read_to_string(std::env::temp_dir().join("oxide-visual-render-error.txt"))));
+         let snapshot = board.draw(stage, &mut text, &mut renderer, &mut builder).unwrap_or_else(|_| panic!("{name}/{stage}: rendering failed; see captured diagnostics"));
          let token = renderer.begin_frame(&gfx::FrameTarget, None);
          renderer.encode_snapshot(&snapshot).unwrap_or_else(|error| panic!("{name}/{stage}: {error:?}"));
          renderer.submit(token).expect("submit");
