@@ -18,13 +18,13 @@ aggregate:
     ./tools/sweep_agg/target/release/sweep_agg --input sweep.txt --csv sweep.csv --json sweep.json
 
 perf:
-    cd oxide && cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare benchmarks/workspace/latest.json --json-out benchmarks/workspace/ci-current.json --markdown-out benchmarks/workspace/ci-current.md
+    cd oxide && cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --compare artifacts/perf-runner/latest.json --json-out artifacts/perf-runner/ci-current.json --markdown-out artifacts/perf-runner/ci-current.md
 
 perf-baseline:
     cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --release --locked -j$(sysctl -n hw.ncpu) -p oxide-perf-runner -- --run-suite --write-baseline
 
 oxide-device-perf:
-    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --compare benchmarks/oxide-device/latest.json --json-out benchmarks/oxide-device/ci-current.json --markdown-out benchmarks/oxide-device/ci-current.md
+    cd oxide && cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --compare artifacts/oxide-device/latest.json --json-out artifacts/oxide-device/ci-current.json --markdown-out artifacts/oxide-device/ci-current.md
 
 oxide-device-perf-baseline:
     cd oxide && PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline

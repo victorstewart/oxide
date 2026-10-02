@@ -24,10 +24,9 @@ mod ios_core_comparison;
 
 use xctrace_record::{XctraceRecordProcess, XCTRACE_RECORD_WORKING_SET_LIMIT_BYTES};
 
-const DEFAULT_OXIDE_DEVICE_BASELINE_JSON: &str = "benchmarks/oxide-device/latest.json";
-const DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN: &str = "benchmarks/oxide-device/latest.md";
+const DEFAULT_OXIDE_DEVICE_BASELINE_JSON: &str = "artifacts/oxide-device/latest.json";
+const DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN: &str = "artifacts/oxide-device/latest.md";
 const DEFAULT_OXIDE_DEVICE_RESULT_ROOT: &str = "/tmp/oxide-device-perf";
-const DEFAULT_EXPERIMENT_MANIFEST: &str = "perf-experiments.toml";
 const EXPERIMENT_PERF_AB_GATE_PREFIX: &str = "perf-ab";
 const DEFAULT_OXIDE_HOST_SCHEME: &str = "OxideHost";
 const PREFERRED_UIKIT_DEVICE_NAMES: &[&str] =
@@ -818,7 +817,7 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios compare-core [--case NAME] [--device NAME|UDID] [--output PATH] [--apps PATH] [--team TEAM_ID] [--visual-evidence JSON]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check --manifest PATH [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios compare-core [--case NAME] [--device NAME|UDID] [--output PATH] [--apps PATH] [--team TEAM_ID] [--visual-evidence JSON]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -889,10 +888,7 @@ fn experiments_check(args: &[String]) -> Result<()> {
         print_experiments_check_usage();
         return Ok(());
     }
-    let manifest_path = match cli.manifest {
-        Some(path) => path,
-        None => locate_workspace_root()?.join(DEFAULT_EXPERIMENT_MANIFEST),
-    };
+    let manifest_path = cli.manifest.context("experiments check requires --manifest PATH to an external experiment manifest")?;
     let text = fs::read_to_string(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
     let today = match cli.today {
@@ -937,7 +933,7 @@ fn parse_experiments_check_cli(args: &[String]) -> Result<ExperimentsCheckCli> {
 }
 
 fn print_experiments_check_usage() {
-    println!("Usage: cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]");
+    println!("Usage: cargo xtask experiments check --manifest PATH [--today YYYY-MM-DD]");
 }
 
 pub fn check_experiment_manifest_text(text: &str, today: &str) -> Result<ExperimentCheckSummary> {
@@ -1279,7 +1275,6 @@ fn ios_oxide_device_perf(args: &[String]) -> Result<()> {
     }
     if let Some(path) = markdown_out.as_ref() {
         write_oxide_device_report_markdown(path, &report, comparison.as_ref())?;
-        write_oxide_device_dated_markdown(path, &report, comparison.as_ref())?;
     }
 
     print_oxide_device_summary(&report, comparison.as_ref());
@@ -3727,7 +3722,7 @@ fn build_oxide_onscreen_device_contract(
                 label: String::from("Workspace Engine Battery"),
                 status: String::from("separate"),
                 notes: vec![String::from(
-                    "The broader offscreen engine and microbenchmark suite remains in benchmarks/workspace and is intentionally not mixed into this device comparison report.",
+                    "The broader offscreen engine and microbenchmark suite is intentionally not mixed into this device comparison report.",
                 )],
             },
         ],
@@ -7747,26 +7742,12 @@ fn write_oxide_device_report_markdown(
         "PERF_REPORT_DATE=$(date +%F) cargo run --locked -j$(sysctl -n hw.ncpu) -p xtask -- ios oxide-device-perf --write-baseline",
     );
     markdown =
-        markdown.replace("benchmarks/workspace/latest.json", DEFAULT_OXIDE_DEVICE_BASELINE_JSON);
+        markdown.replace("artifacts/perf-runner/latest.json", DEFAULT_OXIDE_DEVICE_BASELINE_JSON);
     markdown =
-        markdown.replace("benchmarks/workspace/latest.md", DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN);
+        markdown.replace("artifacts/perf-runner/latest.md", DEFAULT_OXIDE_DEVICE_BASELINE_MARKDOWN);
     fs::write(path, markdown).with_context(|| format!("writing {}", path.display()))
 }
 
-fn write_oxide_device_dated_markdown(
-    latest_path: &Path,
-    report: &PerfReport,
-    comparison: Option<&oxide_perf_runner::PerfComparison>,
-) -> Result<()> {
-    let Some(label) = report.generated_label.as_ref() else {
-        return Ok(());
-    };
-    let dated_path = latest_path.with_file_name(format!("{}.md", label));
-    if dated_path == latest_path {
-        return Ok(());
-    }
-    write_oxide_device_report_markdown(&dated_path, report, comparison)
-}
 
 fn print_oxide_device_summary(
     report: &PerfReport,

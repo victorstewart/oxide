@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 pub mod paired;
 mod architecture_matrix;
 
-const DEFAULT_BASELINE_JSON: &str = "benchmarks/workspace/latest.json";
-const DEFAULT_BASELINE_MARKDOWN: &str = "benchmarks/workspace/latest.md";
+const DEFAULT_BASELINE_JSON: &str = "artifacts/perf-runner/latest.json";
+const DEFAULT_BASELINE_MARKDOWN: &str = "artifacts/perf-runner/latest.md";
 const FILE_PROMOTION_JOURNAL: &str = ".oxide-report-promotion.json";
 const FILE_PROMOTION_NEXT_JOURNAL: &str = ".oxide-report-promotion.next.json";
 const DEFAULT_MARKDOWN_RENDER_BENCH_ITERS: usize = 256;
@@ -1802,7 +1802,7 @@ fn print_usage()
    println!("oxide-perf-runner");
    println!("  default: legacy renderer summary for sweep scripts");
    println!("  --run-suite [--smoke] [--compare PATH] [--json-out PATH] [--markdown-out PATH]");
-   println!("  --write-baseline writes the canonical battery to benchmarks/workspace/latest.json and latest.md");
+   println!("  --write-baseline writes the canonical battery to artifacts/perf-runner/latest.json and latest.md");
    println!("  --paired-analyze INPUT --paired-json-out OUTPUT");
    println!("  --bench-markdown-render PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
    println!("  --bench-markdown-write PATH [--bench-markdown-compare PATH] [--bench-markdown-iters N]");
@@ -10594,21 +10594,10 @@ fn workspace_baseline_outputs(json_path: &Path, markdown_path: &Path, report: &P
       .context("validating perf report repository provenance before baseline promotion")?;
    let json = serialize_report_json(report)?;
    let markdown = render_markdown(report, comparison).into_bytes();
-   let mut outputs = vec![
+   let outputs = vec![
       (json_path.to_path_buf(), json),
-      (markdown_path.to_path_buf(), markdown.clone()),
+      (markdown_path.to_path_buf(), markdown),
    ];
-   if let Some(label) = report.generated_label.as_deref()
-   {
-      if let Some(parent) = markdown_path.parent()
-      {
-         let dated_path = parent.join(format!("{label}.md"));
-         if dated_path != markdown_path
-         {
-            outputs.push((dated_path, markdown));
-         }
-      }
-   }
    Ok(outputs)
 }
 
@@ -10653,16 +10642,7 @@ fn write_markdown_outputs(
     ensure_parent(latest_path)?;
     let body = render_markdown(report, comparison);
     fs::write(latest_path, body.as_bytes())
-        .with_context(|| format!("writing {}", latest_path.display()))?;
-    let Some(date_label) = report.generated_label.as_ref() else {
-        return Ok(());
-    };
-    let Some(parent) = latest_path.parent() else {
-        return Ok(());
-    };
-    let dated = parent.join(format!("{}.md", date_label));
-    ensure_parent(&dated)?;
-    fs::write(&dated, body.as_bytes()).with_context(|| format!("writing {}", dated.display()))
+        .with_context(|| format!("writing {}", latest_path.display()))
 }
 
 fn render_markdown(report: &PerfReport, comparison: Option<&PerfComparison>) -> String {
