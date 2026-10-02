@@ -117,6 +117,7 @@ struct LabelLayoutStyleKey {
     font_id: usize,
     font_px_bits: u32,
     wrap: bool,
+    wrap_mode: LabelWrapMode,
     max_w_bits: u32,
 }
 
@@ -229,11 +230,12 @@ fn normalized_device_scale(device_scale: f32) -> f32
 }
 
 impl LabelLayoutStyleKey {
-    fn new(font_id: usize, font_px: f32, wrap: bool, max_w: f32) -> Self {
+    fn new(font_id: usize, font_px: f32, wrap: bool, wrap_mode: LabelWrapMode, max_w: f32) -> Self {
         Self {
             font_id,
             font_px_bits: cache_f32_bits(font_px),
             wrap,
+            wrap_mode,
             max_w_bits: if wrap { cache_f32_bits(max_w) } else { 0 },
         }
     }
@@ -731,7 +733,12 @@ impl TextCtx {
         wrap: bool,
         max_w: f32,
     ) -> Option<Arc<CachedLabelLayout>> {
-        let key = LabelLayoutStyleKey::new(font_id, font_px, wrap, max_w);
+        self.cached_label_layout_with_wrap_mode::<COUNT_STATS>(text_value, font_id, font_px, wrap, LabelWrapMode::Word, max_w)
+    }
+
+   fn cached_label_layout_with_wrap_mode<const COUNT_STATS: bool>(&mut self, text_value: &str, font_id: usize, font_px: f32, wrap: bool, wrap_mode: LabelWrapMode, max_w: f32) -> Option<Arc<CachedLabelLayout>>
+   {
+        let key = LabelLayoutStyleKey::new(font_id, font_px, wrap, wrap_mode, max_w);
         self.label_layout_clock = self.label_layout_clock.wrapping_add(1);
         if let Some(entries) = self.label_layouts.get_mut(&key) {
             if let Some(entry) = entries.get_mut(text_value) {
@@ -754,6 +761,7 @@ impl TextCtx {
             font_id,
             font_px,
             wrap,
+            wrap_mode,
             max_w,
             COUNT_STATS,
         )?);
@@ -777,7 +785,7 @@ impl TextCtx {
         font_id: usize,
         font_px: f32,
     ) -> Option<Arc<CachedTextPrefixMetrics>> {
-        let key = LabelLayoutStyleKey::new(font_id, font_px, false, 0.0);
+        let key = LabelLayoutStyleKey::new(font_id, font_px, false, LabelWrapMode::Word, 0.0);
         self.label_layout_clock = self.label_layout_clock.wrapping_add(1);
         if let Some(entries) = self.text_prefixes.get_mut(&key) {
             if let Some(entry) = entries.get_mut(text_value) {
@@ -816,7 +824,7 @@ impl TextCtx {
             )?;
             return Some(CachedTextPrefixMetrics { map });
         }
-        let key = LabelLayoutStyleKey::new(font_id, font_px, false, 0.0);
+        let key = LabelLayoutStyleKey::new(font_id, font_px, false, LabelWrapMode::Word, 0.0);
         if let Some(entries) = self.label_layouts.get_mut(&key) {
             if let Some(entry) = entries.get_mut(text_value) {
                 entry.last_used = self.label_layout_clock;
@@ -958,6 +966,7 @@ impl TextCtx {
         font_id: usize,
         font_px: f32,
         wrap: bool,
+        wrap_mode: LabelWrapMode,
         max_w: f32,
         count_shapes: bool,
     ) -> Option<CachedLabelLayout> {
@@ -973,6 +982,7 @@ impl TextCtx {
                     font_id,
                     font_px,
                     wrap,
+                    wrap_mode,
                     max_w,
                     count_shapes,
                 )?;
@@ -990,7 +1000,7 @@ impl TextCtx {
                 )?],
             });
         }
-        if self.fallback_fonts.is_empty() && text_value.is_ascii() {
+        if wrap_mode == LabelWrapMode::Word && self.fallback_fonts.is_empty() && text_value.is_ascii() {
             if let Some(layout) = self.build_primary_ascii_wrapped_label_layout(
                 text_value,
                 font_id,
@@ -1020,7 +1030,7 @@ impl TextCtx {
             }
             cur.push_str(word);
             pending_spaces = trailing_spaces;
-            let Some(line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
+            let Some(mut line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
                 cur.truncate(prior_len);
                 continue;
             };
@@ -1031,12 +1041,24 @@ impl TextCtx {
                 }
                 cur.clear();
                 cur.push_str(word);
-                let Some(line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
+                let Some(next_line) = self.build_label_line(&cur, font_id, font_px, count_shapes) else {
                     cur.clear();
                     pending_spaces = 0;
                     continue;
                 };
-                cur_line = Some(line);
+                line = next_line;
+            }
+            if wrap_mode == LabelWrapMode::WordOrGrapheme && line.width > max_w {
+                let (tail, tail_line) = self.split_oversized_label_line_at_graphemes(
+                    &cur,
+                    font_id,
+                    font_px,
+                    max_w,
+                    count_shapes,
+                    &mut lines,
+                )?;
+                cur = tail;
+                cur_line = Some(tail_line);
             } else {
                 cur_line = Some(line);
             }
@@ -1048,6 +1070,30 @@ impl TextCtx {
         }
         Some(CachedLabelLayout { lines })
     }
+
+   fn split_oversized_label_line_at_graphemes(&mut self, text_value: &str, font_id: usize, font_px: f32, max_w: f32, count_shapes: bool, lines: &mut Vec<CachedLabelLine>) -> Option<(alloc::string::String, CachedLabelLine)>
+   {
+      let boundaries = text_boundary::cluster_boundaries(text_value);
+      let mut start = 0usize;
+      let mut previous_end = 0usize;
+      let mut prior = None;
+      for end in boundaries.into_iter().skip(1)
+      {
+         let line = self.build_label_line(&text_value[start..end], font_id, font_px, count_shapes)?;
+         if line.width > max_w && start < previous_end
+         {
+            lines.push(prior.take().unwrap());
+            start = previous_end;
+            prior = Some(self.build_label_line(&text_value[start..end], font_id, font_px, count_shapes)?);
+         }
+         else
+         {
+            prior = Some(line);
+         }
+         previous_end = end;
+      }
+      Some((alloc::string::String::from(&text_value[start..]), prior?))
+   }
 
     fn build_primary_ascii_wrapped_label_layout(
         &mut self,
@@ -1192,6 +1238,15 @@ pub enum Align {
     Right,
 }
 
+/// Chooses whether wrapped labels may split oversized words at grapheme boundaries.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum LabelWrapMode
+{
+   Word,
+   /// Breaks oversized words at grapheme boundaries; a single oversized grapheme may overflow.
+   WordOrGrapheme,
+}
+
 /// A top-aligned text layout box. Explicit line breaks are always honored;
 /// `wrap` additionally wraps words to the box width. Parent clips own overflow.
 pub struct Label {
@@ -1320,6 +1375,11 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
     up: &mut U,
     b: &mut DrawListBuilder,
 ) {
+    encode_label_cached_with_wrap_mode::<COUNT_STATS, U>(text_value, color, align, wrap, LabelWrapMode::Word, font_id, font_px, rect, device_scale, txt, up, b);
+}
+
+fn encode_label_cached_with_wrap_mode<const COUNT_STATS: bool, U: ImageUploader>(text_value: &str, color: gfx::Color, align: Align, wrap: bool, wrap_mode: LabelWrapMode, font_id: usize, font_px: f32, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, b: &mut DrawListBuilder)
+{
     if txt.fonts.font(font_id).is_none() {
         watch_text_event_lazy("label.skip_missing_font", font_id, text_value, || {
             format!("rect={:.1}x{:.1} font_px={:.1}", rect.w, rect.h, font_px)
@@ -1327,7 +1387,7 @@ fn encode_label_cached<const COUNT_STATS: bool, U: ImageUploader>(
         return;
     }
     let max_w = if wrap { rect.w.max(0.0) } else { f32::INFINITY };
-    let Some(layout) = txt.cached_label_layout::<COUNT_STATS>(text_value, font_id, font_px, wrap, max_w) else {
+    let Some(layout) = txt.cached_label_layout_with_wrap_mode::<COUNT_STATS>(text_value, font_id, font_px, wrap, wrap_mode, max_w) else {
         watch_text_event("label.shape_error", font_id, text_value, "cache_build_failed");
         return;
     };
@@ -1467,10 +1527,16 @@ impl Label
    /// Measures the top-aligned layout box using the same cached shaping and wrapping path as `encode`.
    pub fn measure(&self, max_width: f32, txt: &mut TextCtx) -> Option<[f32; 2]>
    {
+      self.measure_with_wrap_mode(max_width, LabelWrapMode::Word, txt)
+   }
+
+   /// Uses the requested word-breaking policy when `self.wrap` is enabled.
+   pub fn measure_with_wrap_mode(&self, max_width: f32, wrap_mode: LabelWrapMode, txt: &mut TextCtx) -> Option<[f32; 2]>
+   {
       let font = txt.fonts.font(self.font_id)?;
       let metrics = font.line_metrics(self.font_px)?;
       let width = if self.wrap {max_width.max(0.0)} else {f32::INFINITY};
-      let layout = txt.cached_label_layout::<false>(&self.text, self.font_id, self.font_px, self.wrap, width)?;
+      let layout = txt.cached_label_layout_with_wrap_mode::<false>(&self.text, self.font_id, self.font_px, self.wrap, wrap_mode, width)?;
       let line_advance = (self.font_px * 1.25).ceil();
       let height = metrics.ascent + metrics.descent + layout.lines.len().saturating_sub(1) as f32 * line_advance;
       let width = layout.lines.iter().fold(0.0_f32, |maximum, line| maximum.max(line.width));
@@ -1479,12 +1545,15 @@ impl Label
 
    pub fn encode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, b: &mut DrawListBuilder)
    {
+      self.encode_with_wrap_mode(rect, device_scale, LabelWrapMode::Word, txt, up, b);
+   }
+
+   /// Renders the same cached layout used by `measure_with_wrap_mode`.
+   pub fn encode_with_wrap_mode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, wrap_mode: LabelWrapMode, txt: &mut TextCtx, up: &mut U, b: &mut DrawListBuilder)
+   {
       let Some(metrics) = txt.fonts.font(self.font_id).and_then(|font| font.line_metrics(self.font_px)) else {return;};
       let baseline_rect = gfx::RectF::new(rect.x, rect.y + metrics.ascent, rect.w, rect.h);
-      encode_label_cached::<false, U>(
-         &self.text, self.color, self.align, self.wrap, self.font_id, self.font_px,
-         baseline_rect, device_scale, txt, up, b,
-      );
+      encode_label_cached_with_wrap_mode::<false, U>(&self.text, self.color, self.align, self.wrap, wrap_mode, self.font_id, self.font_px, baseline_rect, device_scale, txt, up, b);
    }
 }
 
@@ -1906,7 +1975,7 @@ mod button_timing_tests
 #[cfg(test)]
 mod label_paragraph_cache_tests
 {
-   use super::TextCtx;
+   use super::{LabelWrapMode, TextCtx};
 
    #[test]
    fn cursor_shaping_does_not_replace_hard_line_layout()
@@ -1924,6 +1993,21 @@ mod label_paragraph_cache_tests
          assert!(std::sync::Arc::ptr_eq(&layout, &again));
          assert_eq!(again.lines.len(), 5);
       }
+   }
+
+   #[test]
+   fn grapheme_wrap_mode_has_a_distinct_cached_layout()
+   {
+      let mut text = TextCtx::default();
+      let id = text.fonts.add_font(oxide_text::Font::from_bytes(include_bytes!("../assets/Asap-Regular.ttf").to_vec()));
+      let value = "Supercalifragilisticexpialidocious";
+      let word = text.cached_label_layout::<false>(value, id, 14.0, true, 72.0).unwrap();
+      let grapheme = text.cached_label_layout_with_wrap_mode::<false>(value, id, 14.0, true, LabelWrapMode::WordOrGrapheme, 72.0).unwrap();
+
+      assert_eq!(word.lines.len(), 1);
+      assert!(grapheme.lines.len() > 1);
+      assert!(!std::sync::Arc::ptr_eq(&word, &grapheme));
+      assert!(grapheme.lines.iter().all(|line| line.width <= 72.0));
    }
 }
 

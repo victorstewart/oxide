@@ -5,7 +5,7 @@ use oxide_platform_api::{
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
     encode_label_text, encode_label_text_profiled, Align, Badge, BadgeState, ButtonState, ImageFit,
-    ImageRegionView, ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState, OverlayStyle,
+    ImageRegionView, ImageUploader, ImageView, ImageZoomState, Label, LabelWrapMode, Overlay, OverlayState, OverlayStyle,
     PickerState, PickerStyle,
     PopupWindow, SliderState, SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner,
     TextCtx, TextInput, TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
@@ -1300,6 +1300,88 @@ fn label_measure_uses_the_actual_wrapped_line_layout() {
     let adjacent = Label {text: "Top\nBottom".into(), color: label.color, align: label.align, wrap: label.wrap, font_id: label.font_id, font_px: label.font_px}.measure(100.0, &mut text).unwrap();
     let blank = Label {text: "Top\n\nBottom".into(), color: label.color, align: label.align, wrap: label.wrap, font_id: label.font_id, font_px: label.font_px}.measure(100.0, &mut text).unwrap();
     assert!((blank[1] - adjacent[1] - line_advance).abs() <= f32::EPSILON);
+}
+
+#[test]
+fn label_grapheme_wrap_mode_bounds_long_tokens_and_matches_measurement()
+{
+   let mut text = TextCtx::default();
+   let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   let label = Label {
+      text: "Supercalifragilisticexpialidocious".into(),
+      color: Color::rgba(0.1, 0.1, 0.1, 1.0),
+      align: Align::Left,
+      wrap: true,
+      font_id: 0,
+      font_px: 14.0,
+   };
+   let narrow = 72.0;
+   let legacy = label.measure(narrow, &mut text).unwrap();
+   let measured = label.measure_with_wrap_mode(narrow, LabelWrapMode::WordOrGrapheme, &mut text).unwrap();
+   let metrics = text.fonts.font(0).unwrap().line_metrics(label.font_px).unwrap();
+   let line_advance = (label.font_px * 1.25).ceil();
+   let mut builder = DrawListBuilder::new();
+   let mut uploader = CountingUploader::default();
+   label.encode_with_wrap_mode(
+      RectF::new(0.0, 0.0, narrow, 300.0),
+      2.0,
+      LabelWrapMode::WordOrGrapheme,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+   let rendered_lines = builder.drawlist().items.iter().filter(|item| matches!(item, DrawCmd::GlyphRun { .. })).count();
+
+   assert!(legacy[0] > narrow);
+   assert!(measured[0] <= narrow);
+   assert!(rendered_lines > 1);
+   assert!((measured[1] - (metrics.ascent + metrics.descent + (rendered_lines - 1) as f32 * line_advance)).abs() <= f32::EPSILON);
+
+   let packed = Label {
+      text: "Supercalifragilisticexpialidocious a".into(),
+      color: label.color,
+      align: label.align,
+      wrap: label.wrap,
+      font_id: label.font_id,
+      font_px: label.font_px,
+   };
+   let packing_width = 90.0;
+   let long_at_packing_width = label.measure_with_wrap_mode(packing_width, LabelWrapMode::WordOrGrapheme, &mut text).unwrap();
+   assert_eq!(
+      packed.measure_with_wrap_mode(packing_width, LabelWrapMode::WordOrGrapheme, &mut text).unwrap()[1],
+      long_at_packing_width[1],
+   );
+
+   let cluster = Label {
+      text: "e\u{301}".into(),
+      color: label.color,
+      align: label.align,
+      wrap: label.wrap,
+      font_id: label.font_id,
+      font_px: label.font_px,
+   };
+   let cluster_width = cluster.measure(f32::INFINITY, &mut text).unwrap()[0];
+   assert!(cluster.measure_with_wrap_mode(1.0, LabelWrapMode::WordOrGrapheme, &mut text).unwrap()[0] > 1.0);
+   let combining = Label {
+      text: "e\u{301}".repeat(4),
+      color: label.color,
+      align: label.align,
+      wrap: label.wrap,
+      font_id: label.font_id,
+      font_px: label.font_px,
+   };
+   builder.clear();
+   combining.encode_with_wrap_mode(
+      RectF::new(0.0, 0.0, cluster_width + 0.1, 300.0),
+      2.0,
+      LabelWrapMode::WordOrGrapheme,
+      &mut text,
+      &mut uploader,
+      &mut builder,
+   );
+   assert_eq!(builder.drawlist().items.iter().filter(|item| matches!(item, DrawCmd::GlyphRun { .. })).count(), 4);
 }
 
 #[test]
