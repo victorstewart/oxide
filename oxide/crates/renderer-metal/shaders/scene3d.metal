@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 struct Scene3dVertex
 {
@@ -80,7 +81,7 @@ fragment float4 f_scene3d(Scene3dRaster raster [[stage_in]], device const Scene3
    } else if (mat.material == 2) {
       c.rgb = min(c.rgb * max(mat.params.x, 1.0), float3(1.0));
    }
-   return c;
+   return source_to_output(c);
 }
 
 fragment float4 f_scene3d_color(Scene3dColorRaster raster [[stage_in]], device const Scene3dMaterial *materials [[buffer(0)]])
@@ -89,5 +90,5 @@ fragment float4 f_scene3d_color(Scene3dColorRaster raster [[stage_in]], device c
    float4 c = raster.color;
    c.rgb *= mat.color.rgb;
    c.a *= mat.color.a;
-   return c;
+   return source_to_output(c);
 }

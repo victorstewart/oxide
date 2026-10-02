@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 struct TextVSIn { float2 pos [[attribute(0)]]; float2 uv [[attribute(1)]]; float4 rgba [[attribute(2)]]; };
 struct TextVSOut { float4 position [[position]]; float2 uv; };
@@ -93,46 +94,46 @@ vertex GlyphVSOut v_prepared_glyph(uint vertexId [[vertex_id]], uint instanceId 
 fragment float4 f_glyph(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]])
 {
     float alpha = atlas.sample(s, in.uv).r;
-    return float4(in.color.rgb, in.color.a * alpha);
+    return source_to_output(float4(in.color.rgb, in.color.a * alpha));
 }
 
 fragment float4 f_prepared_glyph(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
     float alpha = atlas.sample(s, in.uv).r;
-    return float4(in.color.rgb, in.color.a * alpha * instance.opacityAndPadding.x);
+    return source_to_output(float4(in.color.rgb, in.color.a * alpha * instance.opacityAndPadding.x));
 }
 
 fragment float4 f_glyph_sdf(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]])
 {
     float distance = atlas.sample(s, in.uv).r;
     float alpha = sdfCoverage(distance);
-    return float4(in.color.rgb, in.color.a * alpha);
+    return source_to_output(float4(in.color.rgb, in.color.a * alpha));
 }
 
 fragment float4 f_prepared_glyph_sdf(GlyphVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
     float distance = atlas.sample(s, in.uv).r;
     float alpha = sdfCoverage(distance);
-    return float4(in.color.rgb, in.color.a * alpha * instance.opacityAndPadding.x);
+    return source_to_output(float4(in.color.rgb, in.color.a * alpha * instance.opacityAndPadding.x));
 }
 
 fragment float4 f_text(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]]) {
     // Sample alpha from the atlas (assume single-channel in .a or .r; using .r here)
     float a = atlas.sample(s, in.uv).r;
-    return float4(uni.color.rgb, uni.color.a * a);
+    return source_to_output(float4(uni.color.rgb, uni.color.a * a));
 }
 
 fragment float4 f_prepared_text(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
     float alpha = atlas.sample(s, in.uv).r;
-    return float4(uni.color.rgb, uni.color.a * alpha * instance.opacityAndPadding.x);
+    return source_to_output(float4(uni.color.rgb, uni.color.a * alpha * instance.opacityAndPadding.x));
 }
 
 fragment float4 f_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]]) {
     float4 c = img.sample(s, in.uv);
     c.rgb *= uni.color.rgb;
     c.a *= uni.color.a;
-    return c;
+    return source_to_output(c);
 }
 
 fragment float4 f_prepared_image_mesh(TextVSOut in [[stage_in]], texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]], constant PreparedInstance& instance [[buffer(3)]])
@@ -140,7 +141,7 @@ fragment float4 f_prepared_image_mesh(TextVSOut in [[stage_in]], texture2d<float
     float4 c = img.sample(s, in.uv);
     c.rgb *= uni.color.rgb;
     c.a *= uni.color.a * instance.opacityAndPadding.x;
-    return c;
+    return source_to_output(c);
 }
 
 // SDF variant: treat atlas.r as signed-distance remapped to [0,1] with 0.5 as edge
@@ -148,12 +149,12 @@ fragment float4 f_text_sdf(TextVSOut in [[stage_in]], texture2d<float> atlas [[t
 {
     float distance = atlas.sample(s, in.uv).r;
     float alpha = sdfCoverage(distance);
-    return float4(uni.color.rgb, uni.color.a * alpha);
+    return source_to_output(float4(uni.color.rgb, uni.color.a * alpha));
 }
 
 fragment float4 f_prepared_text_sdf(TextVSOut in [[stage_in]], texture2d<float> atlas [[texture(0)]], sampler s [[sampler(0)]], constant TextUniform& uni [[buffer(0)]], constant PreparedInstance& instance [[buffer(3)]])
 {
     float distance = atlas.sample(s, in.uv).r;
     float alpha = sdfCoverage(distance);
-    return float4(uni.color.rgb, uni.color.a * alpha * instance.opacityAndPadding.x);
+    return source_to_output(float4(uni.color.rgb, uni.color.a * alpha * instance.opacityAndPadding.x));
 }

@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 // Standalone instanced-rect vertex for camera (self-contained for build.rs
 // per-file compile)
@@ -107,7 +108,7 @@ fragment float4 f_camera_nv12(CamVSOut in [[stage_in]],
   // Grayscale path: use luma only (plus tint)
   float3 base = mix(rgb, float3(y, y, y), clamp(p.grayscale, 0.0, 1.0));
   float3 mod = base * p.tint.rgb;
-  return float4(mod, p.tint.a);
+  return source_to_output(float4(mod, p.tint.a));
 }
 
 fragment float4 f_camera_nv12_legacy(CamVSOut in [[stage_in]],
@@ -148,7 +149,7 @@ fragment float4 f_camera_nv12_legacy(CamVSOut in [[stage_in]],
   float3 rgb = yuv_to_rgb_matrix(y, u, v, m);
   float3 base = mix(rgb, float3(y, y, y), clamp(p.grayscale, 0.0, 1.0));
   float3 mod = base * p.tint.rgb;
-  return float4(mod, p.tint.a);
+  return source_to_output(float4(mod, p.tint.a));
 }
 
 fragment float4 f_camera_nv12_preview_fast_full(
@@ -167,7 +168,7 @@ fragment float4 f_camera_nv12_preview_fast_full(
   half g = half(clamp(p.grayscale, 0.0, 1.0));
   half3 base = mix(rgb, half3(y, y, y), g);
   half3 mod = base * half3(p.tint.rgb);
-  return float4(float3(mod), p.tint.a);
+  return source_to_output(float4(float3(mod), p.tint.a));
 }
 
 fragment float4 f_camera_nv12_preview_fast_video(
@@ -190,7 +191,7 @@ fragment float4 f_camera_nv12_preview_fast_video(
   half g = half(clamp(p.grayscale, 0.0, 1.0));
   half3 base = mix(rgb, half3(y, y, y), g);
   half3 mod = base * half3(p.tint.rgb);
-  return float4(float3(mod), p.tint.a);
+  return source_to_output(float4(float3(mod), p.tint.a));
 }
 
 fragment float4 f_camera_bgra_bench(CamVSOut in [[stage_in]],
@@ -210,5 +211,5 @@ fragment float4 f_camera_bgra_bench(CamVSOut in [[stage_in]],
   float3 base = mix(sample_rgba.rgb, float3(luma, luma, luma),
                     clamp(p.grayscale, 0.0, 1.0));
   float3 mod = base * p.tint.rgb;
-  return float4(mod, p.tint.a);
+  return source_to_output(float4(mod, p.tint.a));
 }

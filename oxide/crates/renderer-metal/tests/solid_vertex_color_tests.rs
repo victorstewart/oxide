@@ -11,6 +11,6 @@ fn solid_shader_inherits_zero_and_interpolates_nonzero_vertex_color()
    assert!(shader.contains("constantSolidUniform&uni[[buffer(1)]]"));
    assert!(shader.contains("all(in.rgba==float4(0.0))?uni.color:in.rgba"));
    assert!(shader.contains("o.rgba="));
-   assert!(shader.contains("returnin.rgba;"));
+   assert!(shader.contains("returnsource_to_output(in.rgba);"));
    assert!(!shader.contains("constantSolidUniform&uni[[buffer(0)]]"));
 }

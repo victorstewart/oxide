@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 // VSOut with instance id is defined here and reused by UI effects
 struct VSOut {
@@ -84,7 +85,7 @@ fragment float4 f_bloom_composite(VSOut in [[stage_in]], texture2d<float> src [[
 {
    float gain = max(strength, 0.0);
    float4 c = src.sample(s, in.uv);
-   return float4(c.rgb * gain, c.a * gain);
+   return source_to_output(float4(c.rgb * gain, c.a * gain));
 }
 
 // Dedicated backdrop rect pipeline I/O. Keep names unique to avoid cross-file collisions.
@@ -132,10 +133,10 @@ fragment float4 f_backdrop(BackdropVSOut in [[stage_in]],
         discard_fragment();
     }
     // Use normalized dp-space UV to avoid clip-space orientation ambiguity.
-    float4 c = src.sample(s, in.uv);
-    c.rgb *= float3(p.tint.x, p.tint.y, p.tint.z);
+    float4 c = output_to_source(src.sample(s, in.uv));
+    c.rgb *= p.tint.rgb;
     c.a *= p.tint.w;
-    return c;
+    return source_to_output(c);
 }
 
 // rect: (x, y, w, h), tint: caller material tint color.
@@ -159,8 +160,8 @@ fragment float4 f_visual_effect(BackdropVSOut in [[stage_in]],
         discard_fragment();
     }
 
-    float4 c = src.sample(s, in.uv);
+    float4 c = output_to_source(src.sample(s, in.uv));
     float effect_alpha = clamp(p.tint.a, 0.0, 1.0);
     float3 material = dark_popup_blur_material(c.rgb, clamp(p.tint.rgb, 0.0, 1.0));
-    return float4(mix(c.rgb, material, effect_alpha), c.a);
+    return source_to_output(float4(mix(c.rgb, material, effect_alpha), c.a));
 }

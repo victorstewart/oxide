@@ -1487,34 +1487,38 @@ impl Default for ProgressBar {
     }
 }
 
-impl ProgressBar {
-    pub fn encode(&self, rect: gfx::RectF, phase: f32, b: &mut DrawListBuilder) {
-        // Track
-        b.rrect(rect, [self.corner; 4], self.track);
-        // Draw determinate or indeterminate fill
-        match self.value {
-            Some(mut v) => {
-                v = v.clamp(0.0, 1.0);
-                let w = rect.w * v;
-                if w > 0.5 {
-                    b.rrect(
-                        gfx::RectF::new(rect.x, rect.y, w, rect.h),
-                        [self.corner; 4],
-                        self.fill,
-                    );
-                }
+impl ProgressBar
+{
+   /// Draw the configured track and fractional fill inside `rect`, including
+   /// positive fills smaller than one logical pixel. Empty rectangles draw nothing.
+   pub fn encode(&self, rect: gfx::RectF, phase: f32, b: &mut DrawListBuilder)
+   {
+      if rect.w <= 0.0 || rect.h <= 0.0 {return;}
+      let corner = self.corner.max(0.0).min(rect.w.min(rect.h) * 0.5);
+      b.rrect(rect, [corner; 4], self.track);
+      match self.value
+      {
+         Some(value) =>
+         {
+            let width = rect.w * value.clamp(0.0, 1.0);
+            if width > 0.0
+            {
+               b.rrect(gfx::RectF::new(rect.x, rect.y, width, rect.h),
+                  [corner.min(width * 0.5); 4], self.fill);
             }
-            None => {
-                // Indeterminate: moving segment ~30% width looping with phase 0..1
-                let seg = (rect.w * 0.3).max(8.0);
-                let t = (phase.fract() + 1.0).fract();
-                let x = rect.x + (rect.w - seg) * t;
-                let mut c = self.fill;
-                c.a *= 0.9;
-                b.rrect(gfx::RectF::new(x, rect.y, seg, rect.h), [self.corner; 4], c);
-            }
-        }
-    }
+         }
+         None =>
+         {
+            let width = (rect.w * 0.3).max(8.0).min(rect.w);
+            let progress = (phase.fract() + 1.0).fract();
+            let x = rect.x + (rect.w - width) * progress;
+            let mut color = self.fill;
+            color.a *= 0.9;
+            b.rrect(gfx::RectF::new(x, rect.y, width, rect.h),
+               [corner.min(width * 0.5); 4], color);
+         }
+      }
+   }
 }
 
 // ----- Camera background -----

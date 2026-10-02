@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 // Dedicated UI vertex output with instance id to avoid cross-file collisions.
 struct UIVSOut { float4 position [[position]]; float2 pos_px; float2 rect_origin [[flat]]; uint iid [[flat]]; };
@@ -141,7 +142,7 @@ fragment float4 f_rrect(UIVSOut in [[stage_in]], const device RRectParams* parr 
     float aa = max(fwidth(dist), 1e-4);
     float alpha = 1.0 - smoothstep(-aa, aa, dist);
     if (alpha <= 0.0) discard_fragment();
-    return float4(p.color.rgb, p.color.a * alpha);
+    return source_to_output(float4(p.color.rgb, p.color.a * alpha));
 }
 
 fragment float4 f_prepared_rrect(UIVSOut in [[stage_in]],
@@ -162,7 +163,7 @@ fragment float4 f_prepared_rrect(UIVSOut in [[stage_in]],
     float aa = max(fwidth(distance), 1e-4);
     float alpha = 1.0 - smoothstep(-aa, aa, distance);
     if (alpha <= 0.0) discard_fragment();
-    return float4(p.color.rgb, p.color.a * alpha * instance.opacityAndPadding.x);
+    return source_to_output(float4(p.color.rgb, p.color.a * alpha * instance.opacityAndPadding.x));
 }
 
 float mapNine(float x, float L, float R, float Wt, float Ws)
@@ -185,7 +186,19 @@ fragment float4 f_nine_slice(UIVSOut in [[stage_in]],
     float2 uv = float2(u / p.texSize.x, v / p.texSize.y);
     float4 c = img.sample(s, uv);
     c.a *= p.alpha;
-    return c;
+    return source_to_output(c);
+}
+
+fragment float4 f_layer_composite(UIVSOut in [[stage_in]],
+                                  texture2d<float> img [[texture(0)]], sampler s [[sampler(0)]],
+                                  const device NineSliceParams* parr [[buffer(1)]])
+{
+    NineSliceParams p = parr[in.iid];
+    float2 xy = in.pos_px - in.rect_origin;
+    if (xy.x < 0.0 || xy.y < 0.0 || xy.x > p.rect.z || xy.y > p.rect.w) discard_fragment();
+    float u = mapNine(xy.x, p.sliceLTRB.x, p.sliceLTRB.z, p.rect.z, p.texSize.x);
+    float v = mapNine(xy.y, p.sliceLTRB.y, p.sliceLTRB.w, p.rect.w, p.texSize.y);
+    return img.sample(s, float2(u / p.texSize.x, v / p.texSize.y));
 }
 
 fragment float4 f_layer_composite_aligned(UIVSOut in [[stage_in]],
@@ -218,7 +231,7 @@ fragment float4 f_spinner(UIVSOut in [[stage_in]], const device SpinnerParams* s
                   - (1.0 - smoothstep(sp.radius + sp.thickness*0.5 - aa, sp.radius + sp.thickness*0.5 + aa, r));
     float alpha = (inArc ? 1.0 : 0.0) * clamp(ring, 0.0, 1.0) * sp.alpha;
     if (alpha <= 0.01) discard_fragment();
-    return float4(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, alpha);
+    return source_to_output(float4(236.0 / 255.0, 240.0 / 255.0, 241.0 / 255.0, alpha));
 }
 
 struct ImageArgs { array<texture2d<float>, 128> imgs [[id(0)]]; };
@@ -236,7 +249,7 @@ fragment float4 f_image(UIVSOut in [[stage_in]],
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
     float4 c = A.imgs[p.texIndex].sample(s, uv);
     c.a *= p.alpha;
-    return c;
+    return source_to_output(c);
 }
 
 fragment float4 f_prepared_image(UIVSOut in [[stage_in]],
@@ -253,7 +266,7 @@ fragment float4 f_prepared_image(UIVSOut in [[stage_in]],
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
     float4 color = A.imgs[p.texIndex].sample(s, uv);
     color.a *= p.alpha * instance.opacityAndPadding.x;
-    return color;
+    return source_to_output(color);
 }
 
 fragment float4 f_image_single(UIVSOut in [[stage_in]],
@@ -269,7 +282,7 @@ fragment float4 f_image_single(UIVSOut in [[stage_in]],
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
     float4 c = img.sample(s, uv);
     c.a *= p.alpha;
-    return c;
+    return source_to_output(c);
 }
 
 fragment float4 f_prepared_image_single(UIVSOut in [[stage_in]],
@@ -286,7 +299,7 @@ fragment float4 f_prepared_image_single(UIVSOut in [[stage_in]],
     float2 uv = float2(uv_px.x / p.texSize.x, uv_px.y / p.texSize.y);
     float4 color = img.sample(s, uv);
     color.a *= p.alpha * instance.opacityAndPadding.x;
-    return color;
+    return source_to_output(color);
 }
 
 // BackdropParams is defined in effects.metal

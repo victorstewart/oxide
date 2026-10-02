@@ -714,6 +714,8 @@ pub enum MetalInitError {
     NoQueue,
     #[error("failed to compile shader library: {0}")]
     Library(String),
+    #[error("invalid renderer configuration: {0}")]
+    Configuration(String),
     #[error("pipeline state error in {0}")]
     Pipeline(String),
 }
@@ -756,6 +758,20 @@ fn build_init_stage<T>(
 }
 
 const DEFAULT_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/default.metallib"));
+const SRGB_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/srgb.metallib"));
+
+/// SDR source-over blend space. CPU Color values and uploaded sRGB images keep
+/// their existing contracts in both modes; alpha is never gamma encoded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SdrCompositing
+{
+   /// Blend linear light and encode the final display color (the existing default).
+   #[default]
+   Linear,
+   /// Encode each source to sRGB before blending, as conventional UIKit UI does.
+   /// Requires a BGRA8Unorm drawable; incompatible with HDR output.
+   SrgbSourceOver,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetalRendererConfig {
@@ -1638,7 +1654,11 @@ impl MetalRenderer {
         ]
     }
 
-    fn new_with_config_impl(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
+    fn new_with_config_impl(config: MetalRendererConfig, compositing: SdrCompositing) -> Result<Self, MetalInitError> {
+        if config.wants_hdr && compositing == SdrCompositing::SrgbSourceOver
+        {
+           return Err(MetalInitError::Configuration(String::from("sRGB source-over requires SDR output")));
+        }
         let simulator = running_on_ios_simulator();
         let frame_resource_depth = config.frame_resource_depth.clamp(1, MAX_FRAME_RESOURCE_DEPTH);
         ios_log(&format!(
@@ -1662,15 +1682,22 @@ impl MetalRenderer {
         ios_log("oxide.renderer-metal: init after device resolve");
         let queue = device.new_command_queue();
         ios_log("oxide.renderer-metal: init after new_command_queue");
-        if DEFAULT_METALLIB.is_empty() {
+        let shader_bytes = if compositing == SdrCompositing::SrgbSourceOver {SRGB_METALLIB} else {DEFAULT_METALLIB};
+        if shader_bytes.is_empty() {
             return Err(MetalInitError::Library(String::from(
-                "renderer-metal default.metallib is empty; build-time shader compilation is required",
+                "renderer-metal shader library is empty; build-time shader compilation is required",
             )));
         }
         ios_log("oxide.renderer-metal: init before shader library load");
         let library = device
-            .new_library_with_data(DEFAULT_METALLIB)
+            .new_library_with_data(shader_bytes)
             .map_err(|e| MetalInitError::Library(format!("{}", e)))?;
+        // Float bloom intermediates retain linear radiance in either output mode.
+        let linear_library = if compositing == SdrCompositing::SrgbSourceOver
+        {
+           device.new_library_with_data(DEFAULT_METALLIB).map_err(|error| MetalInitError::Library(error.to_string()))?
+        }
+        else {library.to_owned()};
         ios_log("oxide.renderer-metal: init after shader library load");
         let mut sample_count = apply_simulator_sample_count(simulator, config.sample_count);
         while sample_count > 1 && !device.supports_texture_sample_count(sample_count as u64) {
@@ -1682,7 +1709,9 @@ impl MetalRenderer {
 
         let mut hdr_enabled = apply_simulator_hdr(simulator, config.wants_hdr);
         let mut color_format =
-            if hdr_enabled { MTLPixelFormat::BGRA10_XR } else { MTLPixelFormat::BGRA8Unorm_sRGB };
+            if hdr_enabled { MTLPixelFormat::BGRA10_XR }
+            else if compositing == SdrCompositing::SrgbSourceOver {MTLPixelFormat::BGRA8Unorm}
+            else { MTLPixelFormat::BGRA8Unorm_sRGB };
 
         let direct_preview_only = config.direct_preview_only;
         let build_pipelines = |fmt: MTLPixelFormat| -> Result<_, MetalInitError> {
@@ -1958,7 +1987,7 @@ impl MetalRenderer {
         let pso_scene3d_tri_add_bloom = build_init_stage("pso.scene3d.tri_add_bloom", || {
             build_scene3d_pso(
                 &device,
-                &library,
+                &linear_library,
                 MTLPixelFormat::RGBA16Float,
                 false,
                 scene3d::BlendMode3d::Additive,
@@ -2029,7 +2058,7 @@ impl MetalRenderer {
         let pso_scene3d_line_add_bloom = build_init_stage("pso.scene3d.line_add_bloom", || {
             build_scene3d_pso(
                 &device,
-                &library,
+                &linear_library,
                 MTLPixelFormat::RGBA16Float,
                 false,
                 scene3d::BlendMode3d::Additive,
@@ -2040,7 +2069,7 @@ impl MetalRenderer {
         let pso_bloom_blur = build_init_stage("pso.bloom.blur", || {
             build_blur_pso(
                 &device,
-                &library,
+                &linear_library,
                 MTLPixelFormat::RGBA16Float,
                 "f_blur",
                 "pso.bloom.blur.create",
@@ -2052,7 +2081,7 @@ impl MetalRenderer {
             build_init_stage("pso.bloom.blur_paired", || {
                 build_blur_pso(
                     &device,
-                    &library,
+                    &linear_library,
                     MTLPixelFormat::RGBA16Float,
                     "f_blur_paired",
                     "pso.bloom.blur_paired.create",
@@ -2565,8 +2594,16 @@ impl MetalRenderer {
     }
 
     pub fn new_with_config(config: MetalRendererConfig) -> Result<Self, MetalInitError> {
-        Self::new_with_config_impl(config)
+        Self::new_with_config_impl(config, SdrCompositing::Linear)
     }
+
+   /// Select the SDR blend space at initialization. Shader libraries and pipelines
+   /// are prepared once; the warm frame loop does not compile or switch libraries.
+   /// `SrgbSourceOver` hosts must supply a BGRA8Unorm drawable tagged as sRGB.
+   pub fn new_with_config_and_sdr_compositing(config: MetalRendererConfig, compositing: SdrCompositing) -> Result<Self, MetalInitError>
+   {
+      Self::new_with_config_impl(config, compositing)
+   }
 
     pub fn new_default() -> Result<Self, MetalInitError> {
         Self::new_with_config(MetalRendererConfig::default())
@@ -5473,7 +5510,7 @@ impl MetalRenderer {
         let rect_dp = [0.0, 0.0, vp_dp[0], vp_dp[1]];
 
         let desc = TextureDescriptor::new();
-        desc.set_pixel_format(MTLPixelFormat::BGRA8Unorm_sRGB);
+        desc.set_pixel_format(self.color_format);
         desc.set_texture_type(MTLTextureType::D2);
         desc.set_width(w as u64);
         desc.set_height(h as u64);
@@ -5533,7 +5570,7 @@ impl MetalRenderer {
     }
 
     pub fn readback_bgra8(&mut self) -> Option<(u32, u32, alloc::vec::Vec<u8>)> {
-        if self.color_format != MTLPixelFormat::BGRA8Unorm_sRGB {
+        if !matches!(self.color_format, MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA8Unorm) {
             return None;
         }
         if let Some(tex) = self.target_tex.as_ref() {
@@ -5547,7 +5584,7 @@ impl MetalRenderer {
     {
         let texture = self.target_tex.as_ref()?;
         let (format, bytes_per_pixel) = match self.color_format {
-            MTLPixelFormat::BGRA8Unorm_sRGB => (MetalSnapshotColorFormat::Bgra8Srgb, 4),
+            MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::BGRA8Unorm => (MetalSnapshotColorFormat::Bgra8Srgb, 4),
             MTLPixelFormat::BGRA10_XR => (MetalSnapshotColorFormat::Bgra10Xr, 8),
             _ => return None,
         };
@@ -5759,6 +5796,7 @@ impl MetalRenderer {
         if self.frame_color_initialized && self.persistent_target_valid {
             ca0.set_load_action(MTLLoadAction::Load);
         } else if let Some(color) = pass.clear_color {
+            let color = color_for_target(color, self.color_format);
             ca0.set_load_action(MTLLoadAction::Clear);
             ca0.set_clear_color(MTLClearColor {
                 red: color.r as f64,
@@ -10582,6 +10620,24 @@ fn yuv_to_rgb_bt709_full_range(y: f32, u: f32, v: f32) -> [f32; 3] {
 }
 
 #[inline]
+fn color_for_target(mut color: api::Color, format: MTLPixelFormat) -> api::Color
+{
+   if format == MTLPixelFormat::BGRA8Unorm
+   {
+      let encode = |value: f32| {
+         let magnitude = value.abs();
+         let encoded = if magnitude <= 0.003_130_8 {magnitude * 12.92}
+            else {1.055 * magnitude.powf(1.0 / 2.4) - 0.055};
+         encoded.copysign(value)
+      };
+      color.r = encode(color.r);
+      color.g = encode(color.g);
+      color.b = encode(color.b);
+   }
+   color
+}
+
+#[inline]
 fn linear_to_srgb_u8(value: f32) -> u8 {
     let linear = value.clamp(0.0, 1.0);
     let srgb =
@@ -11366,7 +11422,7 @@ fn build_layer_composite_pso(
     sample_count: u32,
 ) -> Result<RenderPipelineState, MetalInitError> {
     let vertex = pipeline_function(lib, "layer_composite.vertex", "v_inst_rect")?;
-    let fragment = pipeline_function(lib, "layer_composite.fragment", "f_nine_slice")?;
+    let fragment = pipeline_function(lib, "layer_composite.fragment", "f_layer_composite")?;
     let descriptor = RenderPipelineDescriptor::new();
     descriptor.set_vertex_function(Some(&vertex));
     descriptor.set_fragment_function(Some(&fragment));
@@ -12197,7 +12253,7 @@ impl MetalRenderer {
             MTLPixelFormat::R8Unorm | MTLPixelFormat::R8Uint => 1,
             MTLPixelFormat::RG8Unorm => 2,
             MTLPixelFormat::BGRA8Unorm_sRGB | MTLPixelFormat::RGBA8Unorm_sRGB
-                | MTLPixelFormat::BGRA10_XR
+                | MTLPixelFormat::BGRA8Unorm | MTLPixelFormat::BGRA10_XR
                 | MTLPixelFormat::Depth32Float => 4,
             MTLPixelFormat::RGBA16Float | MTLPixelFormat::RGBA16Uint => 8,
             MTLPixelFormat::RGBA32Float => 16,

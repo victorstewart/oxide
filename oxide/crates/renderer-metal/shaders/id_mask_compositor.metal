@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 struct IdMaskCompositorParams
 {
@@ -498,7 +499,7 @@ inline float4 composite_id_mask(IdMaskCompositorRaster in,
     }
   }
 
-  return float4(fill, 0.96);
+  return source_to_output(float4(fill, 0.96));
 }
 
 fragment float4 f_id_mask_compositor(IdMaskCompositorRaster in [[stage_in]],

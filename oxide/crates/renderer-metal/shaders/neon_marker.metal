@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 struct NeonMarkerParams
 {
@@ -69,7 +70,7 @@ fragment float4 f_neon_marker(NeonMarkerRaster in [[stage_in]],
    if (distance <= marker.core_radius_px) {
       float edge = clamp(distance / max(marker.core_radius_px, 0.001), 0.0, 1.0);
       float alpha = marker.core_color.a * (1.0 - edge * 0.08);
-      return float4(marker.core_color.rgb, alpha);
+      return source_to_output(float4(marker.core_color.rgb, alpha));
    }
 
    float ring_width = max(marker.ring_width_px, 0.001);
@@ -80,5 +81,5 @@ fragment float4 f_neon_marker(NeonMarkerRaster in [[stage_in]],
    if (alpha <= 0.001) {
       return float4(0.0);
    }
-   return float4(marker.ring_color.rgb, clamp(alpha, 0.0, 1.0));
+   return source_to_output(float4(marker.ring_color.rgb, clamp(alpha, 0.0, 1.0)));
 }

@@ -1,5 +1,6 @@
 #include <metal_stdlib>
 using namespace metal;
+#include "color_output.h"
 
 struct SolidVSIn { float2 pos [[attribute(0)]]; float2 uv [[attribute(1)]]; float4 rgba [[attribute(2)]]; };
 struct SolidVSOut { float4 position [[position]]; float4 rgba; };
@@ -39,5 +40,5 @@ vertex SolidVSOut v_prepared_solid(SolidVSIn in [[stage_in]], constant SolidUnif
 }
 
 fragment float4 f_solid(SolidVSOut in [[stage_in]]) {
-    return in.rgba;
+    return source_to_output(in.rgba);
 }
