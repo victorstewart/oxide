@@ -119,6 +119,7 @@ struct LabelLayoutStyleKey {
     wrap: bool,
     wrap_mode: LabelWrapMode,
     max_w_bits: u32,
+    primary_glyph: bool,
 }
 
 struct CachedLabelRun {
@@ -237,8 +238,17 @@ impl LabelLayoutStyleKey {
             wrap,
             wrap_mode,
             max_w_bits: if wrap { cache_f32_bits(max_w) } else { 0 },
+            primary_glyph: false,
         }
     }
+
+   fn primary_glyph(font_id: usize, font_px: f32) -> Self
+   {
+      let mut key = Self::new(font_id, font_px, false, LabelWrapMode::Word, f32::INFINITY);
+      key.primary_glyph = true;
+      key
+   }
+
 }
 
 fn cached_label_line_from_owned_shape(font_id: usize, shape: text::OwnedShape) -> CachedLabelLine {
@@ -839,9 +849,26 @@ impl TextCtx {
         let font = self.fonts.font(font_id)?;
         let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
         let map = shape.cursor_map_for_text(text_value);
-        self.cache_unwrapped_label_shape(key, font_id, text_value, shape);
+        let _ = self.cache_unwrapped_label_shape(key, font_id, text_value, shape);
         Some(CachedTextPrefixMetrics { map })
     }
+
+   fn cached_primary_glyph_layout(&mut self, text_value: &str, font_id: usize, font_px: f32) -> Option<Arc<CachedLabelLayout>>
+   {
+      let key = LabelLayoutStyleKey::primary_glyph(font_id, font_px);
+      self.label_layout_clock = self.label_layout_clock.wrapping_add(1);
+      if let Some(entries) = self.label_layouts.get_mut(&key)
+      {
+         if let Some(entry) = entries.get_mut(text_value)
+         {
+            entry.last_used = self.label_layout_clock;
+            return Some(entry.layout.clone());
+         }
+      }
+      let font = self.fonts.font(font_id)?;
+      let shape = self.shaper.shape(font, font_id, text_value, font_px).ok()?.to_owned_shape();
+      self.cache_unwrapped_label_shape(key, font_id, text_value, shape)
+   }
 
     fn cache_unwrapped_label_shape(
         &mut self,
@@ -849,33 +876,37 @@ impl TextCtx {
         font_id: usize,
         text_value: &str,
         shape: text::OwnedShape,
-    ) {
+    ) -> Option<Arc<CachedLabelLayout>> {
         // Cursor shaping is a single buffer; it must not overwrite paragraph layout.
-        if text_value.contains('\n') {return;}
+        if text_value.contains('\n') && !key.primary_glyph {
+            return None;
+        }
         if self.label_layout_len >= LABEL_LAYOUT_CACHE_CAP {
             self.evict_cold_label_layouts();
         }
         let entries = self.label_layouts.entry(key).or_insert_with(HashMap::new);
         let width = shape.width();
+        let layout = Arc::new(CachedLabelLayout {
+            lines: alloc::vec![CachedLabelLine {
+                width,
+                shape: CachedLabelShape::Single(CachedLabelRun {
+                    font_id,
+                    x_offset: 0.0,
+                    shape,
+                }),
+            }],
+        });
         let prior = entries.insert(
             alloc::string::String::from(text_value),
             CachedLabelLayoutEntry {
-                layout: Arc::new(CachedLabelLayout {
-                    lines: alloc::vec![CachedLabelLine {
-                        width,
-                        shape: CachedLabelShape::Single(CachedLabelRun {
-                            font_id,
-                            x_offset: 0.0,
-                            shape,
-                        }),
-                    }],
-                }),
+                layout: layout.clone(),
                 last_used: self.label_layout_clock,
             },
         );
         if prior.is_none() {
             self.label_layout_len = self.label_layout_len.saturating_add(1);
         }
+        Some(layout)
     }
 
     fn evict_cold_label_layouts(&mut self) {
@@ -1975,7 +2006,7 @@ mod button_timing_tests
 #[cfg(test)]
 mod label_paragraph_cache_tests
 {
-   use super::{LabelWrapMode, TextCtx};
+   use super::{CachedLabelShape, LabelWrapMode, TextCtx};
 
    #[test]
    fn cursor_shaping_does_not_replace_hard_line_layout()
@@ -2008,6 +2039,28 @@ mod label_paragraph_cache_tests
       assert!(grapheme.lines.len() > 1);
       assert!(!std::sync::Arc::ptr_eq(&word, &grapheme));
       assert!(grapheme.lines.iter().all(|line| line.width <= 72.0));
+   }
+
+   #[test]
+   fn otp_primary_glyph_cache_has_a_primary_domain_and_keeps_newline_shapes()
+   {
+      let mut text = TextCtx::default();
+      let primary = text.fonts.add_font(oxide_text::Font::from_bytes(include_bytes!("../assets/Asap-Regular.ttf").to_vec()));
+      let fallback = text.fonts.add_font(oxide_text::Font::from_bytes(include_bytes!("../assets/Asap-Regular.ttf").to_vec()));
+      let first = text.cached_primary_glyph_layout("4", primary, 18.0).unwrap();
+      let again = text.cached_primary_glyph_layout("4", primary, 18.0).unwrap();
+      assert!(std::sync::Arc::ptr_eq(&first, &again));
+
+      text.set_fallback_fonts(&[fallback]);
+      let ordinary = text.cached_label_layout::<false>("4", primary, 18.0, false, f32::INFINITY).unwrap();
+      let otp = text.cached_primary_glyph_layout("4", primary, 18.0).unwrap();
+      assert!(!std::sync::Arc::ptr_eq(&ordinary, &otp));
+      assert!(matches!(&otp.lines[0].shape, CachedLabelShape::Single(run) if run.font_id == primary));
+
+      let direct_width = text.shaper.shape(text.fonts.font(primary).unwrap(), primary, "\n", 18.0).unwrap().width();
+      let newline = text.cached_primary_glyph_layout("\n", primary, 18.0).unwrap();
+      assert_eq!(newline.lines.len(), 1);
+      assert_eq!(newline.lines[0].width, direct_width);
    }
 }
 
@@ -3495,7 +3548,7 @@ impl TextInput {
         }
         let device_scale = text_ctx.encoding_device_scale(device_scale);
         let length = cfg.length;
-        let chars: Vec<char> = display.chars().collect();
+        let mut chars = display.chars();
         let total_gap = cfg.gap * (length.saturating_sub(1) as f32);
         let slot_w = ((content.w - total_gap).max(0.0)) / (length as f32);
         let slot_h = content.h;
@@ -3517,39 +3570,27 @@ impl TextInput {
             );
 
             if let Some(font) = text_ctx.fonts.font(style.font_id) {
-                let glyph_char = chars
-                    .get(idx)
-                    .copied()
+                let metrics = font.line_metrics(style.font_px);
+                let displayed = chars.next();
+                let glyph_char = displayed
                     .filter(|c| !c.is_whitespace())
                     .unwrap_or(cfg.placeholder);
-                let glyph = glyph_char.to_string();
-                if let Ok(shape) = text_ctx.shaper.shape(font, style.font_id, &glyph, style.font_px)
+                let mut glyph_bytes = [0; 4];
+                let glyph = glyph_char.encode_utf8(&mut glyph_bytes);
+                if let Some(layout) = text_ctx.cached_primary_glyph_layout(glyph, style.font_id, style.font_px)
                 {
-                    let width = shape.width();
-                    let text_x = inner.x + (inner.w - width).max(0.0) * 0.5;
-                    let text_y = font.line_metrics(style.font_px)
+                    let Some(line) = layout.lines.first() else {
+                        x += slot_w + cfg.gap;
+                        continue;
+                    };
+                    let text_x = inner.x + (inner.w - line.width).max(0.0) * 0.5;
+                    let text_y = metrics
                         .map_or(inner.y, |metrics| inner.y + (inner.h - metrics.ascent - metrics.descent).max(0.0) * 0.5 + metrics.ascent);
                     let color =
-                        if chars.get(idx).is_some() { style.text } else { style.placeholder };
-                    let mut runs = core::mem::take(&mut text_ctx.frame.glyph_runs);
-                    runs.clear();
-                    let dl = builder.drawlist_mut();
-                    shape.bake_paged_into_with(
-                        &mut text_ctx.raster,
-                        &mut text_ctx.atlas,
-                        &mut dl.vertices,
-                        &mut dl.indices,
-                        &mut runs,
-                        color,
-                        text_x,
-                        text_y,
-                        device_scale,
+                        if displayed.is_some() { style.text } else { style.placeholder };
+                    let _ = bake_cached_label_line::<false>(
+                        line, color, text_x, text_y, device_scale, text_ctx, builder,
                     );
-                    for run in runs.iter().copied() {
-                        builder.glyph_run_provisional(run);
-                    }
-                    runs.clear();
-                    text_ctx.frame.glyph_runs = runs;
                 }
             }
 
