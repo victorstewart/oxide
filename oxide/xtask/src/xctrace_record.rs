@@ -228,6 +228,13 @@ impl XctraceRecordProcess
       Ok(())
    }
 
+   // Comparison acquisition retains failed attempts as evidence. Ownership and
+   // the storage fuse still stop the recorder and clean its temporary scratch.
+   pub fn preserve_partial_trace(&mut self)
+   {
+      self.retain_trace = true;
+   }
+
    fn trip_fuse(&mut self, state: u8)
    {
       let _ = self.fuse_state.compare_exchange(FUSE_OK, state, Ordering::AcqRel, Ordering::Acquire);

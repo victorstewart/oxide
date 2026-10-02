@@ -118,3 +118,20 @@ fn every_xtask_xctrace_record_launch_uses_the_owned_record_process()
    assert!(source[attached_start..attached_end].contains("String::from(\"--attach\")"));
    assert!(source[attached_start..attached_end].contains("XctraceRecordProcess::spawn("));
 }
+
+#[test]
+fn failed_comparison_can_retain_partial_trace_without_leaking_recorder_or_scratch()
+{
+   let root = tempdir().expect("temporary record root");
+   let trace = root.path().join("failed.trace");
+   let mut record = XctraceRecordProcess::spawn(root.path(), "/bin/sleep", &[String::from("30")],
+      &trace, &root.path().join("stdout"), &root.path().join("stderr"), 1024).expect("spawn recorder");
+   record.preserve_partial_trace();
+   let scratch = record.scratch_path().to_path_buf();
+   let pid = record.id();
+   fs::write(&trace, b"partial evidence").expect("partial trace");
+   drop(record);
+   assert_eq!(fs::read(&trace).expect("retained evidence"), b"partial evidence");
+   assert!(!scratch.exists());
+   assert!(!Command::new("/bin/kill").args(["-0", &pid.to_string()]).stdout(Stdio::null()).stderr(Stdio::null()).status().expect("query child").success());
+}

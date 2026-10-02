@@ -4,6 +4,7 @@ final class TransportProbeAppDelegate: NSObject, UIApplicationDelegate
 {
    var window: UIWindow?
    private var presentationProbe: CorePresentationProbe?
+   private var benchmark: CoreBenchmark?
 
    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
    {
@@ -14,9 +15,21 @@ final class TransportProbeAppDelegate: NSObject, UIApplicationDelegate
       self.window = window
       do
       {
-         let probe = try CorePresentationProbe(window: window)
-         presentationProbe = probe
-         probe.start()
+         let arguments = CommandLine.arguments
+         if let index = arguments.firstIndex(of: "-oxide-core-case"), index + 1 < arguments.count
+         {
+            let checkpointIndex = arguments.firstIndex(of: "-oxide-core-checkpoint")
+            let checkpoint = checkpointIndex.flatMap {$0 + 1 < arguments.count ? Double(arguments[$0 + 1]) : nil}
+            let suite = try CoreBenchmark(window: window, caseName: arguments[index + 1], checkpoint: checkpoint)
+            benchmark = suite
+            suite.start()
+         }
+         else
+         {
+            let probe = try CorePresentationProbe(window: window)
+            presentationProbe = probe
+            probe.start()
+         }
       }
       catch
       {

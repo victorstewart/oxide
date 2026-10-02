@@ -20,6 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod xctrace_record;
+mod ios_core_comparison;
 
 use xctrace_record::{XctraceRecordProcess, XCTRACE_RECORD_WORKING_SET_LIMIT_BYTES};
 
@@ -812,11 +813,12 @@ pub fn run_cli(args: &[String]) -> Result<()> {
         (Some("experiments"), Some("check")) => experiments_check(&args[2..]),
         (Some("ios"), Some("prepare")) => ios_prepare(),
         (Some("ios"), Some("oxide-device-perf")) => ios_oxide_device_perf(&args[2..]),
+        (Some("ios"), Some("compare-core")) => ios_core_comparison::run(&args[2..]),
         (Some("ios"), Some("time-profiler-summary")) => ios_time_profiler_summary(&args[2..]),
         (Some("test-all"), _) => test_all(),
         _ => {
             eprintln!(
-                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
+                "Usage:\n  cargo xtask experiments check [--manifest PATH] [--today YYYY-MM-DD]\n  cargo xtask ios prepare\n  cargo xtask ios compare-core [--case NAME] [--device NAME|UDID] [--output PATH] [--apps PATH] [--team TEAM_ID] [--visual-evidence JSON]\n  cargo xtask ios oxide-device-perf [--write-baseline] [--compare PATH] [--json-out PATH] [--markdown-out PATH] [--result-root PATH] [--device NAME|UDID] [--team TEAM_ID] [--case TEST_NAME]... [--reuse-derived-data PATH] [--smoke]\n  cargo xtask ios time-profiler-summary --trace PATH [--json-out PATH]\n  cargo xtask test-all"
             );
             Ok(())
         }
@@ -4631,11 +4633,18 @@ fn wait_for_trace_started_or_trace_exit(
     started_stdout_path: &Path,
     started_stderr_path: &Path,
 ) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_millis(XCTRACE_STARTED_TIMEOUT_MS);
+    wait_for_named_trace_started_or_trace_exit(program, args, trace_child, trace_stdout_path, trace_stderr_path,
+        started_child, started_stdout_path, started_stderr_path, UIKIT_TRACE_STARTED_NOTIFICATION,
+        Duration::from_millis(XCTRACE_STARTED_TIMEOUT_MS))
+}
+
+fn wait_for_named_trace_started_or_trace_exit(program: &str, args: &[String], trace_child: &mut XctraceRecordProcess, trace_stdout_path: &Path, trace_stderr_path: &Path, started_child: &mut Child, started_stdout_path: &Path, started_stderr_path: &Path, notification_name: &str, timeout: Duration) -> Result<()>
+{
+    let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = started_child
             .try_wait()
-            .with_context(|| format!("probing notifyutil {}", UIKIT_TRACE_STARTED_NOTIFICATION))?
+            .with_context(|| format!("probing notifyutil {}", notification_name))?
         {
             let stdout = fs::read_to_string(started_stdout_path).unwrap_or_default();
             let stderr = fs::read_to_string(started_stderr_path).unwrap_or_default();
@@ -4648,20 +4657,20 @@ fn wait_for_trace_started_or_trace_exit(
                 if stdout.is_empty() {
                     bail!(
                         "notifyutil -1 {} failed with status {}",
-                        UIKIT_TRACE_STARTED_NOTIFICATION,
+                        notification_name,
                         status.code().unwrap_or(-1)
                     );
                 }
                 bail!(
                     "notifyutil -1 {} failed with status {}: {}",
-                    UIKIT_TRACE_STARTED_NOTIFICATION,
+                    notification_name,
                     status.code().unwrap_or(-1),
                     stdout
                 );
             }
             bail!(
                 "notifyutil -1 {} failed with status {}: {}",
-                UIKIT_TRACE_STARTED_NOTIFICATION,
+                notification_name,
                 status.code().unwrap_or(-1),
                 stderr
             );
@@ -4679,7 +4688,7 @@ fn wait_for_trace_started_or_trace_exit(
                     "{} {} exited before sending `{}`",
                     program,
                     args.join(" "),
-                    UIKIT_TRACE_STARTED_NOTIFICATION
+                    notification_name
                 );
             }
             if stderr.is_empty() {
@@ -4712,8 +4721,8 @@ fn wait_for_trace_started_or_trace_exit(
                 "{} {} did not emit `{}` within {} ms",
                 program,
                 args.join(" "),
-                UIKIT_TRACE_STARTED_NOTIFICATION,
-                XCTRACE_STARTED_TIMEOUT_MS
+                notification_name,
+                timeout.as_millis()
             );
         }
         thread::sleep(Duration::from_millis(100));

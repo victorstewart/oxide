@@ -910,9 +910,14 @@ dependencies = [
 name = "oxide-comparison-runtime"
 version = "0.1.0"
 dependencies = [
+ "oxide-platform-api",
  "oxide-renderer-api",
  "oxide-renderer-metal",
+ "oxide-text",
  "oxide-ui-core",
+ "png",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1134,6 +1139,7 @@ dependencies = [
  "objc",
  "oxide-image-store",
  "oxide-renderer-api",
+ "oxide-ui-core",
  "png",
  "thiserror 1.0.69",
 ]

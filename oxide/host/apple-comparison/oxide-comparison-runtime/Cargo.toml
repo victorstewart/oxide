@@ -13,3 +13,11 @@ crate-type = ["staticlib", "rlib"]
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }
 oxide-ui-core = { path = "../../../crates/ui-core" }
+oxide-platform-api = { path = "../../../crates/platform-api" }
+oxide-text = { path = "../../../crates/text" }
+png = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+oxide-renderer-metal = { path = "../../../crates/renderer-metal", features = ["snapshot-tests"] }

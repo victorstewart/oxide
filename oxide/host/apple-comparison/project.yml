@@ -18,6 +18,13 @@ targets:
     sources:
       - path: Shared/ComparatorApp/TransportProbeAppDelegate.swift
       - path: Shared/ComparatorApp/CorePresentationProbe.swift
+      - path: Shared/ComparatorApp/CoreBenchmark.swift
+      - path: fixtures
+        buildPhase: resources
+      - path: ../../crates/text/tests/fixtures/NotoSans-VF.ttf
+        buildPhase: resources
+      - path: ../../crates/text/tests/fixtures/OFL-google-fonts.txt
+        buildPhase: resources
       - path: Oxide-iOS
     settings:
       base:
@@ -94,6 +101,13 @@ targets:
     sources:
       - path: Shared/ComparatorApp/TransportProbeAppDelegate.swift
       - path: Shared/ComparatorApp/CorePresentationProbe.swift
+      - path: Shared/ComparatorApp/CoreBenchmark.swift
+      - path: fixtures
+        buildPhase: resources
+      - path: ../../crates/text/tests/fixtures/NotoSans-VF.ttf
+        buildPhase: resources
+      - path: ../../crates/text/tests/fixtures/OFL-google-fonts.txt
+        buildPhase: resources
       - path: UIKit-iOS
     settings:
       base:

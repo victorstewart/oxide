@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "color_space": "srgb",
+  "compositing": "srgb-source-over",
+  "viewport": [
+    390,
+    844,
+    3
+  ],
+  "font": "NotoSans-VF.ttf",
+  "font_size": 14,
+  "text_color": [
+    0.12,
+    0.16,
+    0.2,
+    1
+  ],
+  "images": [
+    "image-0.png",
+    "image-1.png",
+    "image-2.png",
+    "image-3.png"
+  ],
+  "checkpoints": [
+    0,
+    10,
+    19.9
+  ],
+  "shapes": {
+    "count": 64,
+    "clip_rects": [
+      [
+        12,
+        16,
+        178,
+        394
+      ],
+      [
+        200,
+        16,
+        178,
+        394
+      ],
+      [
+        12,
+        426,
+        178,
+        394
+      ],
+      [
+        200,
+        426,
+        178,
+        394
+      ]
+    ],
+    "tile_size": [
+      48,
+      56
+    ],
+    "column_stride": 39,
+    "row_stride": 92,
+    "origin": [
+      6,
+      12
+    ],
+    "radii": [
+      0,
+      6
+    ],
+    "alpha": 0.7,
+    "updates_per_frame": 8
+  },
+  "text": {
+    "count": 32,
+    "origin": [
+      12,
+      16
+    ],
+    "stride": [
+      186,
+      50
+    ],
+    "size": [
+      178,
+      46
+    ],
+    "columns": 2,
+    "font_size": 14,
+    "template": "Label %02d: Alpha beta gamma delta %04d",
+    "interval": 0.1
+  },
+  "local": {
+    "count": 16,
+    "origin": [
+      12,
+      24
+    ],
+    "stride": [
+      96,
+      198
+    ],
+    "columns": 4,
+    "label_size": [
+      84,
+      42
+    ],
+    "button_rect": [
+      0,
+      54,
+      82,
+      32
+    ],
+    "progress_rect": [
+      0,
+      104,
+      82,
+      4
+    ],
+    "font_size": 12,
+    "template": "Group %02d\nValue %04d",
+    "button_title": "Go",
+    "button_color": [0.2, 0.55, 1.0, 1.0],
+    "progress_track_color": [0.85, 0.85, 0.85, 1.0],
+    "progress_fill_color": [0.2, 0.5, 1.0, 1.0],
+    "interval": 0.1
+  },
+  "images_case": {
+    "count": 16,
+    "origin": [
+      12,
+      20
+    ],
+    "stride": [
+      96,
+      202
+    ],
+    "columns": 4,
+    "size": [
+      82,
+      174
+    ],
+    "scale_amplitude": 0.25,
+    "period": 2
+  },
+  "animation": {
+    "count": 8,
+    "origin": [
+      14,
+      26
+    ],
+    "stride": [
+      190,
+      196
+    ],
+    "columns": 2,
+    "size": [
+      172,
+      160
+    ],
+    "image_rect": [
+      8,
+      10,
+      80,
+      64
+    ],
+    "label_rect": [
+      8,
+      88,
+      156,
+      54
+    ],
+    "font_size": 14,
+    "period": 2,
+    "translation": [
+      5,
+      10
+    ],
+    "scale_center": 0.96,
+    "scale_amplitude": 0.04,
+    "alpha_center": 0.85,
+    "alpha_amplitude": 0.15,
+    "template": "Card %02d\nAlpha beta gamma",
+    "opacity_mode": "per-primitive"
+  },
+  "scroll": {
+    "count": 1000,
+    "row_height": 96,
+    "distance": 3840,
+    "half_period": 10,
+    "image_rect": [
+      16,
+      24,
+      48,
+      48
+    ],
+    "label_rect": [
+      80,
+      20,
+      294,
+      56
+    ],
+    "font_size": 14,
+    "template": "Row %04d\nAlpha beta gamma delta"
+  }
+}

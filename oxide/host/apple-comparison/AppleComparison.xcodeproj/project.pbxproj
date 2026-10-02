@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AB2000000000000000000005 /* UIKitEditingEdges.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000006 /* UIKitEditingEdges.swift */; };
+		AB2000000000000000000003 /* UIKitExtendedBoards.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000004 /* UIKitExtendedBoards.swift */; };
+		AB2000000000000000000001 /* UIKitVisualBoards.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB2000000000000000000002 /* UIKitVisualBoards.swift */; };
 		1F91D64A4DD2F361302D2A75 /* CorePresentationProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F200C827D01D53030F6DFD /* CorePresentationProbe.swift */; };
 		3CA55564CC6FDEE0F1274C9D /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B052E22F32CB532A4122A4 /* main.swift */; };
 		7E2BA128ADCD967174D7B71E /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE8A0092D54259410CF8CD1C /* main.swift */; };
@@ -16,9 +19,14 @@
 		D70286CD46E786EA7DA77833 /* TransportProbeAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */; };
 		E1F1F09B24DD786AAE9EB9D4 /* CorePresentationProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0F200C827D01D53030F6DFD /* CorePresentationProbe.swift */; };
 		EFDAAA8ACD43FB8B4671FB25 /* OxideScenarioAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D717B9AC726936AA9CFA0AC /* OxideScenarioAdapter.swift */; };
+		AB1000000000000000000001 /* CoreBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000003 /* CoreBenchmark.swift */; };
+		AB1000000000000000000002 /* CoreBenchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1000000000000000000003 /* CoreBenchmark.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AB2000000000000000000006 /* UIKitEditingEdges.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditingEdges.swift; sourceTree = "<group>"; };
+		AB2000000000000000000004 /* UIKitExtendedBoards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitExtendedBoards.swift; sourceTree = "<group>"; };
+		AB2000000000000000000002 /* UIKitVisualBoards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitVisualBoards.swift; sourceTree = "<group>"; };
 		041AC7AA613258D97EB355C6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		0B63F9378B51234F2E943E8B /* OxideBenchIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = OxideBenchIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransportProbeAppDelegate.swift; sourceTree = "<group>"; };
@@ -30,6 +38,7 @@
 		C6B052E22F32CB532A4122A4 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		D7576EC37C56E6506547C24F /* UIKitBenchIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UIKitBenchIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EE8A0092D54259410CF8CD1C /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AB1000000000000000000003 /* CoreBenchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreBenchmark.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -46,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				B0F200C827D01D53030F6DFD /* CorePresentationProbe.swift */,
+				AB1000000000000000000003 /* CoreBenchmark.swift */,
 				1FD12DEE8E7E81A4B46782D5 /* TransportProbeAppDelegate.swift */,
 			);
 			name = ComparatorApp;
@@ -58,6 +68,9 @@
 				5D660CA7D60920E47AE6D70E /* Info.plist */,
 				C6B052E22F32CB532A4122A4 /* main.swift */,
 				5E434927C3216724AEFA09BC /* UIKitScenarioAdapter.swift */,
+				AB2000000000000000000004 /* UIKitExtendedBoards.swift */,
+				AB2000000000000000000006 /* UIKitEditingEdges.swift */,
+				AB2000000000000000000002 /* UIKitVisualBoards.swift */,
 			);
 			path = "UIKit-iOS";
 			sourceTree = "<group>";
@@ -90,6 +103,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0D82E9F5B24EB03B797A3212 /* Build configuration list for PBXNativeTarget "OxideBenchIOS" */;
 			buildPhases = (
+				AB1000000000000000000004 /* Copy Core Fixtures */,
 				D2E25069902A4BAD69048851 /* Build and Embed Comparison Runtime */,
 				587FFE40FF7E586043092A46 /* Sources */,
 			);
@@ -108,6 +122,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 250F1153A6B0AA1B81068FCB /* Build configuration list for PBXNativeTarget "UIKitBenchIOS" */;
 			buildPhases = (
+				AB1000000000000000000005 /* Copy Core Fixtures */,
 				9E6817FE2741087D69FD9659 /* Sources */,
 			);
 			buildRules = (
@@ -171,6 +186,8 @@
 			shellPath = /bin/sh;
 			shellScript = "set -euo pipefail\nREPO_ROOT=\"$(cd \"${PROJECT_DIR}/../..\" && pwd)\"\nexport CARGO_TARGET_DIR=\"${OBJROOT}/oxide-comparison-cargo/${PLATFORM_NAME}\"\nTARGET_GUARD=\"${REPO_ROOT}/host/apple-comparison/scripts/guard-cargo-target.sh\"\ncase \"${PLATFORM_NAME}\" in\n  iphoneos)\n    RUST_TARGET=\"aarch64-apple-ios\"\n    ;;\n  *)\n    RUST_TARGET=\"aarch64-apple-ios-sim\"\n    ;;\nesac\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${CARGO_TARGET_DIR}\"\nHOST_LINKER_WRAPPER=\"${CARGO_TARGET_DIR}/xcode-host-clang.sh\"\ncat > \"${HOST_LINKER_WRAPPER}\" <<'EOF'\n#!/bin/sh\nexec xcrun --sdk macosx clang \"$@\"\nEOF\nchmod +x \"${HOST_LINKER_WRAPPER}\"\n(cd \"${REPO_ROOT}/host/apple-comparison/oxide-comparison-runtime\" && \\\n   export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=\"${HOST_LINKER_WRAPPER}\" && \\\n   unset SDKROOT SDK_DIR SDK_NAME IPHONEOS_DEPLOYMENT_TARGET && \\\n   export IPHONEOS_DEPLOYMENT_TARGET=18.0 && \\\n   cargo build --locked -p oxide-comparison-runtime --release --target \"${RUST_TARGET}\")\n/bin/sh \"${TARGET_GUARD}\" \"${CARGO_TARGET_DIR}\" \"${REPO_ROOT}/Cargo.toml\"\nmkdir -p \"${BUILT_PRODUCTS_DIR}\"\ncp -v \"${CARGO_TARGET_DIR}/${RUST_TARGET}/release/liboxide_comparison_runtime.a\" \"${BUILT_PRODUCTS_DIR}/liboxide_comparison_runtime.a\"\n";
 		};
+		AB1000000000000000000004 /* Copy Core Fixtures */ = {isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = (); name = "Copy Core Fixtures"; outputPaths = (); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "set -eu\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\ncp \"${PROJECT_DIR}/fixtures/core.json\" \"${PROJECT_DIR}/fixtures/visual.json\" \"${PROJECT_DIR}/fixtures/\"*.png \"$DEST/\"\ncp \"${PROJECT_DIR}/../../crates/text/tests/fixtures/NotoSans-VF.ttf\" \"${PROJECT_DIR}/../../crates/text/tests/fixtures/OFL-google-fonts.txt\" \"$DEST/\"\n"; };
+		AB1000000000000000000005 /* Copy Core Fixtures */ = {isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = (); name = "Copy Core Fixtures"; outputPaths = (); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "set -eu\nDEST=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"$DEST\"\ncp \"${PROJECT_DIR}/fixtures/core.json\" \"${PROJECT_DIR}/fixtures/visual.json\" \"${PROJECT_DIR}/fixtures/\"*.png \"$DEST/\"\ncp \"${PROJECT_DIR}/../../crates/text/tests/fixtures/NotoSans-VF.ttf\" \"${PROJECT_DIR}/../../crates/text/tests/fixtures/OFL-google-fonts.txt\" \"$DEST/\"\n"; };
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -180,6 +197,7 @@
 			files = (
 				B45B710F6F7AC707B8FA181D /* CoreHostBridge.m in Sources */,
 				1F91D64A4DD2F361302D2A75 /* CorePresentationProbe.swift in Sources */,
+				AB1000000000000000000001 /* CoreBenchmark.swift in Sources */,
 				EFDAAA8ACD43FB8B4671FB25 /* OxideScenarioAdapter.swift in Sources */,
 				B4D55C65A0FAC66A2A7F080D /* TransportProbeAppDelegate.swift in Sources */,
 				7E2BA128ADCD967174D7B71E /* main.swift in Sources */,
@@ -191,8 +209,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				E1F1F09B24DD786AAE9EB9D4 /* CorePresentationProbe.swift in Sources */,
+				AB1000000000000000000002 /* CoreBenchmark.swift in Sources */,
 				D70286CD46E786EA7DA77833 /* TransportProbeAppDelegate.swift in Sources */,
 				B540E58B17DE0BE2DFC7EF25 /* UIKitScenarioAdapter.swift in Sources */,
+				AB2000000000000000000003 /* UIKitExtendedBoards.swift in Sources */,
+				AB2000000000000000000005 /* UIKitEditingEdges.swift in Sources */,
+				AB2000000000000000000001 /* UIKitVisualBoards.swift in Sources */,
 				3CA55564CC6FDEE0F1274C9D /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
