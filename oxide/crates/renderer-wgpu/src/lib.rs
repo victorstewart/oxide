@@ -722,7 +722,7 @@ mod headless
          {
             match command
             {
-               api::DrawCmd::LayerBegin { .. } => {
+               api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerBeginWithOpacity { .. } => {
                   report.layer_begin_commands = report.layer_begin_commands.saturating_add(1);
                }
                api::DrawCmd::LayerEnd => {
@@ -958,7 +958,7 @@ mod headless
          {
             match command
             {
-               api::DrawCmd::LayerBegin { .. } => self.layer_depth = self.layer_depth.saturating_add(1),
+               api::DrawCmd::LayerBegin { .. } | api::DrawCmd::LayerBeginWithOpacity { .. } => self.layer_depth = self.layer_depth.saturating_add(1),
                api::DrawCmd::LayerEnd => self.layer_depth = self.layer_depth.saturating_sub(1),
                api::DrawCmd::Solid { vb, ib, color } => self.encode_solid(list, *vb, *ib, *color),
                api::DrawCmd::Image { tex, dst, src, alpha } => self.encode_image(*tex, *dst, *src, *alpha),
@@ -1982,6 +1982,13 @@ mod headless
                   dirty: true,
                },
                api::DrawCmd::LayerEnd,
+               api::DrawCmd::LayerBeginWithOpacity {
+                  id: 8,
+                  rect: api::RectF::new(0.0, 0.0, 10.0, 10.0),
+                  dirty: true,
+                  opacity: 0.5,
+               },
+               api::DrawCmd::LayerEnd,
                api::DrawCmd::Backdrop {
                   rect: api::RectF::new(0.0, 0.0, 10.0, 10.0),
                   sigma: 4.0,
@@ -2004,8 +2011,8 @@ mod headless
             ..Default::default()
          };
          let report = HeadlessWgpuRenderer::draw_list_compatibility_report(&list);
-         assert_eq!(report.layer_begin_commands, 1);
-         assert_eq!(report.layer_end_commands, 1);
+         assert_eq!(report.layer_begin_commands, 2);
+         assert_eq!(report.layer_end_commands, 2);
          assert_eq!(report.backdrop_commands, 1);
          assert_eq!(report.visual_effect_commands, 1);
          assert_eq!(report.camera_noop_commands, 1);
