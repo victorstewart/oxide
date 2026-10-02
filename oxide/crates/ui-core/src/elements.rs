@@ -1456,6 +1456,19 @@ pub fn encode_label_text_profiled<U: ImageUploader>(
 
 impl Label
 {
+   /// Measures the top-aligned layout box using the same cached shaping and wrapping path as `encode`.
+   pub fn measure(&self, max_width: f32, txt: &mut TextCtx) -> Option<[f32; 2]>
+   {
+      let font = txt.fonts.font(self.font_id)?;
+      let metrics = font.line_metrics(self.font_px)?;
+      let width = if self.wrap {max_width.max(0.0)} else {f32::INFINITY};
+      let layout = txt.cached_label_layout::<false>(&self.text, self.font_id, self.font_px, self.wrap, width)?;
+      let line_advance = (self.font_px * 1.25).ceil();
+      let height = metrics.ascent + metrics.descent + layout.lines.len().saturating_sub(1) as f32 * line_advance;
+      let width = layout.lines.iter().fold(0.0_f32, |maximum, line| maximum.max(line.width));
+      Some([width, height])
+   }
+
    pub fn encode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, b: &mut DrawListBuilder)
    {
       let Some(metrics) = txt.fonts.font(self.font_id).and_then(|font| font.line_metrics(self.font_px)) else {return;};
@@ -1723,18 +1736,38 @@ impl ButtonState {
 
    pub fn on_pointer_down_with_style(&mut self, style: &ButtonStyle)
    {
-      self.on_pointer_down_at(style.press_animation_ms, timing::now_ms());
+      self.on_pointer_down_with_style_at(style, timing::now_ms());
+   }
+
+   /// Begins a style-aware press transition at an explicit monotonic timestamp.
+   /// This is useful for deterministic render and input replays.
+   pub fn on_pointer_down_with_style_at(&mut self, style: &ButtonStyle, now: u64)
+   {
+      self.on_pointer_down_at(style.press_animation_ms, now);
    }
 
    pub fn on_pointer_cancel_with_style(&mut self, style: &ButtonStyle)
    {
-      self.on_pointer_cancel_at(style.press_animation_ms, timing::now_ms());
+      self.on_pointer_cancel_with_style_at(style, timing::now_ms());
+   }
+
+   /// Cancels a style-aware press transition at an explicit monotonic timestamp.
+   pub fn on_pointer_cancel_with_style_at(&mut self, style: &ButtonStyle, now: u64)
+   {
+      self.on_pointer_cancel_at(style.press_animation_ms, now);
    }
 
    /// Returns true if this was a tap (released while pressed).
    pub fn on_pointer_up_with_style(&mut self, style: &ButtonStyle) -> bool
    {
-      self.on_pointer_up_at(style.press_animation_ms, timing::now_ms())
+      self.on_pointer_up_with_style_at(style, timing::now_ms())
+   }
+
+   /// Ends a style-aware press transition at an explicit monotonic timestamp.
+   /// Returns true if this was a tap (released while pressed).
+   pub fn on_pointer_up_with_style_at(&mut self, style: &ButtonStyle, now: u64) -> bool
+   {
+      self.on_pointer_up_at(style.press_animation_ms, now)
    }
 
    /// Compatibility wrapper preserving the legacy 80 ms press transition.
@@ -1762,7 +1795,13 @@ impl Button
    /// Pair input with ButtonState's style-aware events to honor `press_animation_ms`.
    pub fn encode<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, state: &ButtonState, b: &mut DrawListBuilder)
    {
-      let scale = state.current_scale(timing::now_ms()).clamp(0.9, 1.0);
+      self.encode_at(rect, device_scale, txt, up, state, timing::now_ms(), b);
+   }
+
+   /// Encodes the button at an explicit monotonic timestamp for deterministic replays.
+   pub fn encode_at<U: ImageUploader>(&self, rect: gfx::RectF, device_scale: f32, txt: &mut TextCtx, up: &mut U, state: &ButtonState, now: u64, b: &mut DrawListBuilder)
+   {
+      let scale = state.current_scale(now).clamp(0.9, 1.0);
       let color = if state.disabled {self.style.color_disabled}
          else if state.pressed {self.style.color_pressed} else {self.style.color};
       let width = rect.w * scale;
@@ -1818,6 +1857,20 @@ mod button_timing_tests
       assert_eq!(state.current_scale(state.anim_start_ms), 0.98);
       assert!(state.on_pointer_up_with_style(&style));
       assert_eq!(state.current_scale(state.anim_start_ms), 1.0);
+   }
+
+   #[test]
+   fn explicit_style_timestamps_make_transitions_replayable()
+   {
+      let style = ButtonStyle {press_animation_ms: 200, ..ButtonStyle::default()};
+      let mut state = ButtonState::default();
+      state.on_pointer_down_with_style_at(&style, 1_000);
+      assert!(state.is_pressed());
+      assert_eq!(state.anim_start_ms, 1_000);
+      assert!((state.current_scale(1_100) - 0.99).abs() < f32::EPSILON);
+      assert!(state.on_pointer_up_with_style_at(&style, 1_100));
+      assert_eq!(state.anim_start_ms, 1_100);
+      assert!((state.current_scale(1_200) - 0.995).abs() < f32::EPSILON);
    }
 
    #[test]
@@ -3164,6 +3217,11 @@ impl TextInput {
             inner.w - style.padding.left - style.padding.right,
             inner.h - style.padding.top - style.padding.bottom,
         );
+        let Some(metrics) = text_ctx.fonts.font(style.font_id).and_then(|font| font.line_metrics(style.font_px)) else {
+            return;
+        };
+        let text_top = content.y + (content.h - metrics.ascent - metrics.descent).max(0.0) * 0.5;
+        let text_baseline = text_top + metrics.ascent;
 
         let display = state.display_text();
 
@@ -3196,7 +3254,7 @@ impl TextInput {
                         .as_ref()
                         .map_or(sx - content.x, |metrics| metrics.map.width_at(sel.end));
                 let highlight =
-                    gfx::RectF::new(sx, content.y - 2.0, (ex - sx).max(1.0), style.font_px + 6.0);
+                    gfx::RectF::new(sx, text_top - 2.0, (ex - sx).max(1.0), metrics.ascent + metrics.descent + 4.0);
                 builder.rrect(highlight, [4.0; 4], style.selection);
             }
         }
@@ -3214,7 +3272,7 @@ impl TextInput {
                         .as_ref()
                         .map_or(sx - content.x, |metrics| metrics.map.width_at(display_end));
                 let underline =
-                    gfx::RectF::new(sx, content.y + style.font_px + 2.0, (ex - sx).max(1.0), 2.0);
+                    gfx::RectF::new(sx, text_baseline + metrics.descent + 1.0, (ex - sx).max(1.0), 2.0);
                 builder.rrect(underline, [1.0; 4], style.composition);
             }
         }
@@ -3235,7 +3293,7 @@ impl TextInput {
             line,
             style.text,
             content.x,
-            content.y,
+            text_baseline,
             device_scale,
             text_ctx,
             builder,
@@ -3245,7 +3303,7 @@ impl TextInput {
             let caret_w =
                 prefix_metrics.as_ref().map_or(0.0, |metrics| metrics.map.width_at(state.cursor));
             let caret_rect =
-                gfx::RectF::new(content.x + caret_w, content.y - 1.0, 1.5, style.font_px + 4.0);
+                gfx::RectF::new(content.x + caret_w, text_top - 1.0, 1.5, metrics.ascent + metrics.descent + 2.0);
             builder.rrect(caret_rect, [0.8; 4], style.caret);
         }
 
@@ -3256,7 +3314,9 @@ impl TextInput {
             let inline_y = content.y + (content.h - line_h) * 0.50;
             let floating_y = content.y - style.placeholder_offset;
             let y = inline_y + (floating_y - inline_y) * state.placeholder_t;
-            let ph_rect = gfx::RectF::new(content.x, y, content.w, line_h + 2.0);
+            let baseline = text_ctx.fonts.font(style.font_id).and_then(|font| font.line_metrics(px))
+                .map_or(y, |placeholder_metrics| y + placeholder_metrics.ascent);
+            let ph_rect = gfx::RectF::new(content.x, baseline, content.w, line_h + 2.0);
             encode_label_unwrapped(
                 &state.placeholder,
                 style.placeholder,
@@ -3491,7 +3551,13 @@ impl Overlay {
         let Some(backdrop) = self.backdrop_spec(viewport, state.progress(), device_scale) else {
             return false;
         };
-        builder.backdrop(backdrop.rect, backdrop.sigma, backdrop.tint, backdrop.alpha);
+        if backdrop.sigma <= 0.0 && backdrop.tint.r == 0.0 && backdrop.tint.g == 0.0 && backdrop.tint.b == 0.0 {
+            let mut tint = backdrop.tint;
+            tint.a *= backdrop.alpha;
+            builder.rrect(backdrop.rect, [0.0; 4], tint);
+        } else {
+            builder.backdrop(backdrop.rect, backdrop.sigma, backdrop.tint, backdrop.alpha);
+        }
         true
     }
 }
@@ -3544,6 +3610,25 @@ impl Default for PopupWindow {
 }
 
 impl PopupWindow {
+   /// Places a popup adjacent to an anchor, preferring the space above it.
+   /// When above does not fit, the popup is placed below and then clamped to the viewport.
+   #[must_use]
+   pub fn place_near_anchor(anchor: gfx::RectF, desired_size: [f32; 2], viewport: gfx::RectF, margin: f32) -> gfx::RectF
+   {
+      let margin = margin.max(0.0);
+      let width = desired_size[0].max(0.0).min((viewport.w - margin * 2.0).max(0.0));
+      let height = desired_size[1].max(0.0).min((viewport.h - margin * 2.0).max(0.0));
+      let min_x = viewport.x + margin;
+      let max_x = (viewport.x + viewport.w - margin - width).max(min_x);
+      let min_y = viewport.y + margin;
+      let max_y = (viewport.y + viewport.h - margin - height).max(min_y);
+      let x = (anchor.x + (anchor.w - width) * 0.5).clamp(min_x, max_x);
+      let above = anchor.y - height - margin;
+      let below = anchor.y + anchor.h + margin;
+      let y = if above >= min_y {above} else {below}.clamp(min_y, max_y);
+      gfx::RectF::new(x, y, width, height)
+   }
+
     /// Resolves the legacy popup blur-card chrome for a panel rect at the current device scale.
     #[must_use]
     pub fn chrome(&self, rect: gfx::RectF, device_scale: f32) -> PopupChrome {
@@ -3573,12 +3658,14 @@ impl PopupWindow {
 
     pub fn encode(&self, rect: gfx::RectF, device_scale: f32, builder: &mut DrawListBuilder) {
         let chrome = self.chrome(rect, device_scale);
-        builder.backdrop(
-            chrome.panel_backdrop.rect,
-            chrome.panel_backdrop.sigma,
-            chrome.panel_backdrop.tint,
-            chrome.panel_backdrop.alpha,
-        );
+        if chrome.panel_backdrop.alpha > 0.0 {
+            builder.backdrop(
+                chrome.panel_backdrop.rect,
+                chrome.panel_backdrop.sigma,
+                chrome.panel_backdrop.tint,
+                chrome.panel_backdrop.alpha,
+            );
+        }
         builder.rrect(chrome.panel_rect, [chrome.panel_radius; 4], self.style.shell_color);
         if chrome.panel_inner_rect.w > 0.0 && chrome.panel_inner_rect.h > 0.0 {
             builder.rrect(
@@ -3791,9 +3878,7 @@ impl PickerState {
         let highlight = style.center_band_rect(rect);
         builder.rrect(highlight, [style.center_band_radius(rect); 4], style.highlight);
 
-        if text_ctx.fonts.font(style.font_id).is_none() {
-            return;
-        }
+        let Some(metrics) = text_ctx.fonts.font(style.font_id).and_then(|font| font.line_metrics(style.font_px)) else {return;};
         builder.clip_push(gfx::RectI::new(
             rect.x.floor() as i32,
             rect.y.floor() as i32,
@@ -3828,8 +3913,9 @@ impl PickerState {
                     continue;
                 };
                 let text_x = item_rect.x + (item_rect.w - line.width) * 0.50;
-                let text_y =
-                    item_rect.y + (item_rect.h - style.font_px) * 0.50 + style.baseline_shift;
+                let text_y = item_rect.y
+                    + (item_rect.h - metrics.ascent - metrics.descent).max(0.0) * 0.50
+                    + metrics.ascent + style.baseline_shift;
                 let _ = bake_cached_label_line::<false>(
                     line,
                     style.text_color,

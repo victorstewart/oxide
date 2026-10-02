@@ -5,7 +5,7 @@ use oxide_platform_api::{
 use oxide_renderer_api::{Color, DrawCmd, ImageHandle, RectF};
 use oxide_ui_core::elements::{
     encode_label_text, encode_label_text_profiled, Align, Badge, BadgeState, ButtonState, ImageFit,
-    ImageRegionView, ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState,
+    ImageRegionView, ImageUploader, ImageView, ImageZoomState, Label, Overlay, OverlayState, OverlayStyle,
     PickerState, PickerStyle,
     PopupWindow, SliderState, SlidingSwitchMode, SlidingSwitchState, SlidingSwitchStyle, Spinner,
     TextCtx, TextInput, TextInputState, TextInputStyle, TextValidation, ToggleState, UICameraView,
@@ -246,6 +246,71 @@ fn popup_window_encode_emits_backdrop_shell_and_inner_fill() {
     assert!(matches!(builder.drawlist().items[0], DrawCmd::Backdrop { .. }));
     assert!(matches!(builder.drawlist().items[1], DrawCmd::RRect { .. }));
     assert!(matches!(builder.drawlist().items[2], DrawCmd::RRect { .. }));
+}
+
+#[test]
+fn transparent_popup_omits_the_backdrop_draw() {
+    let popup = PopupWindow {style: oxide_ui_core::elements::PopupStyle {panel_backdrop_alpha: 0.0, ..PopupWindow::default().style}};
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+    popup.encode(RectF::new(10.0, 20.0, 200.0, 120.0), 1.0, &mut builder);
+
+    assert_eq!(builder.drawlist().items.len(), 2);
+    assert!(builder.drawlist().items.iter().all(|item| !matches!(item, DrawCmd::Backdrop { .. })));
+}
+
+#[test]
+fn black_zero_blur_overlay_encodes_a_flat_source_over_tint() {
+    let overlay = Overlay {style: OverlayStyle {tint: Color::rgba(0.0, 0.0, 0.0, 0.5), alpha: 0.8, blur_sigma: 0.0}};
+    let mut state = OverlayState::new();
+    state.open();
+    state.tick(16);
+    let progress = state.progress();
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+
+    assert!(overlay.encode(&state, RectF::new(0.0, 0.0, 120.0, 80.0), 1.0, &mut builder));
+    assert_eq!(builder.drawlist().items.len(), 1);
+    match builder.drawlist().items[0] {
+        DrawCmd::RRect { color, .. } => assert!((color.a - 0.5 * 0.8 * progress).abs() <= f32::EPSILON),
+        ref other => panic!("expected flat overlay, got {other:?}"),
+    }
+}
+
+#[test]
+fn colored_zero_blur_overlay_preserves_backdrop_semantics() {
+    let overlay = Overlay {style: OverlayStyle {tint: Color::rgba(0.2, 0.4, 0.6, 0.5), alpha: 0.8, blur_sigma: 0.0}};
+    let mut state = OverlayState::new();
+    state.open();
+    state.tick(16);
+    let mut builder = oxide_ui_core::DrawListBuilder::new();
+
+    assert!(overlay.encode(&state, RectF::new(0.0, 0.0, 120.0, 80.0), 1.0, &mut builder));
+    assert!(matches!(builder.drawlist().items[0], DrawCmd::Backdrop { .. }));
+}
+
+#[test]
+fn popup_window_places_above_when_space_allows_and_clamps_horizontal_edges() {
+    let viewport = RectF::new(0.0, 0.0, 390.0, 844.0);
+    let popup = PopupWindow::place_near_anchor(
+        RectF::new(350.0, 700.0, 32.0, 32.0),
+        [150.0, 44.0],
+        viewport,
+        8.0,
+    );
+
+    assert_eq!(popup, RectF::new(232.0, 648.0, 150.0, 44.0));
+}
+
+#[test]
+fn popup_window_places_below_when_above_would_escape_viewport() {
+    let viewport = RectF::new(0.0, 0.0, 390.0, 844.0);
+    let popup = PopupWindow::place_near_anchor(
+        RectF::new(0.0, 12.0, 100.0, 32.0),
+        [150.0, 44.0],
+        viewport,
+        8.0,
+    );
+
+    assert_eq!(popup, RectF::new(8.0, 52.0, 150.0, 44.0));
 }
 
 #[test]
@@ -1172,6 +1237,38 @@ fn wrapped_ascii_label_reuses_fast_fit_layout_and_clean_atlas() {
 }
 
 #[test]
+fn label_measure_uses_the_actual_wrapped_line_layout() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let label = Label {
+        text: "Words wrap according to shaped line widths, rather than a character estimate.".into(),
+        color: Color::rgba(0.1, 0.1, 0.1, 1.0),
+        align: Align::Left,
+        wrap: true,
+        font_id: 0,
+        font_px: 14.0,
+    };
+    let measured = label.measure(100.0, &mut text).expect("font is present");
+    let metrics = text.fonts.font(0).unwrap().line_metrics(label.font_px).unwrap();
+    let line_advance = (label.font_px * 1.25).ceil();
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+    label.encode(RectF::new(0.0, 0.0, 100.0, 300.0), 2.0, &mut text, &mut uploader, &mut builder);
+    let rendered_lines = builder.drawlist().items.iter().filter(|item| matches!(item, DrawCmd::GlyphRun { .. })).count();
+    let expected_height = metrics.ascent + metrics.descent + rendered_lines.saturating_sub(1) as f32 * line_advance;
+
+    assert!(rendered_lines > 1);
+    assert!(measured[0] <= 100.0);
+    assert!((measured[1] - expected_height).abs() <= f32::EPSILON);
+
+    let adjacent = Label {text: "Top\nBottom".into(), color: label.color, align: label.align, wrap: label.wrap, font_id: label.font_id, font_px: label.font_px}.measure(100.0, &mut text).unwrap();
+    let blank = Label {text: "Top\n\nBottom".into(), color: label.color, align: label.align, wrap: label.wrap, font_id: label.font_id, font_px: label.font_px}.measure(100.0, &mut text).unwrap();
+    assert!((blank[1] - adjacent[1] - line_advance).abs() <= f32::EPSILON);
+}
+
+#[test]
 fn wrapped_ascii_fast_fit_preserves_leading_space_advance() {
     let mut text = TextCtx::default();
     let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
@@ -1277,6 +1374,61 @@ fn text_input_reuses_shape_cache_and_skips_clean_atlas_uploads() {
     );
     assert_eq!(uploader.creates, 1);
     assert_eq!(uploader.updates, 0);
+}
+
+#[test]
+fn text_input_centers_glyphs_inside_its_padded_content_box() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let mut state = TextInputState::new("Name");
+    state.focus();
+    state.handle_text_event(&TextEvent::Commit { text: "Baseline".into() });
+    let rect = RectF::new(0.0, 0.0, 180.0, 68.0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, rect, 2.0, &mut text, &mut uploader, &mut builder);
+    let glyph_top = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::INFINITY, f32::min);
+    let inner_top = 1.5 + input.style.padding.top;
+    assert!(glyph_top.is_finite());
+    assert!(glyph_top >= inner_top - 1.0, "glyph_top={glyph_top} inner_top={inner_top}");
+}
+
+#[test]
+fn text_input_centers_an_empty_placeholder_on_its_text_baseline() {
+    let mut text = TextCtx::default();
+    let _ = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let input = TextInput::default();
+    let state = TextInputState::new("Placeholder");
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+
+    input.encode(&state, RectF::new(0.0, 0.0, 180.0, 68.0), 2.0, &mut text, &mut uploader, &mut builder);
+    let top = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::INFINITY, f32::min);
+    let bottom = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::NEG_INFINITY, f32::max);
+    assert!(top > 18.0, "placeholder top={top}");
+    assert!(bottom < 50.0, "placeholder bottom={bottom}");
+}
+
+#[test]
+fn picker_centers_the_selected_row_on_its_font_baseline() {
+    let mut text = TextCtx::default();
+    let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+        include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+    ));
+    let mut picker = PickerState::new(vec!["Only".into()]);
+    picker.set_column_selection(0, 0);
+    let mut builder = DrawListBuilder::new();
+    let mut uploader = CountingUploader::default();
+    picker.encode(&PickerStyle {font_id, font_px: 18.0, baseline_shift: 0.0, ..PickerStyle::default()}, RectF::new(0.0, 0.0, 180.0, 192.0), 2.0, &mut text, &mut uploader, &mut builder);
+    let top = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::INFINITY, f32::min);
+    let bottom = builder.drawlist().vertices.iter().map(|vertex| vertex.y).fold(f32::NEG_INFINITY, f32::max);
+    assert!(((top + bottom) * 0.5 - 96.0).abs() < 4.0, "top={top} bottom={bottom}");
 }
 
 #[derive(Default)]
