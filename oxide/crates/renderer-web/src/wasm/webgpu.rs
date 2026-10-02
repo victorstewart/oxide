@@ -261,6 +261,11 @@ struct GpuImage {
     kind: GpuImageKind,
 }
 
+struct GpuSurfaceMsaaTarget {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
 struct RgbaMipLevel
 {
    width: u32,
@@ -2106,6 +2111,48 @@ struct GpuPrograms {
     scene3d_color_tri_add_pipelines: [PipelineSlot; 3],
     id_mask_raster_pipeline: PipelineSlot,
     sampler: wgpu::Sampler,
+    surface_msaa: Option<SurfaceMsaaPrograms>,
+}
+
+// Direct 2D presentation is the only multisampled target. Sampled and retained
+// targets deliberately keep their single-sample pipeline family.
+struct SurfaceMsaaPrograms {
+    solid: PipelineSlot,
+    rrect: PipelineSlot,
+    image_rgba: PipelineSlot,
+    image_a8: PipelineSlot,
+    nine_slice_rgba: PipelineSlot,
+    nine_slice_a8: PipelineSlot,
+    spinner: PipelineSlot,
+    neon_marker: PipelineSlot,
+    glyph_rgba: PipelineSlot,
+    glyph_a8: PipelineSlot,
+    glyph_sdf: PipelineSlot,
+    rgba: PipelineSlot,
+    a8: PipelineSlot,
+    sdf: PipelineSlot,
+}
+
+impl SurfaceMsaaPrograms {
+    fn pipeline(&self, key: DrawPipelineKey) -> Option<&wgpu::RenderPipeline> {
+        match key {
+            DrawPipelineKey::Solid => self.solid.get(),
+            DrawPipelineKey::RRect => self.rrect.get(),
+            DrawPipelineKey::ImageRgba => self.image_rgba.get(),
+            DrawPipelineKey::ImageA8 => self.image_a8.get(),
+            DrawPipelineKey::NineSliceRgba => self.nine_slice_rgba.get(),
+            DrawPipelineKey::NineSliceA8 => self.nine_slice_a8.get(),
+            DrawPipelineKey::Spinner => self.spinner.get(),
+            DrawPipelineKey::NeonMarker => self.neon_marker.get(),
+            DrawPipelineKey::GlyphRgba => self.glyph_rgba.get(),
+            DrawPipelineKey::GlyphA8 => self.glyph_a8.get(),
+            DrawPipelineKey::GlyphSdf => self.glyph_sdf.get(),
+            DrawPipelineKey::Rgba => self.rgba.get(),
+            DrawPipelineKey::A8 => self.a8.get(),
+            DrawPipelineKey::Sdf => self.sdf.get(),
+            DrawPipelineKey::Effect => None,
+        }
+    }
 }
 
 struct CachedEffectGraph
@@ -2664,6 +2711,9 @@ pub struct WebGpuRenderer {
     scene_target: Option<GpuColorTarget>,
     scene_depth_target: Option<GpuDepthTarget>,
     scratch_target: Option<GpuColorTarget>,
+    surface_msaa_target: Option<GpuSurfaceMsaaTarget>,
+    surface_msaa_supported: bool,
+    surface_msaa_active: bool,
     viewport_buffer: wgpu::Buffer,
     viewport_bind_group: wgpu::BindGroup,
     effect_buffer: wgpu::Buffer,
@@ -3164,12 +3214,20 @@ impl WebGpuRenderer {
         config.desired_maximum_frame_latency = 1;
         config.alpha_mode = wgpu::CompositeAlphaMode::PreMultiplied;
         surface.configure(&device, &config);
+        let surface_msaa_supported = adapter
+            .get_texture_format_features(config.format)
+            .flags
+            .contains(
+                wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4
+                    | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE,
+            );
 
         let programs = create_programs(
             &device,
             config.format,
             packed_id_mask_fields,
             pipeline_profile,
+            surface_msaa_supported,
         );
         let (viewport_buffer, viewport_bind_group) = create_viewport_bind_group(&device, &programs);
         let prepared_property_ring = PreparedPropertyRing::new(&device, &programs);
@@ -3227,6 +3285,9 @@ impl WebGpuRenderer {
             scene_target: None,
             scene_depth_target: None,
             scratch_target: None,
+            surface_msaa_target: None,
+            surface_msaa_supported,
+            surface_msaa_active: false,
             viewport_buffer,
             viewport_bind_group,
             effect_buffer,
@@ -6560,6 +6621,7 @@ impl WebGpuRenderer {
         self.scene_target = None;
         self.scene_depth_target = None;
         self.scratch_target = None;
+        self.surface_msaa_target = None;
     }
 
     fn upload_frame_buffers(&mut self) {
@@ -8493,6 +8555,10 @@ impl WebGpuRenderer
 
    fn pipeline_for_draw(&self, pipeline: DrawPipelineKey) -> Option<&wgpu::RenderPipeline>
    {
+      if self.surface_msaa_active
+      {
+         return self.programs.surface_msaa.as_ref()?.pipeline(pipeline);
+      }
       match pipeline
       {
          DrawPipelineKey::Solid => self.programs.solid_pipeline.get(),
@@ -8589,7 +8655,7 @@ impl api::Renderer for WebGpuRenderer {
         api::DeviceCaps {
             max_framerate_hz: 120,
             supports_edr: false,
-            supports_msaa4x: false,
+            supports_msaa4x: self.surface_msaa_supported,
             native_scale: self.scale,
         }
     }
@@ -9276,6 +9342,10 @@ impl WebGpuRenderer {
             self.render_prepared_direct(encoder, surface_view);
             return;
         }
+        if self.can_render_direct_msaa() {
+            self.render_direct_msaa(encoder, surface_view);
+            return;
+        }
         if self.scene3d_active {
             self.render_scene3d(encoder, surface_view);
         }
@@ -9307,7 +9377,73 @@ impl WebGpuRenderer {
             } else {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             },
+            None,
         );
+    }
+
+    fn can_render_direct_msaa(&self) -> bool {
+        self.surface_msaa_supported
+            && self.programs.surface_msaa.is_some()
+            && !self.frame.draws.is_empty()
+            && !self.prepared_frame_active
+            && !self.scene3d_active
+            && self.id_mask_draws.is_empty()
+            && self.scene3d_overlay_draws.is_empty()
+            && self.frame.draws.iter().all(|draw| {
+                draw.target.is_none()
+                    && self
+                        .programs
+                        .surface_msaa
+                        .as_ref()
+                        .and_then(|programs| programs.pipeline(Self::draw_pipeline_for_kind(draw.kind)))
+                        .is_some()
+            })
+    }
+
+    fn ensure_surface_msaa_target(&mut self) {
+        if self.surface_msaa_target.is_some() {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("oxide-webgpu-surface-msaa4x"),
+            size: wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 4,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.surface_msaa_target = Some(GpuSurfaceMsaaTarget { _texture: texture, view });
+        self.stats.texture_creates = self.stats.texture_creates.saturating_add(1);
+        self.stats.target_texture_creates = self.stats.target_texture_creates.saturating_add(1);
+    }
+
+    fn render_direct_msaa(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+    ) {
+        self.ensure_surface_msaa_target();
+        let Some(msaa_view) = self.surface_msaa_target.as_ref().map(|target| target.view.clone()) else {
+            return;
+        };
+        self.surface_msaa_active = true;
+        self.render_draw_range(
+            encoder,
+            &msaa_view,
+            0,
+            self.frame.draws.len(),
+            None,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            Some(surface_view),
+        );
+        self.surface_msaa_active = false;
     }
 
     fn render_prepared_direct(
@@ -9901,6 +10037,7 @@ impl WebGpuRenderer {
                     end,
                     target,
                     wgpu::LoadOp::Load,
+                    None,
                 );
                 clear_pending = false;
                 start = end;
@@ -9924,6 +10061,7 @@ impl WebGpuRenderer {
                     } else {
                         wgpu::LoadOp::Load
                     },
+                    None,
                 );
                 clear_pending = false;
                 start = end;
@@ -10474,6 +10612,7 @@ impl WebGpuRenderer {
         end: usize,
         target: Option<u32>,
         load: wgpu::LoadOp<wgpu::Color>,
+        resolve_target: Option<&wgpu::TextureView>,
     ) {
         if start >= end {
             return;
@@ -10514,7 +10653,7 @@ impl WebGpuRenderer {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,
                 depth_slice: None,
-                resolve_target: None,
+                resolve_target,
                 ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
@@ -10905,11 +11044,82 @@ fn webgpu_timestamp_writes(
     })
 }
 
+fn create_pipeline_with_sample_count(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_layout: &wgpu::VertexBufferLayout<'_>,
+    color_target: &[Option<wgpu::ColorTargetState>],
+    fragment: &'static str,
+    sample_count: u32,
+) -> wgpu::RenderPipeline {
+    let vertex_buffers = [vertex_layout.clone()];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(fragment),
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_main"), compilation_options: Default::default(), buffers: &vertex_buffers },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
+        fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some(fragment), compilation_options: Default::default(), targets: color_target }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn create_instanced_pipeline_with_sample_count(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_buffers: &[wgpu::VertexBufferLayout<'_>],
+    color_target: &[Option<wgpu::ColorTargetState>],
+    vertex: &'static str,
+    fragment: &'static str,
+    label: &'static str,
+    sample_count: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module: shader, entry_point: Some(vertex), compilation_options: Default::default(), buffers: vertex_buffers },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
+        fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some(fragment), compilation_options: Default::default(), targets: color_target }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn create_glyph_pipeline_with_sample_count(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    vertex_buffers: &[wgpu::VertexBufferLayout<'_>],
+    color_target: &[Option<wgpu::ColorTargetState>],
+    fragment: &'static str,
+    label: &'static str,
+    sample_count: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState { module: shader, entry_point: Some("vs_glyph_instance"), compilation_options: Default::default(), buffers: vertex_buffers },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleStrip, ..Default::default() },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState { count: sample_count, ..Default::default() },
+        fragment: Some(wgpu::FragmentState { module: shader, entry_point: Some(fragment), compilation_options: Default::default(), targets: color_target }),
+        multiview: None,
+        cache: None,
+    })
+}
+
 fn create_programs(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
     packed_id_mask_fields: bool,
     profile: BrowserRendererPipelineProfile,
+    surface_msaa_supported: bool,
 ) -> GpuPrograms {
     let viewport_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("oxide-webgpu-viewport-layout"),
@@ -11593,6 +11803,22 @@ fn create_programs(
         }
         _ => IdMaskPrograms::Disabled,
     };
+    let surface_msaa = surface_msaa_supported.then(|| SurfaceMsaaPrograms {
+        solid: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::Solid), shader.as_ref(), |shader| create_pipeline_with_sample_count(device, shader, &solid_pipeline_layout, &draw_vertex_layout, &draw_color_target, "fs_solid", 4)),
+        rrect: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::RRect), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &solid_pipeline_layout, &rrect_vertex_layouts, &draw_color_target, "vs_rrect", "fs_rrect", "oxide-webgpu-rrect-msaa4x", 4)),
+        image_rgba: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::ImageRgba), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &image_vertex_layouts, &draw_color_target, "vs_image_instance", "fs_rgba", "oxide-webgpu-image-rgba-msaa4x", 4)),
+        image_a8: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::ImageA8), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &image_vertex_layouts, &draw_color_target, "vs_image_instance", "fs_a8", "oxide-webgpu-image-a8-msaa4x", 4)),
+        nine_slice_rgba: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::NineSliceRgba), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &nine_slice_vertex_layouts, &draw_color_target, "vs_nine_slice_instance", "fs_rgba", "oxide-webgpu-nine-slice-rgba-msaa4x", 4)),
+        nine_slice_a8: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::NineSliceA8), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &nine_slice_vertex_layouts, &draw_color_target, "vs_nine_slice_instance", "fs_a8", "oxide-webgpu-nine-slice-a8-msaa4x", 4)),
+        spinner: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::Spinner), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &solid_pipeline_layout, &spinner_vertex_layouts, &draw_color_target, "vs_spinner_instance", "fs_rrect", "oxide-webgpu-spinner-msaa4x", 4)),
+        neon_marker: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::NeonMarker), shader.as_ref(), |shader| create_instanced_pipeline_with_sample_count(device, shader, &solid_pipeline_layout, &neon_marker_vertex_layouts, &draw_color_target, "vs_neon_marker_instance", "fs_neon_marker", "oxide-webgpu-neon-marker-msaa4x", 4)),
+        glyph_rgba: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::GlyphRgba), shader.as_ref(), |shader| create_glyph_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &glyph_vertex_layouts, &draw_color_target, "fs_rgba", "oxide-webgpu-glyph-rgba-msaa4x", 4)),
+        glyph_a8: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::GlyphA8), shader.as_ref(), |shader| create_glyph_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &glyph_vertex_layouts, &draw_color_target, "fs_a8", "oxide-webgpu-glyph-a8-msaa4x", 4)),
+        glyph_sdf: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::GlyphSdf), shader.as_ref(), |shader| create_glyph_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &glyph_vertex_layouts, &draw_color_target, "fs_sdf", "oxide-webgpu-glyph-sdf-msaa4x", 4)),
+        rgba: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::Rgba), shader.as_ref(), |shader| create_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &draw_vertex_layout, &draw_color_target, "fs_rgba", 4)),
+        a8: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::A8), shader.as_ref(), |shader| create_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &draw_vertex_layout, &draw_color_target, "fs_a8", 4)),
+        sdf: PipelineSlot::create_with(profile.contains_draw(BrowserDrawPipeline::Sdf), shader.as_ref(), |shader| create_pipeline_with_sample_count(device, shader, &texture_pipeline_layout, &draw_vertex_layout, &draw_color_target, "fs_sdf", 4)),
+    });
 
     GpuPrograms {
         viewport_layout,
@@ -11630,6 +11856,7 @@ fn create_programs(
         scene3d_color_tri_add_pipelines,
         id_mask_raster_pipeline,
         sampler,
+        surface_msaa,
     }
 }
 
@@ -11649,36 +11876,7 @@ fn create_pipeline(
     color_target: &[Option<wgpu::ColorTargetState>],
     fragment: &'static str,
 ) -> wgpu::RenderPipeline {
-    let vertex_buffers = [vertex_layout.clone()];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(fragment),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: &vertex_buffers,
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: color_target,
-        }),
-        multiview: None,
-        cache: None,
-    })
+    create_pipeline_with_sample_count(device, shader, layout, vertex_layout, color_target, fragment, 1)
 }
 
 fn create_instanced_pipeline(
@@ -11691,35 +11889,9 @@ fn create_instanced_pipeline(
     fragment: &'static str,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(vertex),
-            compilation_options: Default::default(),
-            buffers: vertex_buffers,
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: color_target,
-        }),
-        multiview: None,
-        cache: None,
-    })
+    create_instanced_pipeline_with_sample_count(
+        device, shader, layout, vertex_buffers, color_target, vertex, fragment, label, 1,
+    )
 }
 
 fn create_glyph_pipeline(
@@ -11731,35 +11903,9 @@ fn create_glyph_pipeline(
     fragment: &'static str,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs_glyph_instance"),
-            compilation_options: Default::default(),
-            buffers: vertex_buffers,
-        },
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: color_target,
-        }),
-        multiview: None,
-        cache: None,
-    })
+    create_glyph_pipeline_with_sample_count(
+        device, shader, layout, vertex_buffers, color_target, fragment, label, 1,
+    )
 }
 
 fn create_scene3d_pipeline_variants(

@@ -377,6 +377,45 @@ fn wasm_webgpu_submits_directly_to_surface_without_backdrop_effects() {
 }
 
 #[test]
+fn wasm_webgpu_resolves_only_direct_unprepared_2d_frames_through_msaa() {
+    let source = include_str!("../src/wasm/webgpu.rs");
+    let direct = source
+        .split("fn can_render_direct_msaa")
+        .nth(1)
+        .expect("direct MSAA admission helper")
+        .split("fn ensure_surface_msaa_target")
+        .next()
+        .expect("direct MSAA admission body");
+    let target = source
+        .split("fn ensure_surface_msaa_target")
+        .nth(1)
+        .expect("surface MSAA target helper")
+        .split("fn render_direct_msaa")
+        .next()
+        .expect("surface MSAA target body");
+    let resize = source
+        .split("fn drop_auxiliary_targets")
+        .nth(1)
+        .expect("auxiliary target cleanup")
+        .split("fn upload_frame_buffers")
+        .next()
+        .expect("auxiliary target cleanup body");
+    let compact = source_without_whitespace(direct);
+
+    assert!(compact.contains("!self.frame.draws.is_empty()"));
+    assert!(compact.contains("!self.prepared_frame_active"));
+    assert!(compact.contains("!self.scene3d_active"));
+    assert!(compact.contains("self.id_mask_draws.is_empty()"));
+    assert!(compact.contains("self.scene3d_overlay_draws.is_empty()"));
+    assert!(target.contains("sample_count: 4"));
+    assert!(target.contains("wgpu::TextureUsages::RENDER_ATTACHMENT"));
+    assert!(resize.contains("self.surface_msaa_target = None;"));
+    assert!(source.contains("resolve_target,"));
+    assert!(source.contains("multisample: wgpu::MultisampleState { count: sample_count"));
+    assert!(source.contains("\"fs_sdf\", 4"));
+}
+
+#[test]
 fn wasm_webgpu_present_quad_uploads_are_cached_across_frames() {
     let source = include_str!("../src/wasm/webgpu.rs");
     let cache = source
