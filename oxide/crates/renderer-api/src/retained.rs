@@ -1074,15 +1074,21 @@ impl RenderSnapshot
 {
    pub fn new(instances: Vec<RenderChunkInstance>, properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
    {
-      Self::from_sequences(vec![RenderChunkSequence::new(instances)], properties, damage)
+      let sequence = RenderChunkSequence::new(instances);
+      Self::from_sequence_storage(Arc::from([sequence]), properties, damage)
    }
 
-   pub fn from_sequences(sequences: Vec<RenderChunkSequence>, mut properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
+   pub fn from_sequences(sequences: Vec<RenderChunkSequence>, properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
+   {
+      Self::from_sequence_storage(sequences.into(), properties, damage)
+   }
+
+   fn from_sequence_storage(sequences: Arc<[RenderChunkSequence]>, mut properties: Vec<RenderPropertySlot>, damage: Damage) -> Result<Self, RenderSnapshotError>
    {
       properties.sort_unstable_by_key(|property| property.id.0);
       validate_properties(&properties)?;
       let mut all_instances_have_transform_opacity = true;
-      for sequence in &sequences {
+      for sequence in sequences.iter() {
          if let Some(id) = sequence.inner.invalid_origin {
             return Err(RenderSnapshotError::NonFiniteOrigin(id));
          }
@@ -1148,7 +1154,7 @@ impl RenderSnapshot
       .saturating_add(resolved_spatial.as_ref().map_or(0, |spatial| spatial.byte_size));
       Ok(Self {
          inner: Arc::new(RenderSnapshotData {
-            sequences: sequences.into(),
+            sequences,
             resolved_spatial,
             properties: properties.into(),
             damage,
