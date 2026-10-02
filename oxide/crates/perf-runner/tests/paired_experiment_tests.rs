@@ -304,10 +304,7 @@ fn invalidation_schema_is_closed_and_null_compatible()
    all_valid["pairs"][0]["invalid_reason"] = serde_json::Value::String(String::from("operator-choice"));
    assert!(serde_json::from_value::<PairedExperimentInput>(all_valid).is_err());
 
-   let persisted: serde_json::Value = serde_json::from_str(include_str!(
-      "../../../benchmarks/experiments/c55-macos-demand-display-link/accepted-wake-cpu-report.json"
-   ))
-   .expect("parse persisted all-valid report JSON");
+   let persisted = serde_json::to_value(input(0.90)).expect("serialize all-valid paired input");
    let persisted_pair: SamplePair = serde_json::from_value(persisted["pairs"][0].clone())
       .expect("parse persisted null invalidation reason");
    assert_eq!(persisted_pair.invalid_reason, None);
