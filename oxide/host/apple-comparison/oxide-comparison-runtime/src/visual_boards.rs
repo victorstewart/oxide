@@ -42,6 +42,7 @@ pub(super) struct VisualBoards
    revision: u64,
    name: String,
    heading: Label,
+   root_chunk: Option<CachedRootChunk>,
    controls: super::visual_controls::VisualControls,
    structure: super::visual_structure::VisualStructure,
    extended: super::visual_extended::VisualExtended,
@@ -65,7 +66,7 @@ impl VisualBoards
       let fixture: serde_json::Value = serde_json::from_str(include_str!("../../fixtures/visual.json")).map_err(visual_error)?;
       let heading = Label {text: fixture["boards"][name]["title"].as_str().ok_or(())?.into(), font_id, font_px: 18.0,
          color: rgba([0.12, 0.16, 0.2, 1.0]), align: ui::elements::Align::Left, wrap: false};
-      Ok(Self {revision: 0, name: name.into(), heading, controls: super::visual_controls::VisualControls::new(font_id, bold_id),
+      Ok(Self {revision: 0, name: name.into(), heading, root_chunk: None, controls: super::visual_controls::VisualControls::new(font_id, bold_id),
          structure: super::visual_structure::VisualStructure::new(font_id, images),
          extended: super::visual_extended::VisualExtended::new(font_id, renderer)?,
          editing_edges: super::visual_editing_edges::VisualEditingEdges::new(font_id)})
@@ -116,9 +117,18 @@ impl VisualBoards
          builders.extend(self.extended.chunks.iter_mut().map(|chunk| &mut chunk.builder));
          text.finish_frame_many(&mut MtlUploader {renderer}, &mut builders);
       }
-      self.revision += 1;
       let resources = self.extended.resources(&self.name, stage, renderer);
-      let base = gfx::RenderChunk::new(gfx::RenderChunkId(500), gfx::RenderChunkRevisions {structural: self.revision, ..Default::default()}, builder.drawlist().clone(), gfx::ChunkIndexMode::Local, &resources).map_err(visual_error)?;
+      let base = if let Some(root) = self.root_chunk.as_ref().filter(|root| root.matches(builder.drawlist(), &resources))
+      {
+         root.chunk.clone()
+      }
+      else
+      {
+         self.revision += 1;
+         let root = gfx::RenderChunk::new(gfx::RenderChunkId(500), gfx::RenderChunkRevisions {structural: self.revision, ..Default::default()}, builder.drawlist().clone(), gfx::ChunkIndexMode::Local, &resources).map_err(visual_error)?;
+         self.root_chunk = Some(CachedRootChunk {chunk: root.clone(), resources});
+         root
+      };
       let mut instances = vec![gfx::RenderChunkInstance::new(base, [0.0; 2])];
       let mut properties = Vec::new();
       for chunk in self.controls.chunks.iter().chain(self.structure.chunks.iter()).chain(self.extended.chunks.iter())
@@ -130,7 +140,45 @@ impl VisualBoards
    }
 }
 
+struct CachedRootChunk
+{
+   chunk: gfx::RenderChunk,
+   resources: Vec<gfx::RenderResourceDependency>,
+}
+
+impl CachedRootChunk
+{
+   fn matches(&self, list: &gfx::DrawList, resources: &[gfx::RenderResourceDependency]) -> bool
+   {
+      self.chunk.draw_list() == list && self.resources == resources
+   }
+}
+
 fn visual_error(error: impl std::fmt::Debug)
 {
    let _ = std::fs::write(std::env::temp_dir().join("oxide-visual-render-error.txt"), format!("{error:?}"));
+}
+
+#[cfg(test)]
+mod tests
+{
+   use super::*;
+
+   #[test]
+   fn cached_root_requires_the_same_draw_list_and_image_generation()
+   {
+      let image = gfx::ImageHandle(41);
+      let resources = vec![gfx::RenderResourceDependency {image, generation: 7}];
+      let list = gfx::DrawList {items: vec![gfx::DrawCmd::Image {tex: image,
+         dst: gfx::RectF::new(0.0, 0.0, 10.0, 10.0), src: gfx::RectF::new(0.0, 0.0, 10.0, 10.0), alpha: 1.0}], vertices: Vec::new(), indices: Vec::new()};
+      let chunk = gfx::RenderChunk::new(gfx::RenderChunkId(500), gfx::RenderChunkRevisions::default(), list.clone(), gfx::ChunkIndexMode::Local, &resources).unwrap();
+      let cached = CachedRootChunk {chunk, resources: resources.clone()};
+
+      assert!(cached.matches(&list, &resources));
+      assert!(!cached.matches(&list, &[gfx::RenderResourceDependency {image, generation: 8}]));
+
+      let mut changed_list = list.clone();
+      changed_list.items.clear();
+      assert!(!cached.matches(&changed_list, &resources));
+   }
 }

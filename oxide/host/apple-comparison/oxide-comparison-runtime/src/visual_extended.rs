@@ -140,7 +140,8 @@ impl VisualExtended
       let scale = number(&spec["text_scales"][stage]);
       let mut local = ui::DrawListBuilder::new();
       self.label(spec["scaled_text"].as_str().unwrap(), number(&spec["scaled_font_px"])).encode(gfx::RectF::new(0.0, 0.0, bounds.w, bounds.h), 3.0, text, &mut MtlUploader {renderer}, &mut local);
-      let mut chunk = VisualChunk::new(local, 810, stage as u64);
+      // Stage state reaches this fixed glyph geometry through its transform slot.
+      let mut chunk = VisualChunk::new(local, 810, 0);
       chunk.slots.push(gfx::RenderPropertySlotId(8100));
       chunk.properties.push(gfx::RenderPropertySlot {id: gfx::RenderPropertySlotId(8100), revision: stage as u64,
          value: gfx::RenderPropertyValue::Transform([scale, 0.0, 0.0, scale, bounds.x, bounds.y])});
