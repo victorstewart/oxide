@@ -283,6 +283,29 @@ impl BitmapTextAtlas {
         self.dirty = None;
     }
 
+   /// Discard cached glyph rasters while retaining fonts, storage, and the image handle.
+   /// Call only between frames: existing glyph UVs become invalid, and the full
+   /// atlas must be uploaded after recording replacement text and before drawing it.
+   pub fn clear_rasters(&mut self)
+   {
+      self.data.fill(0);
+      self.dirty = Some(BitmapTextAtlasDirtyRect
+      {
+         x: 0,
+         y: 0,
+         w: BITMAP_TEXT_ATLAS_WIDTH,
+         h: BITMAP_TEXT_ATLAS_HEIGHT,
+      });
+      self.next_x = 1;
+      self.row_y = 1;
+      self.row_h = 0;
+      self.glyphs.clear();
+      self.layout.clear();
+      self.scratch_vertices.clear();
+      self.scratch_indices.clear();
+      self.revision = self.revision.wrapping_add(1);
+   }
+
     #[must_use]
     pub fn handle(&self) -> Option<ImageHandle> {
         self.handle

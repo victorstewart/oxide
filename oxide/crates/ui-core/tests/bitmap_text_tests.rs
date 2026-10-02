@@ -233,6 +233,77 @@ fn atlas_glyph_run_matches_retired_fontdue_coverage_and_geometry_exactly() {
 }
 
 #[test]
+fn clearing_rasters_recovers_exhausted_atlas_without_replacing_storage_or_handle()
+{
+   let mut atlas = BitmapTextAtlas::new();
+   atlas.set_handle(ImageHandle(77));
+   let pixels = atlas.image().0.as_ptr();
+   let style = TextStyle::new(18.0, Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
+   assert!(atlas.draw_text(&mut CollectingEncoder::default(), "first last bio", 12.0, 24.0, style, 2.0));
+
+   let mut exhausted = false;
+   for px in 40..100
+   {
+      let pressure = TextStyle::new(px as f32, style.color).bold();
+      if !atlas.draw_text(&mut CollectingEncoder::default(), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 0.0, 0.0, pressure, 2.0)
+      {
+         exhausted = true;
+         break;
+      }
+   }
+   assert!(exhausted, "the fixture must exhaust the retained atlas");
+   assert!(atlas.draw_text(&mut CollectingEncoder::default(), "first last bio", 12.0, 24.0, style, 2.0), "previously cached glyphs remain drawable");
+   let revision = atlas.atlas_revision();
+   atlas.clear_dirty();
+   atlas.clear_rasters();
+   assert_eq!(atlas.handle(), Some(ImageHandle(77)));
+   assert_eq!(atlas.image().0.as_ptr(), pixels);
+   assert!(atlas.image().0.iter().all(|pixel| *pixel == 0));
+   assert!(atlas.atlas_revision() > revision);
+   let dirty = atlas.dirty_rect().expect("cleared pixels require a full upload");
+   assert_eq!((dirty.x, dirty.y, dirty.w, dirty.h), (0, 0, atlas.image().1, atlas.image().2));
+
+   let mut restored = CollectingEncoder::default();
+   assert!(atlas.draw_text(&mut restored, "first last bio Add link", 12.0, 24.0, style, 2.0));
+   let mut fresh = BitmapTextAtlas::new();
+   fresh.set_handle(ImageHandle(77));
+   let mut reference = CollectingEncoder::default();
+   assert!(fresh.draw_text(&mut reference, "first last bio Add link", 12.0, 24.0, style, 2.0));
+   assert_eq!(atlas.image().0, fresh.image().0, "rerasterized coverage must match a fresh atlas");
+   assert_eq!(restored.glyph_vertices.len(), reference.glyph_vertices.len());
+   for (actual, expected) in restored.glyph_vertices.iter().zip(&reference.glyph_vertices)
+   {
+      assert_eq!((actual.x, actual.y, actual.u, actual.v), (expected.x, expected.y, expected.u, expected.v));
+   }
+}
+
+#[test]
+#[ignore = "focused cache-reset timing comparison"]
+fn raster_reset_timing()
+{
+   use std::time::Instant;
+   let mut atlas = BitmapTextAtlas::new();
+   atlas.set_handle(ImageHandle(77));
+   let style = TextStyle::new(18.0, Color::rgba(1.0, 1.0, 1.0, 1.0)).bold();
+   let mut retained_us = Vec::new();
+   let mut rebuilt_us = Vec::new();
+   for _ in 0..30
+   {
+      let start = Instant::now();
+      atlas.clear_rasters();
+      assert!(atlas.draw_text(&mut CollectingEncoder::default(), "first last bio Add link", 12.0, 24.0, style, 2.0));
+      retained_us.push(start.elapsed().as_micros());
+      let start = Instant::now();
+      let mut replacement = BitmapTextAtlas::new();
+      replacement.set_handle(ImageHandle(77));
+      assert!(replacement.draw_text(&mut CollectingEncoder::default(), "first last bio Add link", 12.0, 24.0, style, 2.0));
+      rebuilt_us.push(start.elapsed().as_micros());
+   }
+   eprintln!("retained_reset_and_redraw_us={retained_us:?}");
+   eprintln!("rebuilt_atlas_and_redraw_us={rebuilt_us:?}");
+}
+
+#[test]
 fn text_input_options_use_one_glyph_run_per_label_and_no_alpha_run_solids() {
     let layout = text_input_options_layout(
         RectF::new(260.0, 80.0, 120.0, 44.0),
