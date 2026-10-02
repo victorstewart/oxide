@@ -5,6 +5,7 @@ use oxide_renderer_api::{
 
 const EXPECTED_DRAW_CMD_TAXONOMY: &[&str] = &[
    "LayerBegin",
+   "LayerBeginWithOpacity",
    "LayerEnd",
    "Solid",
    "Image",
@@ -92,10 +93,11 @@ fn sample_glyph_run() -> GlyphRun
    }
 }
 
-fn representative_draw_cmds() -> [DrawCmd; 14]
+fn representative_draw_cmds() -> [DrawCmd; 15]
 {
    [
       DrawCmd::LayerBegin { id: 1, rect: sample_rect(), dirty: true },
+      DrawCmd::LayerBeginWithOpacity { id: 2, rect: sample_rect(), dirty: false, opacity: 0.5 },
       DrawCmd::LayerEnd,
       DrawCmd::Solid { vb: sample_vertex_span(), ib: sample_index_span(), color: sample_color() },
       DrawCmd::Image {
@@ -221,6 +223,7 @@ fn draw_cmd_taxonomy_name(cmd: &DrawCmd) -> &'static str
 {
    match cmd {
       DrawCmd::LayerBegin { .. } => "LayerBegin",
+      DrawCmd::LayerBeginWithOpacity { .. } => "LayerBeginWithOpacity",
       DrawCmd::LayerEnd => "LayerEnd",
       DrawCmd::Solid { .. } => "Solid",
       DrawCmd::Image { .. } => "Image",
@@ -252,6 +255,10 @@ fn capture_draw_cmd_signature(cmd: &DrawCmd) -> String
    match cmd {
       DrawCmd::LayerBegin { id, rect, dirty } => {
          format!("LayerBegin id={id} rect={} dirty={dirty}", format_rect_f(*rect))
+      }
+      DrawCmd::LayerBeginWithOpacity { id, rect, dirty, opacity } =>
+      {
+         format!("LayerBeginWithOpacity id={id} rect={} dirty={dirty} opacity={opacity:.3}", format_rect_f(*rect))
       }
       DrawCmd::LayerEnd => String::from("LayerEnd"),
       DrawCmd::Solid { vb, ib, color } => {
@@ -315,7 +322,7 @@ fn replay_representative_draw_stream(list: &DrawList, encoder: &mut dyn RenderEn
             let _ = clip_stack.pop();
             encoder.set_clip(*clip_stack.last().unwrap_or(&fallback));
          }
-         DrawCmd::LayerBegin { .. } | DrawCmd::LayerEnd => {}
+         DrawCmd::LayerBegin { .. } | DrawCmd::LayerBeginWithOpacity { .. } | DrawCmd::LayerEnd => {}
          DrawCmd::Solid { vb, color, .. } => {
             if let Some(vertices) = vertex_slice(list, *vb) {
                encoder.draw_solid(vertices, *color);
@@ -611,7 +618,7 @@ fn validate_draw_list(list: &DrawList) -> Result<(), &'static str> {
     let mut clip_depth = 0i32;
     for cmd in &list.items {
         match cmd {
-            DrawCmd::LayerBegin { .. } => layer_depth += 1,
+            DrawCmd::LayerBegin { .. } | DrawCmd::LayerBeginWithOpacity { .. } => layer_depth += 1,
             DrawCmd::LayerEnd => layer_depth -= 1,
             DrawCmd::ClipPush { .. } => clip_depth += 1,
             DrawCmd::ClipPop => clip_depth -= 1,
