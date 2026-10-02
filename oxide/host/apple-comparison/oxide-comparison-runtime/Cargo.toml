@@ -9,12 +9,17 @@ publish = false
 path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
 
+[features]
+native-measurement = ["oxide-renderer-metal/snapshot-tests", "dep:metal-rs", "dep:objc"]
+
 [dependencies]
 oxide-renderer-api = { path = "../../../crates/renderer-api" }
 oxide-renderer-metal = { path = "../../../crates/renderer-metal" }
 oxide-ui-core = { path = "../../../crates/ui-core" }
 oxide-platform-api = { path = "../../../crates/platform-api" }
 oxide-text = { path = "../../../crates/text" }
+metal-rs = {package = "metal", version = "0.32", optional = true}
+objc = {version = "0.2", optional = true}
 png = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

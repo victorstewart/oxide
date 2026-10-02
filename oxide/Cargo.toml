@@ -22,6 +22,7 @@ members = [
     "crates/utils",
     "host/ios-app/oxide-host-ios",
     "host/apple-comparison/oxide-comparison-runtime",
+    "host/apple-comparison/macos-runner",
     "host/macos-app/oxide-host-macos",
     "host/macos-app/app-runner",
     "host/web-app/oxide-host-web",

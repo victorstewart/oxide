@@ -123,10 +123,12 @@ fn visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()
    let mut renderer = MetalRenderer::new_with_config(MetalRendererConfig::visible_host())
       .expect("create visible Metal renderer");
    assert_eq!(renderer.frame_resource_depth_for_snapshot(), 3);
+   assert_eq!(renderer.frame_slots_in_flight_for_snapshot(), 0);
    for slot in 0..3
    {
       assert_eq!(renderer.frame_ring_capacities_for_snapshot(slot), Some([524_288, 65_536, 73_728]));
       renderer.mark_frame_slot_busy_for_snapshot(slot);
+      assert_eq!(renderer.frame_slots_in_flight_for_snapshot(), slot + 1);
    }
 
    let blocked = renderer.begin_frame(&api::FrameTarget, None);
@@ -134,6 +136,7 @@ fn visible_frame_resources_cover_measured_high_water_and_skip_only_when_busy()
    renderer.submit(blocked).expect("coalesce blocked frame");
 
    renderer.release_frame_slot_for_snapshot(2);
+   assert_eq!(renderer.frame_slots_in_flight_for_snapshot(), 2);
    let resumed = renderer.begin_frame(&api::FrameTarget, None);
    assert_eq!(renderer.last_stats().frame_backpressure_skipped, 0);
    assert_eq!(renderer.current_frame_slot_for_snapshot(), 2);

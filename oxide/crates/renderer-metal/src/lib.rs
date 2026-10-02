@@ -1646,6 +1646,12 @@ impl MetalRenderer {
         self.frames.len()
     }
 
+   #[cfg(feature = "snapshot-tests")]
+   pub fn frame_slots_in_flight_for_snapshot(&self) -> usize
+   {
+      self.frame_in_flight.load(Ordering::Acquire).count_ones() as usize
+   }
+
     #[cfg(feature = "snapshot-tests")]
     pub fn frame_ring_capacities_for_snapshot(&self, slot: usize) -> Option<[usize; 3]>
     {

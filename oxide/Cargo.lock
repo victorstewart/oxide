@@ -910,6 +910,8 @@ dependencies = [
 name = "oxide-comparison-runtime"
 version = "0.1.0"
 dependencies = [
+ "metal",
+ "objc",
  "oxide-platform-api",
  "oxide-renderer-api",
  "oxide-renderer-metal",
@@ -1012,6 +1014,17 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "oxide-host-macos",
+]
+
+[[package]]
+name = "oxide-macos-comparison"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "oxide-comparison-runtime",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

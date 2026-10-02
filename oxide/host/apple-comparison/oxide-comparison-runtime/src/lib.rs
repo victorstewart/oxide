@@ -3,6 +3,10 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::io::Cursor;
 use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "native-measurement")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "native-measurement")]
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -18,6 +22,7 @@ mod visual_structure;
 mod visual_boards;
 mod visual_extended;
 mod visual_editing_edges;
+mod native_metrics;
 #[cfg(all(test, target_os = "macos"))]
 mod resource_rebuild_tests;
 
@@ -26,6 +31,12 @@ const FONT_BYTES: &[u8] = include_bytes!("../../../../crates/text/tests/fixtures
 const IMAGE_BYTES: [&[u8]; 4] = [
    include_bytes!("../../fixtures/image-0.png"), include_bytes!("../../fixtures/image-1.png"),
    include_bytes!("../../fixtures/image-2.png"), include_bytes!("../../fixtures/image-3.png"),
+];
+
+pub const NATIVE_CASES: &[&str] = &[
+   "shapes", "text", "local", "images", "animation", "scroll", "visual-controls", "visual-editing",
+   "visual-typography", "visual-composition", "visual-layout", "visual-pickers", "visual-opacity",
+   "visual-images", "visual-geometry", "visual-editing-edges",
 ];
 
 #[derive(Deserialize)]
@@ -81,7 +92,7 @@ struct ScrollCase
    image_rect: [f32; 4], label_rect: [f32; 4], font_size: f32, template: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Case {Shapes, Text, Local, Images, Animation, Scroll}
 
 impl Case
@@ -124,6 +135,22 @@ struct Suite
    row_labels: Vec<Label>,
    collection: ui::collection::CollectionView,
    animation_sequence: Option<gfx::RenderChunkSequence>,
+   retained: Option<RetainedSuite>,
+}
+
+struct RetainedSuite
+{
+   background: gfx::RenderChunk,
+   units: Vec<gfx::RenderChunkInstance>,
+   builder: ui::DrawListBuilder,
+   revisions: Vec<u64>,
+}
+
+struct Advance
+{
+   reset: bool,
+   first: i64,
+   last: i64,
 }
 
 struct Runtime
@@ -136,9 +163,12 @@ struct Runtime
    visual: Option<visual_boards::VisualBoards>,
    visual_checkpoint: bool,
    visual_stage: usize,
+   native_measurement: native_metrics::NativeMeasurement,
 }
 
 static RUNTIME: OnceLock<Mutex<Option<Runtime>>> = OnceLock::new();
+#[cfg(feature = "native-measurement")]
+static RETAINED_TEXT_ENABLED: AtomicBool = AtomicBool::new(false);
 
 struct MtlUploader
 {
@@ -173,7 +203,8 @@ fn new_runtime() -> Result<Runtime, ()>
    let mut renderer = metal::MetalRenderer::new_with_config_and_sdr_compositing(metal::MetalRendererConfig::visible_host(), metal::SdrCompositing::SrgbSourceOver).map_err(|_| ())?;
    renderer.resize(1_170, 2_532, 3.0).map_err(|_| ())?;
    Ok(Runtime {renderer, builder: ui::DrawListBuilder::new(), coalesced: Vec::new(), text: TextCtx::default(), suite: None, visual: None,
-      visual_checkpoint: false, visual_stage: 0})
+      visual_checkpoint: false, visual_stage: 0,
+      native_measurement: native_metrics::NativeMeasurement::default()})
 }
 
 #[no_mangle]
@@ -200,7 +231,7 @@ pub unsafe extern "C" fn oxide_core_draw(drawable: *mut c_void, values: *const f
       let rect = gfx::RectF::new(15.0 + (index % 8) as f32 * 45.0, 22.0 + (index / 8) as f32 * 100.0, 36.0, 80.0);
       runtime.builder.rrect(rect, [6.0; 4], gfx::Color::from_srgba(*value, 0.25, 0.5, 1.0));
    }
-   submit(runtime, drawable)
+   submit(runtime, drawable, None)
 }
 
 #[no_mangle]
@@ -252,10 +283,11 @@ pub unsafe extern "C" fn oxide_core_suite_init(name: *const c_char, checkpoint: 
       text_values: vec![0; fixture.text.count], local_values: vec![0; fixture.local.count],
       last_text_step: None, last_local_step: None, text_labels, local_labels, buttons,
       button_states: (0..fixture.local.count).map(|_| ButtonState::default()).collect(),
-      card_labels, row_labels, collection, fixture, images, animation_sequence: None,
+      card_labels, row_labels, collection, fixture, images, animation_sequence: None, retained: None,
    });
    warm_glyphs(runtime, font_id);
    if matches!(case, Case::Animation) && prepare_animation(runtime).is_err() {return -7;}
+   if matches!(case, Case::Text | Case::Local) && retained_text_enabled() && prepare_retained_suite(runtime).is_err() {return -8;}
    0
 }
 
@@ -265,6 +297,12 @@ pub unsafe extern "C" fn oxide_core_suite_draw(drawable: *mut c_void, time: f64,
    if drawable.is_null() || !time.is_finite() {return -1;}
    let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
    let Some(runtime) = slot.as_mut() else {return -2;};
+   suite_draw(runtime, drawable, time, generation)
+}
+
+fn suite_draw(runtime: &mut Runtime, drawable: *mut c_void, time: f64, generation: u64) -> i32
+{
+   let timer = native_frame_timer(runtime);
    if let Some(visual) = runtime.visual.as_mut()
    {
       let (stage, timed_stage_elapsed_ms) = if runtime.visual_checkpoint
@@ -283,19 +321,13 @@ pub unsafe extern "C" fn oxide_core_suite_draw(drawable: *mut c_void, time: f64,
       }
       else {visual.draw(stage, &mut runtime.text, &mut runtime.renderer, &mut runtime.builder)};
       let Ok(snapshot) = snapshot else {return -8;};
-      if unsafe {runtime.renderer.prepare_present_drawable(drawable)}.is_err() {return -4;}
-      let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
-      if let Err(error) = runtime.renderer.encode_snapshot(&snapshot)
-      {
-         let _ = std::fs::write(std::env::temp_dir().join("oxide-visual-render-error.txt"), format!("{error:?}\n{snapshot:#?}"));
-         return -9;
-      }
-      return if runtime.renderer.submit(token).is_err() {-5} else {0};
+      return submit_snapshot(runtime, drawable, &snapshot, timer);
    }
    let Some(suite) = runtime.suite.as_ref() else {return -3;};
-   if matches!(suite.case, Case::Animation) {return submit_animation(runtime, drawable, time, generation);}
+   if matches!(suite.case, Case::Animation) {return submit_animation(runtime, drawable, time, generation, timer);}
+   if matches!(suite.case, Case::Text | Case::Local) && suite.retained.is_some() {return submit_retained_suite(runtime, drawable, time, timer);}
    render_suite(runtime, time, generation);
-   submit(runtime, drawable)
+   submit(runtime, drawable, timer)
 }
 
 /// Draws the timed visual control condition on its existing board instance.
@@ -308,14 +340,12 @@ pub unsafe extern "C" fn oxide_core_suite_draw_control(drawable: *mut c_void, el
    let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
    let Some(runtime) = slot.as_mut() else {return -2;};
    if runtime.visual.is_none() || runtime.visual_checkpoint {return -3;}
+   let timer = native_frame_timer(runtime);
    runtime.visual_stage = 0;
    let elapsed_ms = (elapsed.max(0.0) * 1_000.0).floor() as u64;
    let visual = runtime.visual.as_mut().unwrap();
    let Ok(snapshot) = visual.draw_timed(0, elapsed_ms, elapsed_ms, &mut runtime.text, &mut runtime.renderer, &mut runtime.builder) else {return -8;};
-   if unsafe {runtime.renderer.prepare_present_drawable(drawable)}.is_err() {return -4;}
-   let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
-   if runtime.renderer.encode_snapshot(&snapshot).is_err() {return -9;}
-   if runtime.renderer.submit(token).is_err() {-5} else {0}
+   submit_snapshot(runtime, drawable, &snapshot, timer)
 }
 
 /// Resets a timed visual board. The next draw restores stage zero on the same
@@ -391,6 +421,147 @@ pub unsafe extern "C" fn oxide_core_suite_gpu_ms(frame_id: *mut u64) -> f64
    stats.gpu_ms
 }
 
+#[cfg(feature = "native-measurement")]
+pub use native_metrics::NativeFrameMetrics;
+
+#[cfg(feature = "native-measurement")]
+pub fn native_set_retained_text_enabled(enabled: bool)
+{
+   RETAINED_TEXT_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+#[cfg(not(feature = "native-measurement"))]
+fn retained_text_enabled() -> bool {false}
+
+#[cfg(feature = "native-measurement")]
+fn retained_text_enabled() -> bool {RETAINED_TEXT_ENABLED.load(Ordering::Relaxed)}
+
+#[cfg(feature = "native-measurement")]
+pub fn native_draw_offscreen(time: f64, generation: u64) -> i32
+{
+   if !time.is_finite() {return -1;}
+   objc::rc::autoreleasepool(|| {
+      let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+      let Some(runtime) = slot.as_mut() else {return -2;};
+      suite_draw(runtime, std::ptr::null_mut(), time, generation)
+   })
+}
+
+#[cfg(feature = "native-measurement")]
+pub fn native_capture_offscreen(path: &std::path::Path) -> Result<(), String>
+{
+   objc::rc::autoreleasepool(|| {
+      let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+      let Some(runtime) = slot.as_mut() else {return Err("runtime is not initialized".into());};
+      let Some((width, height, pixels)) = runtime.renderer.readback_bgra8() else
+      {
+         return Err("offscreen target readback failed".into());
+      };
+      write_bgra_png(path, width, height, pixels)
+   })
+}
+
+#[cfg(feature = "native-measurement")]
+pub fn native_wait_for_frame_capacity() -> Result<(), String>
+{
+   native_wait_for_slots(false)
+}
+
+#[cfg(feature = "native-measurement")]
+pub fn native_wait_for_gpu() -> Result<(), String>
+{
+   native_wait_for_slots(true)
+}
+
+#[cfg(feature = "native-measurement")]
+fn native_wait_for_slots(drain: bool) -> Result<(), String>
+{
+   let deadline = Instant::now() + Duration::from_secs(5);
+   loop
+   {
+      let ready = {
+         let slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+         let Some(runtime) = slot.as_ref() else {return Err("runtime is not initialized".into());};
+         let in_flight = runtime.renderer.frame_slots_in_flight_for_snapshot();
+         if drain {in_flight == 0} else {in_flight < runtime.renderer.frame_resource_depth_for_snapshot()}
+      };
+      if ready {return Ok(());}
+      if Instant::now() >= deadline {return Err("timed out waiting for renderer frame capacity".into());}
+      std::thread::sleep(Duration::from_micros(100));
+   }
+}
+
+#[cfg(feature = "native-measurement")]
+pub fn enable_native_measurement(accounting: bool)
+{
+   let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+   if let Some(runtime) = slot.as_mut()
+   {
+      runtime.renderer.set_accounting_stats_enabled_for_benchmark(accounting);
+      runtime.native_measurement.metrics = NativeFrameMetrics::default();
+      runtime.native_measurement.accounting = accounting;
+   }
+}
+
+#[cfg(feature = "native-measurement")]
+pub fn native_frame_metrics() -> NativeFrameMetrics
+{
+   let slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+   slot.as_ref().map_or_else(NativeFrameMetrics::default, |runtime| {
+      let mut metrics = runtime.native_measurement.metrics;
+      metrics.renderer_perf = runtime.renderer.last_stats();
+      metrics
+   })
+}
+
+pub fn native_next_wakeup(name: &str, elapsed: f64) -> f64
+{
+   if !elapsed.is_finite() {return f64::NAN;}
+   let elapsed = elapsed.max(0.0);
+   match Case::parse(name)
+   {
+      Some(Case::Text | Case::Local) => ((elapsed * 10.0).floor() + 1.0) / 10.0,
+      Some(_) => elapsed,
+      None if visual_boards::is_case(name) => oxide_core_suite_next_wakeup(elapsed),
+      None => f64::NAN,
+   }
+}
+
+#[cfg(feature = "native-measurement")]
+#[allow(unexpected_cfgs)]
+pub unsafe fn native_capture_drawable(drawable: *mut c_void, path: &std::path::Path) -> Result<(), String>
+{
+   use metal_rs::foreign_types::ForeignTypeRef;
+   use objc::msg_send;
+   use objc::runtime::Object;
+   use objc::{sel, sel_impl};
+
+   if drawable.is_null() {return Err("drawable is null".into());}
+   let drawable = drawable.cast::<Object>();
+   let texture: *mut metal_rs::MTLTexture = unsafe {msg_send![drawable, texture]};
+   if texture.is_null() {return Err("drawable did not provide a texture".into());}
+   let texture = unsafe {metal_rs::TextureRef::from_ptr(texture)};
+   let slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+   let Some(runtime) = slot.as_ref() else {return Err("runtime is not initialized".into());};
+   let Some((width, height, pixels)) = runtime.renderer.readback_direct_present_texture_for_snapshot(texture) else
+   {
+      return Err("drawable texture readback failed".into());
+   };
+   write_bgra_png(path, width, height, pixels)
+}
+
+#[cfg(feature = "native-measurement")]
+fn write_bgra_png(path: &std::path::Path, width: u32, height: u32, mut pixels: Vec<u8>) -> Result<(), String>
+{
+   for pixel in pixels.chunks_exact_mut(4) {pixel.swap(0, 2);}
+   let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+   let mut encoder = png::Encoder::new(file, width, height);
+   encoder.set_color(png::ColorType::Rgba);
+   encoder.set_depth(png::BitDepth::Eight);
+   let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+   writer.write_image_data(&pixels).map_err(|error| error.to_string())
+}
+
 const VISUAL_CYCLE_SECONDS: f64 = 6.0;
 const VISUAL_ACTION_SECONDS: f64 = 2.0;
 
@@ -421,13 +592,36 @@ fn visual_stage_elapsed_ms(elapsed: f64) -> u64
    ((position - stage_start) * 1_000.0).floor() as u64
 }
 
-fn submit(runtime: &mut Runtime, drawable: *mut c_void) -> i32
+fn native_frame_timer(runtime: &Runtime) -> Option<native_metrics::NativeFrameTimer>
+{
+   native_metrics::NativeFrameTimer::start(&runtime.renderer, runtime.native_measurement.accounting)
+}
+
+fn submit(runtime: &mut Runtime, drawable: *mut c_void, mut timer: Option<native_metrics::NativeFrameTimer>) -> i32
 {
    ui::coalesce_adjacent_draws_reuse(runtime.builder.drawlist_mut(), &mut runtime.coalesced);
    if unsafe {runtime.renderer.prepare_present_drawable(drawable)}.is_err() {return -4;}
+   if let Some(timer) = timer.as_mut() {timer.prepared(&mut runtime.native_measurement.metrics, &runtime.renderer);}
    let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
    runtime.renderer.encode_pass(runtime.builder.drawlist());
-   if runtime.renderer.submit(token).is_err() {-5} else {0}
+   if runtime.renderer.submit(token).is_err() {return -5;}
+   if let Some(timer) = timer {timer.submitted(&mut runtime.native_measurement.metrics, &runtime.renderer);}
+   0
+}
+
+fn submit_snapshot(runtime: &mut Runtime, drawable: *mut c_void, snapshot: &gfx::RenderSnapshot, mut timer: Option<native_metrics::NativeFrameTimer>) -> i32
+{
+   if unsafe {runtime.renderer.prepare_present_drawable(drawable)}.is_err() {return -4;}
+   if let Some(timer) = timer.as_mut() {timer.prepared(&mut runtime.native_measurement.metrics, &runtime.renderer);}
+   let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
+   if let Err(error) = runtime.renderer.encode_snapshot(snapshot)
+   {
+      let _ = std::fs::write(std::env::temp_dir().join("oxide-visual-render-error.txt"), format!("{error:?}\n{snapshot:#?}"));
+      return -9;
+   }
+   if runtime.renderer.submit(token).is_err() {return -5;}
+   if let Some(timer) = timer {timer.submitted(&mut runtime.native_measurement.metrics, &runtime.renderer);}
+   0
 }
 
 fn warm_glyphs(runtime: &mut Runtime, font_id: usize)
@@ -500,24 +694,27 @@ fn draw_shapes(suite: &mut Suite, time: f64, generation: u64, builder: &mut ui::
    }
 }
 
-fn advance(values: &mut [u32], labels: &mut [Label], last: &mut Option<i64>, time: f64, interval: f64, template_text: &str)
+fn advance(values: &mut [u32], labels: &mut [Label], last: &mut Option<i64>, time: f64, interval: f64, template_text: &str) -> Option<Advance>
 {
    // Quantized fixture times such as 0.3 / 0.1 must agree across Swift and Rust.
    let target = (time / interval + 1e-7).floor() as i64;
-   if time < 0.0 {return;}
-   if last.is_some_and(|prior| prior > target)
+   if time < 0.0 {return None;}
+   let reset = last.is_some_and(|prior| prior > target);
+   if reset
    {
       values.fill(0);
       *last = None;
       for (index, label) in labels.iter_mut().enumerate() {label.text = template(template_text, index, 0);}
    }
-   for step in last.map_or(0, |prior| prior + 1)..=target
+   let first = last.map_or(0, |prior| prior + 1);
+   for step in first..=target
    {
       let index = step as usize % values.len();
       values[index] = step as u32 + 1;
       labels[index].text = template(template_text, index, values[index]);
    }
    *last = Some(target);
+   Some(Advance {reset, first, last: target})
 }
 
 fn labels(template_text: &str, count: usize, font_id: usize, font_px: f32, color: [f32; 4], row_numbers: bool) -> Vec<Label>
@@ -536,32 +733,136 @@ fn template(pattern: &str, index: usize, value: u32) -> String
 fn draw_text(suite: &mut Suite, time: f64, text: &mut TextCtx, renderer: &mut metal::MetalRenderer, builder: &mut ui::DrawListBuilder)
 {
    let spec = &suite.fixture.text;
-   advance(&mut suite.text_values, &mut suite.text_labels, &mut suite.last_text_step, time, spec.interval, &spec.template);
+   let _ = advance(&mut suite.text_values, &mut suite.text_labels, &mut suite.last_text_step, time, spec.interval, &spec.template);
    let mut uploader = MtlUploader {renderer};
-   for (index, label) in suite.text_labels.iter().enumerate()
-   {
-      let x = spec.origin[0] + (index % spec.columns) as f32 * spec.stride[0];
-      let y = spec.origin[1] + (index / spec.columns) as f32 * spec.stride[1];
-      label.encode(gfx::RectF::new(x, y, spec.size[0], spec.size[1]), 3.0, text, &mut uploader, builder);
-   }
+   for index in 0..suite.text_labels.len() {encode_text_unit(suite, index, text, &mut uploader, builder);}
 }
 
 fn draw_local(suite: &mut Suite, time: f64, text: &mut TextCtx, renderer: &mut metal::MetalRenderer, builder: &mut ui::DrawListBuilder)
 {
    let spec = &suite.fixture.local;
-   advance(&mut suite.local_values, &mut suite.local_labels, &mut suite.last_local_step, time, spec.interval, &spec.template);
+   let _ = advance(&mut suite.local_values, &mut suite.local_labels, &mut suite.last_local_step, time, spec.interval, &spec.template);
    let mut uploader = MtlUploader {renderer};
-   for index in 0..spec.count
+   for index in 0..spec.count {encode_local_unit(suite, index, time, text, &mut uploader, builder);}
+}
+
+fn encode_text_unit(suite: &Suite, index: usize, text: &mut TextCtx, uploader: &mut MtlUploader, builder: &mut ui::DrawListBuilder)
+{
+   let spec = &suite.fixture.text;
+   let x = spec.origin[0] + (index % spec.columns) as f32 * spec.stride[0];
+   let y = spec.origin[1] + (index / spec.columns) as f32 * spec.stride[1];
+   suite.text_labels[index].encode(gfx::RectF::new(x, y, spec.size[0], spec.size[1]), 3.0, text, uploader, builder);
+}
+
+fn encode_local_unit(suite: &Suite, index: usize, time: f64, text: &mut TextCtx, uploader: &mut MtlUploader, builder: &mut ui::DrawListBuilder)
+{
+   let spec = &suite.fixture.local;
+   let origin = [spec.origin[0] + (index % spec.columns) as f32 * spec.stride[0], spec.origin[1] + (index / spec.columns) as f32 * spec.stride[1]];
+   suite.local_labels[index].encode(gfx::RectF::new(origin[0], origin[1], spec.label_size[0], spec.label_size[1]), 3.0, text, uploader, builder);
+   suite.buttons[index].encode(offset(origin, spec.button_rect), 3.0, text, uploader, &suite.button_states[index], builder);
+   ui::elements::ProgressBar {
+      value: Some((suite.local_values[index] % 100) as f32 / 100.0),
+      track: rgba(spec.progress_track_color), fill: rgba(spec.progress_fill_color),
+      corner: spec.progress_rect[3] * 0.5,
+   }.encode(offset(origin, spec.progress_rect), time.max(0.0) as f32, builder);
+}
+
+fn prepare_retained_suite(runtime: &mut Runtime) -> Result<(), ()>
+{
+   let Runtime {renderer, builder, text, suite, ..} = runtime;
+   let suite = suite.as_mut().ok_or(())?;
+   let mut unit_builder = ui::DrawListBuilder::new();
+   builder.clear();
+   builder.rrect(gfx::RectF::new(0.0, 0.0, 390.0, 844.0), [0.0; 4], rgba([1.0; 4]));
+   let background = gfx::RenderChunk::new(gfx::RenderChunkId(10_000), gfx::RenderChunkRevisions::default(), builder.drawlist().clone(), gfx::ChunkIndexMode::Local, &[]).map_err(|_| ())?;
+   let count = match suite.case {Case::Text => suite.text_labels.len(), Case::Local => suite.local_labels.len(), _ => return Err(())};
+   let mut units = Vec::with_capacity(count);
+   let mut revisions = Vec::with_capacity(count);
+   for index in 0..count
    {
-      let origin = [spec.origin[0] + (index % spec.columns) as f32 * spec.stride[0], spec.origin[1] + (index / spec.columns) as f32 * spec.stride[1]];
-      suite.local_labels[index].encode(gfx::RectF::new(origin[0], origin[1], spec.label_size[0], spec.label_size[1]), 3.0, text, &mut uploader, builder);
-      suite.buttons[index].encode(offset(origin, spec.button_rect), 3.0, text, &mut uploader, &suite.button_states[index], builder);
-      ui::elements::ProgressBar {
-         value: Some((suite.local_values[index] % 100) as f32 / 100.0),
-         track: rgba(spec.progress_track_color), fill: rgba(spec.progress_fill_color),
-         corner: spec.progress_rect[3] * 0.5,
-      }.encode(offset(origin, spec.progress_rect), time.max(0.0) as f32, builder);
+      encode_retained_unit(suite, index, 0.0, text, renderer, &mut unit_builder);
+      let chunk = gfx::RenderChunk::new(gfx::RenderChunkId(10_001 + index as u64), gfx::RenderChunkRevisions {structural: 1, ..Default::default()}, unit_builder.drawlist().clone(), gfx::ChunkIndexMode::Local, &[]).map_err(|_| ())?;
+      units.push(gfx::RenderChunkInstance::new(chunk, [0.0; 2]));
+      revisions.push(1);
    }
+   suite.retained = Some(RetainedSuite {background, units, builder: unit_builder, revisions});
+   Ok(())
+}
+
+fn encode_retained_unit(suite: &Suite, index: usize, time: f64, text: &mut TextCtx, renderer: &mut metal::MetalRenderer, builder: &mut ui::DrawListBuilder)
+{
+   builder.clear();
+   text.begin_frame_at_scale(3.0);
+   let mut uploader = MtlUploader {renderer};
+   match suite.case
+   {
+      Case::Text => encode_text_unit(suite, index, text, &mut uploader, builder),
+      Case::Local => encode_local_unit(suite, index, time, text, &mut uploader, builder),
+      _ => unreachable!(),
+   }
+   text.finish_frame(&mut uploader, builder);
+}
+
+fn submit_retained_suite(runtime: &mut Runtime, drawable: *mut c_void, time: f64, timer: Option<native_metrics::NativeFrameTimer>) -> i32
+{
+   let Ok(snapshot) = retained_snapshot(runtime, time) else {return -8;};
+   submit_snapshot(runtime, drawable, &snapshot, timer)
+}
+
+fn retained_snapshot(runtime: &mut Runtime, time: f64) -> Result<gfx::RenderSnapshot, ()>
+{
+   let Runtime {renderer, text, suite, ..} = runtime;
+   let suite = suite.as_mut().unwrap();
+   let advance = match suite.case
+   {
+      Case::Text => advance(&mut suite.text_values, &mut suite.text_labels, &mut suite.last_text_step, time, suite.fixture.text.interval, &suite.fixture.text.template),
+      Case::Local => advance(&mut suite.local_values, &mut suite.local_labels, &mut suite.last_local_step, time, suite.fixture.local.interval, &suite.fixture.local.template),
+      _ => return Err(()),
+   };
+   let mut retained = suite.retained.take().unwrap();
+   if let Some(advance) = advance
+   {
+      let count = retained.units.len() as i64;
+      let rebuild_all = advance.reset || advance.last - advance.first + 1 >= count;
+      if rebuild_all
+      {
+         for index in 0..retained.units.len()
+         {
+            if rebuild_retained_unit(suite, &mut retained, index, time, text, renderer).is_err()
+            {
+               suite.retained = Some(retained);
+               return Err(());
+            }
+         }
+      }
+      else
+      {
+         for step in advance.first..=advance.last
+         {
+            let index = step as usize % retained.units.len();
+            if rebuild_retained_unit(suite, &mut retained, index, time, text, renderer).is_err()
+            {
+               suite.retained = Some(retained);
+               return Err(());
+            }
+         }
+      }
+   }
+   let mut instances = Vec::with_capacity(retained.units.len() + 1);
+   instances.push(gfx::RenderChunkInstance::new(retained.background.clone(), [0.0; 2]));
+   instances.extend(retained.units.iter().cloned());
+   let snapshot = gfx::RenderSnapshot::new(instances, Vec::new(), gfx::Damage {rects: Vec::new()});
+   suite.retained = Some(retained);
+   snapshot.map_err(|_| ())
+}
+
+fn rebuild_retained_unit(suite: &Suite, retained: &mut RetainedSuite, index: usize, time: f64, text: &mut TextCtx, renderer: &mut metal::MetalRenderer) -> Result<(), ()>
+{
+   encode_retained_unit(suite, index, time, text, renderer, &mut retained.builder);
+   retained.revisions[index] = retained.revisions[index].wrapping_add(1).max(1);
+   let chunk = gfx::RenderChunk::new(gfx::RenderChunkId(10_001 + index as u64), gfx::RenderChunkRevisions {structural: retained.revisions[index], ..Default::default()}, retained.builder.drawlist().clone(), gfx::ChunkIndexMode::Local, &[]).map_err(|_| ())?;
+   retained.units[index] = gfx::RenderChunkInstance::new(chunk, [0.0; 2]);
+   Ok(())
 }
 
 fn image(image: &Image, rect: gfx::RectF, alpha: f32, builder: &mut ui::DrawListBuilder)
@@ -616,7 +917,7 @@ fn prepare_animation(runtime: &mut Runtime) -> Result<(), ()>
    Ok(())
 }
 
-fn submit_animation(runtime: &mut Runtime, drawable: *mut c_void, time: f64, generation: u64) -> i32
+fn submit_animation(runtime: &mut Runtime, drawable: *mut c_void, time: f64, generation: u64, timer: Option<native_metrics::NativeFrameTimer>) -> i32
 {
    let suite = runtime.suite.as_ref().unwrap();
    let spec = &suite.fixture.animation;
@@ -635,10 +936,7 @@ fn submit_animation(runtime: &mut Runtime, drawable: *mut c_void, time: f64, gen
    // stay retained; each frame supplies only the current transform/opacity slots.
    let snapshot = gfx::RenderSnapshot::from_sequences(vec![suite.animation_sequence.as_ref().unwrap().clone()], properties, gfx::Damage {rects: Vec::new()});
    let Ok(snapshot) = snapshot else {return -8;};
-   if unsafe {runtime.renderer.prepare_present_drawable(drawable)}.is_err() {return -4;}
-   let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
-   if runtime.renderer.encode_snapshot(&snapshot).is_err() {return -9;}
-   if runtime.renderer.submit(token).is_err() {-5} else {0}
+   submit_snapshot(runtime, drawable, &snapshot, timer)
 }
 
 struct ScrollMeasure {row_height: f32}
@@ -698,4 +996,21 @@ fn decode_png(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), ()>
    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {return Err(());}
    data.truncate(info.buffer_size());
    Ok((data, info.width, info.height))
+}
+
+#[cfg(test)]
+mod native_api_tests
+{
+   use super::*;
+
+   #[test]
+   fn native_case_list_and_core_wakeups_match_the_host_contract()
+   {
+      assert_eq!(NATIVE_CASES.len(), 16);
+      for name in NATIVE_CASES {assert!(Case::parse(name).is_some() || visual_boards::is_case(name));}
+      assert_eq!(native_next_wakeup("text", 0.0), 0.1);
+      assert_eq!(native_next_wakeup("local", 0.1), 0.2);
+      assert_eq!(native_next_wakeup("shapes", 0.25), 0.25);
+      assert!(native_next_wakeup("missing", 0.0).is_nan());
+   }
 }

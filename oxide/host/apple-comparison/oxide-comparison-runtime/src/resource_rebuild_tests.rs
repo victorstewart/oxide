@@ -32,6 +32,62 @@ fn render(renderer: &mut metal::MetalRenderer, text: &mut TextCtx, font_id: usiz
    renderer.readback_bgra8().expect("readback").2
 }
 
+fn retained_runtime(case: Case) -> Runtime
+{
+   let fixture: Fixture = serde_json::from_str(FIXTURE).expect("fixture");
+   let mut renderer = renderer();
+   renderer.resize(1_170, 2_532, 3.0).expect("viewport");
+   let mut text = TextCtx::default();
+   let font_id = text.fonts.add_font(text::Font::from_bytes(FONT_BYTES.to_vec()));
+   let mut images = Vec::with_capacity(4);
+   for bytes in IMAGE_BYTES
+   {
+      let (pixels, width, height) = decode_png(bytes).expect("image");
+      let handle = renderer.image_create_rgba8_immutable(width, height, &pixels, width as usize * 4, true);
+      images.push(Image {handle, width, height});
+   }
+   let text_labels = labels(&fixture.text.template, fixture.text.count, font_id, fixture.text.font_size, fixture.text_color, false);
+   let local_labels = labels(&fixture.local.template, fixture.local.count, font_id, fixture.local.font_size, fixture.text_color, false);
+   let card_labels = labels(&fixture.animation.template, fixture.animation.count, font_id, fixture.animation.font_size, fixture.text_color, false);
+   let row_labels = labels(&fixture.scroll.template, fixture.scroll.count, font_id, fixture.scroll.font_size, fixture.text_color, true);
+   let buttons = (0..fixture.local.count).map(|_| Button {
+      text: fixture.local.button_title.clone(),
+      style: ui::elements::ButtonStyle {text_px: fixture.local.font_size, color: rgba(fixture.local.button_color), ..Default::default()},
+   }).collect();
+   let collection = ui::collection::CollectionView::new(ui::collection::CollectionMode::VerticalGrid {col_width: fixture.viewport[0] as f32, spacing: 0.0});
+   let suite = Suite {
+      case, checkpoint: false, shapes: vec![0.0; fixture.shapes.count], text_values: vec![0; fixture.text.count],
+      local_values: vec![0; fixture.local.count], last_text_step: None, last_local_step: None, text_labels,
+      local_labels, buttons, button_states: (0..fixture.local.count).map(|_| ButtonState::default()).collect(),
+      card_labels, row_labels, collection, fixture, images, animation_sequence: None, retained: None,
+   };
+   let mut runtime = Runtime {
+      renderer, builder: ui::DrawListBuilder::new(), coalesced: Vec::new(), text, suite: Some(suite), visual: None,
+      visual_checkpoint: false, visual_stage: 0, native_measurement: native_metrics::NativeMeasurement::default(),
+   };
+   warm_glyphs(&mut runtime, font_id);
+   prepare_retained_suite(&mut runtime).expect("retained suite");
+   runtime
+}
+
+fn render_retained(runtime: &mut Runtime, time: f64) -> Vec<u8>
+{
+   let snapshot = retained_snapshot(runtime, time).expect("retained snapshot");
+   let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
+   runtime.renderer.encode_snapshot(&snapshot).expect("retained encode");
+   runtime.renderer.submit(token).expect("retained submit");
+   runtime.renderer.readback_bgra8().expect("retained readback").2
+}
+
+fn render_immediate(runtime: &mut Runtime, time: f64, generation: u64) -> Vec<u8>
+{
+   render_suite(runtime, time, generation);
+   let token = runtime.renderer.begin_frame(&gfx::FrameTarget, None);
+   runtime.renderer.encode_pass(runtime.builder.drawlist());
+   runtime.renderer.submit(token).expect("immediate submit");
+   runtime.renderer.readback_bgra8().expect("immediate readback").2
+}
+
 #[test]
 fn glyph_and_image_resources_rebuild_to_identical_pixels()
 {
@@ -55,6 +111,47 @@ fn glyph_and_image_resources_rebuild_to_identical_pixels()
       let colored = rows.flat_map(|y| before[y * 600 * 4..(y + 1) * 600 * 4].chunks_exact(4)).filter(|pixel| pixel[..3] != [255, 255, 255]).count();
       assert!(colored > 100, "{name} did not render before or after rebuild");
    }
+}
+
+#[test]
+fn retained_text_and_local_chunks_match_immediate_pixels_and_reuse_unchanged_units()
+{
+   for case in [Case::Text, Case::Local]
+   {
+      let mut retained = retained_runtime(case);
+      let mut immediate = retained_runtime(case);
+      immediate.suite.as_mut().unwrap().retained = None;
+      for (time, generation) in [(0.0, 1), (0.1, 2), (0.2, 3)]
+      {
+         let retained_pixels = render_retained(&mut retained, time);
+         let immediate_pixels = render_immediate(&mut immediate, time, generation);
+         assert_eq!(retained_pixels, immediate_pixels, "{case:?} retained pixels at {time}");
+         if time == 0.1
+         {
+            let stats = retained.renderer.last_stats();
+            let units = retained.suite.as_ref().unwrap().retained.as_ref().unwrap().units.len() as u64;
+            assert!(stats.chunks_reused >= units - 1, "{case:?} did not reuse unchanged chunks");
+            assert!(stats.chunks_rebuilt <= 1, "{case:?} rebuilt unchanged chunks");
+         }
+      }
+      let retained_pixels = render_retained(&mut retained, 0.0);
+      let immediate_pixels = render_immediate(&mut immediate, 0.0, 4);
+      assert_eq!(retained_pixels, immediate_pixels, "{case:?} retained pixels after reset");
+   }
+}
+
+#[test]
+fn retained_text_chunks_rebuild_after_atlas_resource_recovery()
+{
+   let mut runtime = retained_runtime(Case::Text);
+   let before = render_retained(&mut runtime, 0.0);
+   runtime.text.handle_device_loss();
+   runtime.renderer = renderer();
+   runtime.renderer.resize(1_170, 2_532, 3.0).expect("recovered viewport");
+   runtime.suite.as_mut().unwrap().last_text_step = Some(1);
+   prepare_retained_suite(&mut runtime).expect("rebuild retained chunks");
+   let recovered = render_retained(&mut runtime, 0.0);
+   assert_eq!(before, recovered, "resource recovery changed retained text pixels");
 }
 
 #[test]
@@ -150,4 +247,71 @@ fn timed_control_and_picker_actions_progress_then_restore()
          assert_ne!(frames[0], renderer.readback_bgra8().expect("control phase complete frame").2, "indeterminate control phase did not advance during its control hold");
       }
    }
+}
+
+#[cfg(feature = "native-measurement")]
+fn native_init(name: &str, checkpoint: bool)
+{
+   let name = std::ffi::CString::new(name).expect("case name");
+   assert_eq!(unsafe {oxide_core_suite_init(name.as_ptr(), u8::from(checkpoint))}, 0, "initialize {name:?}");
+}
+
+#[cfg(feature = "native-measurement")]
+fn native_offscreen_pixels(time: f64, generation: u64) -> (u32, u32, Vec<u8>)
+{
+   assert_eq!(native_draw_offscreen(time, generation), 0, "offscreen draw at {time}");
+   let mut slot = RUNTIME.get_or_init(|| Mutex::new(None)).lock().unwrap();
+   slot.as_mut().unwrap().renderer.readback_bgra8().expect("offscreen target")
+}
+
+#[cfg(feature = "native-measurement")]
+#[test]
+fn native_offscreen_smokes_all_cases_and_preserves_text_local_checkpoint_pixels()
+{
+   assert_eq!(oxide_core_init(), 0);
+   native_set_retained_text_enabled(true);
+   for name in NATIVE_CASES
+   {
+      native_init(name, false);
+      let (width, height, pixels) = native_offscreen_pixels(0.0, 1);
+      assert_eq!((width, height), (1_170, 2_532), "{name} offscreen dimensions");
+      assert!(pixels.iter().any(|pixel| *pixel != 0), "{name} offscreen target was empty");
+   }
+
+   for name in ["text", "local"]
+   {
+      native_set_retained_text_enabled(false);
+      native_init(name, true);
+      let immediate: Vec<_> = [0.0, 10.0, 19.9, 0.0, 10.0, 19.9, 0.0].into_iter().enumerate()
+         .map(|(generation, time)| native_offscreen_pixels(time, generation as u64 + 1).2).collect();
+      native_set_retained_text_enabled(true);
+      native_init(name, true);
+      let retained: Vec<_> = [0.0, 10.0, 19.9, 0.0, 10.0, 19.9, 0.0].into_iter().enumerate()
+         .map(|(generation, time)| native_offscreen_pixels(time, generation as u64 + 1).2).collect();
+      assert_eq!(retained, immediate, "{name} retained checkpoints differ from immediate fixtures");
+   }
+
+   let path = std::env::temp_dir().join(format!("oxide-offscreen-{}.png", std::process::id()));
+   native_capture_offscreen(&path).expect("capture offscreen PNG");
+   let (pixels, width, height) = decode_png(&std::fs::read(&path).expect("read offscreen PNG")).expect("decode offscreen PNG");
+   std::fs::remove_file(&path).expect("remove offscreen PNG");
+   assert_eq!((width, height), (1_170, 2_532));
+   assert_eq!(pixels.len(), width as usize * height as usize * 4);
+   native_visual_images_records_preparation_upload_once_before_begin_frame();
+}
+
+#[cfg(feature = "native-measurement")]
+fn native_visual_images_records_preparation_upload_once_before_begin_frame()
+{
+   assert_eq!(oxide_core_init(), 0);
+   enable_native_measurement(true);
+   native_init("visual-images", false);
+
+   assert_eq!(native_draw_offscreen(0.0, 1), 0, "initial visual-images frame");
+
+   assert_eq!(native_draw_offscreen(VISUAL_ACTION_SECONDS, 2), 0, "replacement visual-images frame");
+   assert!(native_frame_metrics().preparation_texture_upload_bytes > 0, "stage-one image replacement was lost when begin_frame reset renderer stats");
+
+   assert_eq!(native_draw_offscreen(VISUAL_ACTION_SECONDS, 3), 0, "held replacement visual-images frame");
+   assert_eq!(native_frame_metrics().preparation_texture_upload_bytes, 0, "held stage double-counted the prior replacement upload");
 }
