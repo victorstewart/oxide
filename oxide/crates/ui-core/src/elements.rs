@@ -433,11 +433,19 @@ impl TextCtx {
         up: &mut U,
         builder: &mut DrawListBuilder,
     ) -> TextFrameStats {
+        self.finish_frame_many(up, &mut [builder])
+    }
+
+   /// Publishes the frame's atlas pages once and patches every draw list encoded in that frame.
+   pub fn finish_frame_many<U: ImageUploader>(&mut self, up: &mut U, builders: &mut [&mut DrawListBuilder]) -> TextFrameStats
+   {
         if !self.frame_active {
             return self.last_frame_stats();
         }
         self.publish_gpu_pages(up, true);
-        self.patch_builder_atlas_pages(builder);
+        for builder in builders.iter_mut() {
+            self.patch_builder_atlas_pages(builder);
+        }
         self.atlas.end_frame();
         self.frame_active = false;
         self.frame_device_scale_bits = None;

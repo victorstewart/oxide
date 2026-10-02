@@ -715,6 +715,40 @@ fn paged_text_recycles_one_gpu_page_and_preserves_the_other_retained_identity() 
 }
 
 #[test]
+fn finish_frame_many_patches_every_builder_before_retiring_atlas_pages()
+{
+   let mut text = TextCtx::default();
+   text.atlas = oxide_text::PagedAtlas::new(24, 24, 1);
+   let font_id = text.fonts.add_font(oxide_text::Font::from_bytes(
+      include_bytes!("../assets/Asap-Regular.ttf").to_vec(),
+   ));
+   let mut uploader = PagedUploader::default();
+   let mut first = DrawListBuilder::new();
+   let mut second = DrawListBuilder::new();
+
+   text.begin_frame_at_scale(1.0);
+   encode_label_text("A", Color::rgba(0.1, 0.2, 0.3, 1.0), Align::Left, false, font_id, 16.0, RectF::new(0.0, 0.0, 40.0, 20.0), 1.0, &mut text, &mut uploader, &mut first);
+   for (index, value) in ["B", "C", "D", "E", "F", "G", "H"].iter().enumerate()
+   {
+      encode_label_text(value, Color::rgba(0.1, 0.2, 0.3, 1.0), Align::Left, false, font_id, 16.0, RectF::new(0.0, index as f32 * 20.0, 40.0, 20.0), 1.0, &mut text, &mut uploader, &mut second);
+   }
+   let _ = text.finish_frame_many(&mut uploader, &mut [&mut first, &mut second]);
+   let live: Vec<ImageHandle> = text.retained_text_atlas_revisions().expect("published atlas pages").iter().map(|(handle, _)| *handle).collect();
+
+   for builder in [&first, &second]
+   {
+      for item in &builder.drawlist().items
+      {
+         if let DrawCmd::GlyphRun { run } = item
+         {
+            assert_ne!(run.atlas, ImageHandle(0));
+            assert!(live.contains(&run.atlas), "retired glyph atlas handle {:?}", run.atlas);
+         }
+      }
+   }
+}
+
+#[test]
 fn device_scale_change_invalidates_retained_text_without_republishing_pages()
 {
    let mut text = TextCtx::default();
