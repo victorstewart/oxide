@@ -176,6 +176,60 @@ fn atlas_text_records_resolved_glyphs_instead_of_solid_runs() {
 }
 
 #[test]
+fn custom_face_draws_from_the_atlas_local_font() {
+    let custom_bytes = include_bytes!("../assets/Asap-Italic.ttf");
+    let mut atlas = BitmapTextAtlas::new_with_custom_font_bytes(custom_bytes);
+    atlas.set_handle(ImageHandle(78));
+    let style = TextStyle::new(18.0, Color::rgba(1.0, 1.0, 1.0, 1.0)).custom();
+    let mut encoder = CollectingEncoder::default();
+
+    assert!(atlas.draw_text(&mut encoder, "custom", 12.0, 24.0, style, 2.0));
+    assert!(encoder.resolved_glyph_vertices > 0);
+
+    let warm_revision = atlas.atlas_revision();
+    atlas.clear_dirty();
+    encoder = CollectingEncoder::default();
+    assert!(atlas.draw_text(&mut encoder, "custom", 12.0, 24.0, style, 2.0));
+    assert_eq!(atlas.atlas_revision(), warm_revision);
+    assert!(atlas.dirty_rect().is_none());
+
+    let custom_font = Font::from_bytes(custom_bytes.as_slice(), FontSettings::default())
+        .expect("custom test font");
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    layout.reset(&LayoutSettings {
+        x: 36.0,
+        y: 72.0,
+        ..LayoutSettings::default()
+    });
+    layout.append(&[&custom_font], &FontdueTextStyle::new("custom", 54.0, 0));
+    let expected_quads = layout
+        .glyphs()
+        .iter()
+        .filter(|glyph| {
+            let metrics = custom_font.metrics_indexed(glyph.key.glyph_index, glyph.key.px);
+            metrics.width > 0 && metrics.height > 0
+        })
+        .count();
+    assert_eq!(encoder.resolved_glyph_vertices, expected_quads * 4);
+}
+
+#[test]
+fn custom_font_constructor_rejects_invalid_bytes() {
+    assert!(BitmapTextAtlas::try_new_with_custom_font_bytes(&[0]).is_err());
+}
+
+#[test]
+fn unconfigured_custom_face_fails_to_draw() {
+    let mut atlas = BitmapTextAtlas::new();
+    atlas.set_handle(ImageHandle(79));
+    let style = TextStyle::new(18.0, Color::rgba(1.0, 1.0, 1.0, 1.0)).custom();
+    let mut encoder = CollectingEncoder::default();
+
+    assert!(!atlas.draw_text(&mut encoder, "custom", 12.0, 24.0, style, 2.0));
+    assert_eq!(encoder.resolved_glyph_vertices, 0);
+}
+
+#[test]
 fn atlas_glyph_run_matches_retired_fontdue_coverage_and_geometry_exactly() {
     const OVERSAMPLE: f32 = 3.0;
     let font = Font::from_bytes(

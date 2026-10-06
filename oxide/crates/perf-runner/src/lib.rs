@@ -40,6 +40,7 @@ const DEFAULT_CONTRACT_COVERAGE_BENCH_ITERS: usize = 16_384;
 const LINEAR_COMPARE_BASELINE_CASE_LIMIT: usize = 32;
 const LATIN_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_latin.ttf");
 const CJK_FONT: &[u8] = include_bytes!("../../text/tests/fixtures/test_text_cjk.ttf");
+const AUTHORING_CUSTOM_FONT: &[u8] = include_bytes!("../../ui-core/assets/Asap-Italic.ttf");
 const MACOS_HEBREW_FONT: &str = "/System/Library/Fonts/Supplemental/Arial Unicode.ttf";
 const DAMAGE_USE_THRESH: f32 = 0.75;
 const DAMAGE_PREFILTER_THRESH: f32 = 0.25;
@@ -223,6 +224,10 @@ const POPUP_WHEEL_PICKER_CASE_ID: &str = "cpu.authoring.popup_wheel_picker.inter
 
 const PERF_AUTHORING_SPECS: &[AuthoringPerfSpec] = &[
     AuthoringPerfSpec { id: "cpu.authoring.text_fields.edit_cycle", name: "Text Fields" },
+    AuthoringPerfSpec {
+        id: "cpu.authoring.bitmap_text.custom_font_warm_draw",
+        name: "Bitmap Text Custom Font",
+    },
     AuthoringPerfSpec { id: POPUP_WHEEL_PICKER_CASE_ID, name: "Popup Wheel Picker" },
     AuthoringPerfSpec { id: "cpu.authoring.burst_emitter.sample", name: "Burst Emitter" },
     AuthoringPerfSpec {
@@ -3355,6 +3360,9 @@ fn push_authoring_cases(
         covered.insert(spec.name.to_string());
         let case = match spec.id {
             "cpu.authoring.text_fields.edit_cycle" => authoring_text_fields_case(smoke),
+            "cpu.authoring.bitmap_text.custom_font_warm_draw" => {
+                authoring_bitmap_text_custom_font_warm_draw_case(smoke)
+            }
             POPUP_WHEEL_PICKER_CASE_ID => authoring_popup_wheel_picker_case(smoke),
             "cpu.authoring.burst_emitter.sample" => authoring_burst_emitter_case(smoke),
             "cpu.authoring.surface_router.compose" => authoring_surface_router_case(smoke),
@@ -5268,6 +5276,128 @@ fn authoring_text_fields_case(smoke: bool) -> PerfCaseResult {
                 + secure.caret_index() as u64
         },
     )
+}
+
+struct AuthoringCustomFontEncoder
+{
+   glyph_runs: u64,
+}
+
+impl api::RenderEncoder for AuthoringCustomFontEncoder
+{
+   fn set_viewport(&mut self, _vp: api::RectF) {}
+
+   fn set_clip(&mut self, _scissor: api::RectI) {}
+
+   fn draw_solid(&mut self, _verts: &[api::Vertex], _color: api::Color) {}
+
+   fn draw_image(&mut self, _img: api::ImageHandle, _dst: api::RectF, _src: api::RectF) {}
+
+   fn draw_rrect(&mut self, _rect: api::RectF, _radii: [f32; 4], _color: api::Color) {}
+
+   fn draw_nine_slice(
+      &mut self,
+      _img: api::ImageHandle,
+      _rect: api::RectF,
+      _slice: api::Insets,
+      _alpha: f32,
+   ) {}
+
+   fn draw_backdrop(&mut self, _rect: api::RectF, _sigma: f32, _tint: api::Color, _alpha: f32) {}
+
+   fn draw_spinner(&mut self, _center: [f32; 2], _atom: f32, _alpha: f32) {}
+
+   fn draw_glyph_run(&mut self, _run: &api::GlyphRun) {}
+
+   fn draw_glyph_run_resolved(
+      &mut self,
+      _run: &api::GlyphRun,
+      _vertices: &[api::Vertex],
+      _indices: &[u16],
+   )
+   {
+      self.glyph_runs = self.glyph_runs.saturating_add(1);
+   }
+}
+
+struct AuthoringCustomFontAtlasBench
+{
+   atlas: ui::bitmap_text::BitmapTextAtlas,
+   encoder: AuthoringCustomFontEncoder,
+   style: ui::bitmap_text::TextStyle,
+   warm_revision: u64,
+   warm_draws: u64,
+   warm_reuses: u64,
+}
+
+impl AuthoringCustomFontAtlasBench
+{
+   fn new() -> Self
+   {
+      let mut atlas = ui::bitmap_text::BitmapTextAtlas::new_with_custom_font_bytes(
+         AUTHORING_CUSTOM_FONT,
+      );
+      atlas.set_handle(api::ImageHandle(1));
+      let style = ui::bitmap_text::TextStyle::new(18.0, api::Color::rgba(0.1, 0.1, 0.1, 1.0))
+         .custom();
+      let mut encoder = AuthoringCustomFontEncoder { glyph_runs: 0 };
+      assert!(atlas.draw_text(&mut encoder, "custom font", 12.0, 24.0, style, 2.0));
+      atlas.clear_dirty();
+      let warm_revision = atlas.atlas_revision();
+      Self {
+         atlas,
+         encoder,
+         style,
+         warm_revision,
+         warm_draws: 0,
+         warm_reuses: 0,
+      }
+   }
+
+   fn draw_warm(&mut self) -> u64
+   {
+      self.encoder.glyph_runs = 0;
+      assert!(self.atlas.draw_text(
+         &mut self.encoder,
+         "custom font",
+         12.0,
+         24.0,
+         self.style,
+         2.0,
+      ));
+      self.warm_draws = self.warm_draws.saturating_add(1);
+      if self.atlas.atlas_revision() == self.warm_revision && self.atlas.dirty_rect().is_none()
+      {
+         self.warm_reuses = self.warm_reuses.saturating_add(1);
+      }
+      self.encoder.glyph_runs.wrapping_add(self.atlas.atlas_revision())
+   }
+}
+
+fn authoring_bitmap_text_custom_font_warm_draw_case(smoke: bool) -> PerfCaseResult
+{
+   let loops = if smoke { 64 } else { 256 };
+   let mut bench = AuthoringCustomFontAtlasBench::new();
+   let mut case = measure_cpu_case(
+      "cpu.authoring.bitmap_text.custom_font_warm_draw",
+      "authoring",
+      smoke,
+      true,
+      0.12,
+      loops,
+      vec![String::from(
+         "Atlas-local custom font construction followed by warm glyph-run reuse through the public bitmap-text API.",
+      )],
+      || bench.draw_warm(),
+   );
+   case.metrics.insert(String::from("custom_font_atlas_revision"), bench.warm_revision as f64);
+   case.metrics.insert(String::from("custom_font_warm_draws"), bench.warm_draws as f64);
+   case.metrics.insert(
+      String::from("custom_font_warm_reuse_ratio"),
+      bench.warm_reuses as f64 / bench.warm_draws.max(1) as f64,
+   );
+   case.metrics.insert(String::from("custom_font_glyph_runs_per_op"), 1.0);
+   case
 }
 
 fn authoring_popup_wheel_picker_case(smoke: bool) -> PerfCaseResult {

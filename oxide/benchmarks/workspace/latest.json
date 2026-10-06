@@ -19346,6 +19346,36 @@
       "metrics": {}
     },
     {
+      "id": "cpu.authoring.bitmap_text.custom_font_warm_draw",
+      "family": "authoring",
+      "layer": "engine",
+      "scenario": "authoring",
+      "variant": "oxide",
+      "cache_state": "warm",
+      "refresh_mode": "offscreen",
+      "unit": "us/op",
+      "gated": true,
+      "threshold_pct": 0.12,
+      "median": 0.6286165234375001,
+      "p95": 0.6414924226721939,
+      "p99": 0.6422918518813776,
+      "min": 0.6010929987980769,
+      "max": 0.6424917091836735,
+      "mean": 0.6271275682933429,
+      "samples": 12,
+      "ops_per_sample": 256,
+      "notes": [
+        "Atlas-local custom font construction followed by warm glyph-run reuse through the public bitmap-text API.",
+        "Focused release run on 2026-10-06; all other workspace rows remain from the existing 2026-07-15 baseline."
+      ],
+      "metrics": {
+        "custom_font_atlas_revision": 8.0,
+        "custom_font_glyph_runs_per_op": 1.0,
+        "custom_font_warm_draws": 155136.0,
+        "custom_font_warm_reuse_ratio": 1.0
+      }
+    },
+    {
       "id": "cpu.authoring.popup_wheel_picker.interaction",
       "family": "authoring",
       "layer": "engine",
@@ -21478,8 +21508,9 @@
       "Thumbnail Grid Scroll Matrix",
       "Zoom Image Gesture Cycle"
     ],
-    "authoring_total": 21,
+    "authoring_total": 22,
     "authoring_covered": [
+      "Bitmap Text Custom Font",
       "Burst Emitter",
       "Collection Key Reconcile Indexed",
       "Collection Key Reconcile Scan",

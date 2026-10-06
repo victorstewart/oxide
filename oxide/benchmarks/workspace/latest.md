@@ -2,7 +2,9 @@
 
 - Suite: `full`
 - Label: `2026-07-15`
-- Coverage: 9/9 components, 7/7 animations, 5/5 launch cases, 25/25 primitive lifecycle cases, 17/17 CPU scenes, 17/17 GPU scenes, 8/8 journeys, 21/21 authoring APIs, 10/10 layout cases, 8/8 text-input cases, 3/3 image pipeline cases, 3/3 navigation cases, 4/4 reconcile cases, 3/3 endurance cases, 3/3 stress cases, 9/9 bridge paths
+- Coverage: 9/9 components, 7/7 animations, 5/5 launch cases, 25/25 primitive lifecycle cases, 17/17 CPU scenes, 17/17 GPU scenes, 8/8 journeys, 22/22 authoring APIs, 10/10 layout cases, 8/8 text-input cases, 3/3 image pipeline cases, 3/3 navigation cases, 4/4 reconcile cases, 3/3 endurance cases, 3/3 stress cases, 9/9 bridge paths
+
+- Focused release evidence for `cpu.authoring.bitmap_text.custom_font_warm_draw` was measured on 2026-10-06; all other rows remain from the 2026-07-15 workspace baseline.
 
 ## Contract Coverage
 
@@ -367,6 +369,7 @@
 | `cpu.journey.thumbnail_grid_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 266.125 | 292.411 | 300.016 | 301.917 | us/journey | regression-gated | `collection_item_revision_queries_total=74016.000; collection_measure_calls_total=36000.000; collection_revision_hint=1.000` |
 | `cpu.journey.chat_thread_scroll_matrix` | `flow` | `screen-flow` | `oxide` | `warm` | `offscreen` | 170.917 | 180.767 | 183.287 | 183.917 | us/journey | regression-gated | `collection_item_revision_queries_total=48648.000; collection_measure_calls_total=24000.000; collection_revision_hint=1.000` |
 | `cpu.authoring.text_fields.edit_cycle` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.737 | 0.746 | 0.748 | 0.748 | us/op | regression-gated | `-` |
+| `cpu.authoring.bitmap_text.custom_font_warm_draw` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.629 | 0.641 | 0.642 | 0.642 | us/op | regression-gated | `custom_font_atlas_revision=8.000; custom_font_glyph_runs_per_op=1.000; custom_font_warm_draws=155136.000; custom_font_warm_reuse_ratio=1.000` |
 | `cpu.authoring.popup_wheel_picker.interaction` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.047 | 0.049 | 0.049 | 0.049 | us/op | regression-gated | `-` |
 | `cpu.authoring.burst_emitter.sample` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 0.662 | 0.679 | 0.679 | 0.679 | us/op | regression-gated | `-` |
 | `cpu.authoring.surface_router.compose` | `engine` | `authoring` | `oxide` | `warm` | `offscreen` | 109.227 | 130.433 | 131.673 | 131.984 | us/op | regression-gated | `router_current_rebuilt_total=0.000; router_current_reused_total=1216.000; router_overlay_rebuilt_total=0.000; router_overlay_reused_total=1216.000; router_popup_rebuilt_total=0.000; router_popup_reused_total=1216.000` |

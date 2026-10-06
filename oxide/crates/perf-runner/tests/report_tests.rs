@@ -523,7 +523,7 @@ fn persisted_report_root_and_case_schemas_are_frozen() {
 #[test]
 fn persisted_report_case_id_sets_are_frozen() {
     let workspace = persisted_report_json("benchmarks/workspace/latest.json");
-    assert_report_case_id_set(&workspace, "workspace latest", 399, 0x0a3d9230959bfc6d);
+    assert_report_case_id_set(&workspace, "workspace latest", 400, 0xce8624332f6a163f);
 
     let oxide_device = persisted_report_json("benchmarks/oxide-device/latest.json");
     assert_report_case_id_set(&oxide_device, "oxide device latest", 23, 0x80168fb31ce042ff);
@@ -4189,6 +4189,35 @@ fn filtered_run_suite_supports_bitmap_text_options_case() {
     assert_eq!(report_f64(row, "global_render_mutex_locks"), 0.0);
     assert_eq!(report_f64(row, "warm_atlas_upload_calls"), 0.0);
     assert_eq!(report_f64(row, "warm_atlas_upload_bytes"), 0.0);
+    let _ = std::fs::remove_file(json_out);
+}
+
+#[test]
+fn filtered_run_suite_supports_custom_font_warm_draw_authoring_case() {
+    let mut json_out = std::env::temp_dir();
+    json_out.push(format!("oxide-perf-runner-custom-font-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_oxide-perf-runner"))
+        .env("OXIDE_PERF_RUNNER_FILTER", "cpu.authoring.bitmap_text.custom_font_warm_draw")
+        .arg("--run-suite")
+        .arg("--smoke")
+        .arg("--json-out")
+        .arg(&json_out)
+        .output()
+        .expect("run filtered custom font smoke suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "filtered suite failed: {stderr}");
+    assert!(stdout.contains("cases=1"), "stdout: {stdout}");
+    assert!(stdout.contains("case=cpu.authoring.bitmap_text.custom_font_warm_draw"));
+    assert!(!stderr.contains("coverage is incomplete"), "stderr: {stderr}");
+
+    let report = std::fs::read_to_string(&json_out).expect("read custom font report");
+    let row = report_case_slice(&report, "cpu.authoring.bitmap_text.custom_font_warm_draw");
+    assert!(report_f64(row, "custom_font_atlas_revision") > 0.0);
+    assert!(report_f64(row, "custom_font_warm_draws") > 0.0);
+    assert_eq!(report_f64(row, "custom_font_warm_reuse_ratio"), 1.0);
+    assert_eq!(report_f64(row, "custom_font_glyph_runs_per_op"), 1.0);
     let _ = std::fs::remove_file(json_out);
 }
 

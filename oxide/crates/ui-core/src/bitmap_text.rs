@@ -31,6 +31,7 @@ pub enum FontFace {
     Regular,
     Bold,
     Italic,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,12 +73,13 @@ struct SmoothTextState {
     regular: Option<Font>,
     bold: Option<Font>,
     italic: Option<Font>,
+    custom: Option<Font>,
 }
 
 impl SmoothTextState {
     fn new() -> Self {
         let (regular, bold, italic) = load_host_fonts();
-        Self { regular, bold, italic }
+        Self { regular, bold, italic, custom: None }
     }
 
     fn font_for_face(&self, face: FontFace) -> Option<&Font> {
@@ -85,6 +87,7 @@ impl SmoothTextState {
             FontFace::Regular => self.regular.as_ref(),
             FontFace::Bold => self.bold.as_ref().or(self.regular.as_ref()),
             FontFace::Italic => self.italic.as_ref().or(self.regular.as_ref()),
+            FontFace::Custom => self.custom.as_ref(),
         }
     }
 }
@@ -237,6 +240,12 @@ impl TextStyle {
     pub fn regular(self) -> Self {
         self.with_face(FontFace::Regular)
     }
+
+   #[must_use]
+   pub fn custom(self) -> Self
+   {
+      self.with_face(FontFace::Custom)
+   }
 }
 
 impl Default for BitmapTextAtlas {
@@ -248,26 +257,46 @@ impl Default for BitmapTextAtlas {
 impl BitmapTextAtlas {
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            data: vec![0; BITMAP_TEXT_ATLAS_WIDTH as usize * BITMAP_TEXT_ATLAS_HEIGHT as usize],
-            dirty: Some(BitmapTextAtlasDirtyRect {
-                x: 0,
-                y: 0,
-                w: BITMAP_TEXT_ATLAS_WIDTH,
-                h: BITMAP_TEXT_ATLAS_HEIGHT,
-            }),
-            handle: None,
-            revision: 0,
-            next_x: 1,
-            row_y: 1,
-            row_h: 0,
-            glyphs: HashMap::new(),
-            smooth: SmoothTextState::new(),
-            layout: Layout::new(CoordinateSystem::PositiveYDown),
-            scratch_vertices: Vec::with_capacity(256),
-            scratch_indices: Vec::with_capacity(384),
-        }
+        Self::new_with_smooth(SmoothTextState::new())
     }
+
+   #[must_use]
+   pub fn new_with_custom_font_bytes(custom_font_bytes: &[u8]) -> Self
+   {
+      Self::try_new_with_custom_font_bytes(custom_font_bytes)
+         .expect("valid custom bitmap text font")
+   }
+
+   pub fn try_new_with_custom_font_bytes(custom_font_bytes: &[u8]) -> Result<Self, &'static str>
+   {
+      let custom = Font::from_bytes(custom_font_bytes, FontSettings::default())?;
+      let mut smooth = SmoothTextState::new();
+      smooth.custom = Some(custom);
+      Ok(Self::new_with_smooth(smooth))
+   }
+
+   fn new_with_smooth(smooth: SmoothTextState) -> Self
+   {
+      Self {
+         data: vec![0; BITMAP_TEXT_ATLAS_WIDTH as usize * BITMAP_TEXT_ATLAS_HEIGHT as usize],
+         dirty: Some(BitmapTextAtlasDirtyRect {
+            x: 0,
+            y: 0,
+            w: BITMAP_TEXT_ATLAS_WIDTH,
+            h: BITMAP_TEXT_ATLAS_HEIGHT,
+         }),
+         handle: None,
+         revision: 0,
+         next_x: 1,
+         row_y: 1,
+         row_h: 0,
+         glyphs: HashMap::new(),
+         smooth,
+         layout: Layout::new(CoordinateSystem::PositiveYDown),
+         scratch_vertices: Vec::with_capacity(256),
+         scratch_indices: Vec::with_capacity(384),
+      }
+   }
 
     #[must_use]
     pub fn image(&self) -> (&[u8], u32, u32) {
