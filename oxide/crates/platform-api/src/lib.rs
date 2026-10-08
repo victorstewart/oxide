@@ -1042,6 +1042,7 @@ pub enum HttpMethod {
 pub enum HttpCredentials {
    Omit,
    SameOrigin,
+   Include,
 }
 
 /// One caller-supplied request header or caller-selected response header.
@@ -1055,7 +1056,7 @@ pub struct HttpHeader {
 ///
 /// Platform adapters must not follow redirects. Callers preserve one absolute budget across
 /// redirect hops and pass only the remaining timeout to each operation. Ambient credentials are
-/// omitted unless the caller explicitly selects `HttpCredentials::SameOrigin`.
+/// omitted unless the caller explicitly selects a credential mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpRequest {
    pub method: HttpMethod,

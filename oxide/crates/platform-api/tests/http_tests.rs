@@ -26,6 +26,12 @@ fn post_body_and_ambient_credentials_are_explicit()
    assert_eq!(request.method, HttpMethod::Post);
    assert_eq!(request.body, b"field=value");
    assert_eq!(request.credentials, HttpCredentials::SameOrigin);
+   assert_eq!(
+      HttpRequest::post("https://api.oxide.test", Vec::new())
+         .with_credentials(HttpCredentials::Include)
+         .credentials,
+      HttpCredentials::Include
+   );
    assert_eq!(HttpRequest::get("https://oxide.test").credentials, HttpCredentials::Omit);
 }
 

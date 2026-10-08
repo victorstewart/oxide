@@ -168,6 +168,7 @@ mod browser
       init.set_credentials(match request.credentials {
          HttpCredentials::Omit => RequestCredentials::Omit,
          HttpCredentials::SameOrigin => RequestCredentials::SameOrigin,
+         HttpCredentials::Include => RequestCredentials::Include,
       });
       init.set_signal(Some(&controller.signal()));
       let body;
